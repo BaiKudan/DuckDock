@@ -1,0 +1,317 @@
+# ──────────────────────────────────────────────────────────────────────
+#  DuckDock 生产环境 compose(baseline · 预留补充)
+#
+#  与 docker-compose.yml(开发)的区别:
+#    - 无源码挂载、无 --reload;镜像不可变(代码在 build 时打入)
+#    - 前端 = 多阶段构建产物 + nginx,单端口入口(静态 SPA + /api 反代后端)
+#    - backend 多 worker;数据库迁移为一次性服务,先于 backend 成功完成
+#    - mysql / redis 不暴露宿主端口(仅内网);MinIO S3 暴露供签名 URL
+#    - analysis-worker 属可选 profile;首次启动核心栈后在 /analysis 创建 token 再启用
+#    - restart: unless-stopped;密钥由 scripts/prod.sh 通过 SOPS/age 解密到临时 .env.prod
+#
+#  启动:  bash scripts/prod.sh up
+#  (等价于 docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build)
+#
+#  ⚠ 上线前必须自行补:TLS 终止(反向代理/证书)、监控接入与恢复演练。
+# ──────────────────────────────────────────────────────────────────────
+name: duckdock-prod
+
+x-app-env: &app-env
+  DATABASE_URL: mysql+aiomysql://${MYSQL_USER}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE}?charset=utf8mb4
+  REDIS_URL: redis://redis:6379/0
+  MINIO_ENDPOINT: minio:9000
+  DUCKDOCK_LLM_API_KEY: ${DUCKDOCK_LLM_API_KEY:-}
+  DUCKDOCK_LLM_BASE_URL: ${DUCKDOCK_LLM_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+  DUCKDOCK_LLM_MODEL: ${DUCKDOCK_LLM_MODEL:-qwen3.6-plus}
+  DUCKDOCK_LLM_ENABLE_THINKING: ${DUCKDOCK_LLM_ENABLE_THINKING:-false}
+  DUCKDOCK_LLM_TIMEOUT_SECONDS: ${DUCKDOCK_LLM_TIMEOUT_SECONDS:-120}
+  DUCKDOCK_LLM_MAX_INPUT_CHARS: ${DUCKDOCK_LLM_MAX_INPUT_CHARS:-24000}
+  LLM_ALLOW_PRIVATE_BASE_URL: ${LLM_ALLOW_PRIVATE_BASE_URL:-false}
+
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env.prod}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env.prod}
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+    volumes:
+      - mysql_data:/var/lib/mysql
+    deploy:
+      resources:
+        limits:
+          memory: ${MYSQL_MEM_LIMIT:-1g}
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$${MYSQL_USER} -p$${MYSQL_PASSWORD} --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    deploy:
+      resources:
+        limits:
+          memory: ${REDIS_MEM_LIMIT:-512m}
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER in .env.prod}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env.prod}
+    volumes:
+      - minio_data:/data
+    deploy:
+      resources:
+        limits:
+          memory: ${MINIO_MEM_LIMIT:-512m}
+    ports:
+      - "9000:9000"                # S3:签名下载 URL 需可达(建议置于 TLS 反代之后)
+      - "127.0.0.1:9001:9001"      # 控制台:仅本机回环
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  # 一次性迁移服务:backend/worker 通过 service_completed_successfully 依赖它
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: "no"
+    env_file: ${DUCKDOCK_PROD_ENV_FILE:-.env.prod}
+    environment: *app-env
+    depends_on:
+      mysql:
+        condition: service_healthy
+    command: python -m alembic -c alembic.ini upgrade head
+
+  minio-init:
+    image: minio/mc:latest
+    restart: "no"
+    depends_on:
+      - minio
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER in .env.prod}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env.prod}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?set MINIO_ACCESS_KEY in .env.prod}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?set MINIO_SECRET_KEY in .env.prod}
+      MINIO_BUCKET: ${MINIO_BUCKET:?set MINIO_BUCKET in .env.prod}
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        until mc alias set duckdock http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"; do
+          sleep 2
+        done
+        mc mb --ignore-existing "duckdock/$$MINIO_BUCKET"
+        mc admin user add duckdock "$$MINIO_ACCESS_KEY" "$$MINIO_SECRET_KEY" || true
+        cat >/tmp/duckdock-app-policy.json <<EOF
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": ["s3:CreateBucket", "s3:ListBucket", "s3:GetBucketLocation"],
+              "Resource": ["arn:aws:s3:::$$MINIO_BUCKET"]
+            },
+            {
+              "Effect": "Allow",
+              "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+              "Resource": ["arn:aws:s3:::$$MINIO_BUCKET/*"]
+            }
+          ]
+        }
+        EOF
+        mc admin policy create duckdock duckdock-app /tmp/duckdock-app-policy.json || true
+        mc admin policy attach duckdock duckdock-app --user "$$MINIO_ACCESS_KEY"
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    stop_grace_period: 90s
+    env_file: ${DUCKDOCK_PROD_ENV_FILE:-.env.prod}
+    environment: *app-env
+    volumes:
+      - repos_data:/repos
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8801 --workers ${BACKEND_WORKERS:-4} --timeout-graceful-shutdown 90
+    deploy:
+      resources:
+        limits:
+          memory: ${BACKEND_MEM_LIMIT:-2g}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8801/readyz', timeout=3).read()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    stop_grace_period: 90s
+    env_file: ${DUCKDOCK_PROD_ENV_FILE:-.env.prod}
+    environment: *app-env
+    volumes:
+      - repos_data:/repos
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+    deploy:
+      resources:
+        limits:
+          memory: ${WORKER_MEM_LIMIT:-1g}
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=${WORKER_CONCURRENCY:-4}
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.workers.celery_app inspect ping -d celery@$$HOSTNAME >/dev/null 2>&1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # celery beat scheduler — drives the periodic analysis-job lease reaper (PUSH-01).
+  # Without a beat runner the worker never executes beat_schedule, so crashed-worker jobs
+  # would never be reclaimed/failed. Run exactly one beat instance (do not scale this service).
+  beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    stop_grace_period: 90s
+    env_file: ${DUCKDOCK_PROD_ENV_FILE:-.env.prod}
+    environment: *app-env
+    volumes:
+      - repos_data:/repos
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+    command: celery -A app.workers.celery_app beat --loglevel=info --schedule=/tmp/celerybeat-schedule
+    deploy:
+      resources:
+        limits:
+          memory: ${BEAT_MEM_LIMIT:-512m}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import pathlib; raise SystemExit(0 if pathlib.Path('/tmp/celerybeat-schedule').exists() else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  analysis-worker:
+    profiles: ["analysis-worker"]
+    build:
+      context: ./docs/agent-control-plane-prd/duckdock-analysis-worker
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: ${DUCKDOCK_PROD_ENV_FILE:-.env.prod}
+    environment:
+      DUCKDOCK_API_BASE: ${DUCKDOCK_ANALYSIS_API_BASE:-http://backend:8801/api/v1}
+      DUCKDOCK_WORKER_TOKEN: ${DUCKDOCK_ANALYSIS_WORKER_TOKEN:-}
+      DUCKDOCK_WORKER_NAME: ${DUCKDOCK_ANALYSIS_WORKER_NAME:-DuckDock Prod Analysis Worker}
+      DUCKDOCK_WORKER_POLL_SECONDS: ${DUCKDOCK_ANALYSIS_WORKER_POLL_SECONDS:-60}
+      DUCKDOCK_WORKER_LEASE_SECONDS: ${DUCKDOCK_ANALYSIS_WORKER_LEASE_SECONDS:-1800}
+      DUCKDOCK_WORKER_WORK_DIR: ${DUCKDOCK_ANALYSIS_WORKER_WORK_DIR:-/tmp/duckdock-analysis-worker}
+      DUCKDOCK_ANALYSIS_MODE: ${DUCKDOCK_ANALYSIS_MODE:-baseline}
+      DUCKDOCK_LLM_API_KEY: ${DUCKDOCK_LLM_API_KEY:-}
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+      SKILL_GEN_API_KEY: ${SKILL_GEN_API_KEY:-}
+      DUCKDOCK_LLM_BASE_URL: ${DUCKDOCK_LLM_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      DUCKDOCK_LLM_MODEL: ${DUCKDOCK_LLM_MODEL:-qwen3.6-plus}
+      DUCKDOCK_LLM_ENABLE_THINKING: ${DUCKDOCK_LLM_ENABLE_THINKING:-true}
+      DUCKDOCK_LLM_TIMEOUT_SECONDS: ${DUCKDOCK_LLM_TIMEOUT_SECONDS:-90}
+      DUCKDOCK_LLM_MAX_INPUT_CHARS: ${DUCKDOCK_LLM_MAX_INPUT_CHARS:-24000}
+    depends_on:
+      backend:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: ${ANALYSIS_WORKER_MEM_LIMIT:-1g}
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - >
+        exec python /workspace/scripts/duckdock_analysis_worker.py
+        --poll
+        --api-base "$$DUCKDOCK_API_BASE"
+        --worker-token "$$DUCKDOCK_WORKER_TOKEN"
+        --worker-name "$$DUCKDOCK_WORKER_NAME"
+        --analysis-mode "$$DUCKDOCK_ANALYSIS_MODE"
+        --poll-seconds "$$DUCKDOCK_WORKER_POLL_SECONDS"
+        --lease-seconds "$$DUCKDOCK_WORKER_LEASE_SECONDS"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import pathlib; raise SystemExit(0 if pathlib.Path('/workspace/scripts/duckdock_analysis_worker.py').exists() else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${HTTP_PORT:-80}:80"      # 单端口入口:静态 SPA + /api 反代 backend:8801
+    deploy:
+      resources:
+        limits:
+          memory: ${FRONTEND_MEM_LIMIT:-256m}
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/health >/dev/null"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  mysql_data:
+  redis_data:
+  minio_data:
+  repos_data:

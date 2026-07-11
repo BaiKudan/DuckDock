@@ -1,0 +1,16 @@
+id: skill_quality
+name: Skill Quality
+weight: 20
+judge_mode: hybrid
+thresholds:
+  excellent: 90
+  good: 75
+  warning: 60
+criteria:
+  - clarity of instructions
+  - specificity of expected behavior
+  - realistic scope and constraints
+  - usefulness of examples
+guidance:
+  - Prefer evidence from concrete skill content over abstract impressions.
+  - Lower the score when multiple prompts are vague about outputs or boundaries.

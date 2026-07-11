@@ -1,0 +1,21 @@
+checks:
+  - type: file_exists
+    path: SKILL.md
+  - type: file_contains
+    path: SKILL.md
+    text: duckdock-pack-v1.zip
+  - type: file_contains
+    path: SKILL.md
+    text: DUCKDOCK_REPORT_TOKEN
+  - type: file_contains
+    path: SKILL.md
+    text: WorkBuddy
+  - type: file_contains
+    path: SKILL.md
+    text: Conversational Deployment Mode
+  - type: file_exists
+    path: references/pack-schema.md
+  - type: file_exists
+    path: references/workbuddy-windows.md
+  - type: file_exists
+    path: references/conversational-deployment.md

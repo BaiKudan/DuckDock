@@ -1,0 +1,4 @@
+interface:
+  display_name: "DuckDock Analysis Worker"
+  short_description: "Lease and analyze DuckDock report packs"
+  default_prompt: "Use DuckDock Analysis Worker to lease a pending DuckDock analysis job, generate standard result files, upload them, and finalize the job."

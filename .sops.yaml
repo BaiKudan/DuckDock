@@ -1,0 +1,5 @@
+creation_rules:
+  # Replace the recipient with the production deployment age public key before
+  # encrypting .env.prod.enc. Keep only encrypted .env.prod.enc in git.
+  - path_regex: ^\.env\.prod\.enc$
+    age: age1replaceproductionrecipientxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx

@@ -1,0 +1,255 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 760" width="1280" height="760">
+  <style>
+text { font-family: 'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif; }
+.title { fill:#111827; font-size:24px; font-weight:700; }
+.subtitle { fill:#6b7280; font-size:13px; }
+.lane-label { fill:#4f46e5; font-size:11px; font-weight:700; letter-spacing:.08em; }
+.node-title { fill:#111827; font-size:14px; font-weight:700; }
+.node-sub { fill:#6b7280; font-size:11px; }
+.tiny { fill:#6b7280; font-size:10px; }
+.arrow-label { fill:#374151; font-size:11px; font-weight:600; }
+.tag { fill:#4b5563; font-size:10px; font-weight:600; }
+</style>
+  
+<defs>
+  <filter id="soft-shadow" x="-20%" y="-20%" width="140%" height="140%">
+    <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#0f172a" flood-opacity="0.10"/>
+  </filter>
+  <marker id="arrow-blue" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+    <polygon points="0 0,10 3.5,0 7" fill="#2563eb"/>
+  </marker>
+  <marker id="arrow-green" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+    <polygon points="0 0,10 3.5,0 7" fill="#16a34a"/>
+  </marker>
+  <marker id="arrow-orange" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+    <polygon points="0 0,10 3.5,0 7" fill="#ea580c"/>
+  </marker>
+  <marker id="arrow-purple" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+    <polygon points="0 0,10 3.5,0 7" fill="#9333ea"/>
+  </marker>
+  <marker id="arrow-gray" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+    <polygon points="0 0,10 3.5,0 7" fill="#6b7280"/>
+  </marker>
+</defs>
+
+  <rect width="1280" height="760" fill="#ffffff"/>
+  <text x="36" y="42" class="title">DuckDock 总体业务架构图</text>
+  <text x="36" y="66" class="subtitle">企业 AI Agent 资产与交接控制平面：运行时接入、私有 Skill 仓库、异步 LLM 分析、精简索引入库和可选观测组件。</text>
+
+  <rect x="28" y="94" width="244" height="630" rx="10" fill="#eff6ff" fill-opacity="0.42" stroke="#bfdbfe" stroke-dasharray="7,5"/>
+  <text x="44" y="118" class="lane-label">USERS / RUNTIMES</text>
+  <rect x="304" y="94" width="312" height="630" rx="10" fill="#f8fafc" fill-opacity="0.42" stroke="#d1d5db" stroke-dasharray="7,5"/>
+  <text x="320" y="118" class="lane-label">FASTAPI CONTROL PLANE</text>
+  <rect x="648" y="94" width="260" height="630" rx="10" fill="#f0fdf4" fill-opacity="0.42" stroke="#bbf7d0" stroke-dasharray="7,5"/>
+  <text x="664" y="118" class="lane-label">DATA / ARTIFACTS</text>
+  <rect x="940" y="94" width="310" height="630" rx="10" fill="#faf5ff" fill-opacity="0.42" stroke="#e9d5ff" stroke-dasharray="7,5"/>
+  <text x="956" y="118" class="lane-label">ASYNC / OPTIONAL</text>
+  <g filter="url(#soft-shadow)">
+    <rect x="56" y="144" width="188" height="86" rx="10" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+
+    <rect x="70" y="162" width="38" height="38" rx="8" fill="#eff6ff" stroke="#bfdbfe"/>
+    <text x="89" y="186" text-anchor="middle" fill="#2563eb" font-size="13" font-weight="700">RT</text>
+    <text x="118" y="172" class="node-title">企业运行时</text>
+<text x="118" y="192" class="node-sub">OpenClaw / WorkBuddy</text>
+<text x="118" y="209" class="node-sub">ArkClaw / JVS / 定制</text>
+  </g>
+  <g filter="url(#soft-shadow)">
+    <rect x="56" y="268" width="188" height="86" rx="10" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+
+    <rect x="70" y="286" width="38" height="38" rx="8" fill="#ede9fe" stroke="#c4b5fd"/>
+    <text x="89" y="310" text-anchor="middle" fill="#7c3aed" font-size="13" font-weight="700">ADM</text>
+    <text x="118" y="296" class="node-title">管理员控制台</text>
+<text x="118" y="316" class="node-sub">运行时、Token、组件</text>
+<text x="118" y="333" class="node-sub">资产、交接、审计</text>
+  </g>
+  <g filter="url(#soft-shadow)">
+    <rect x="56" y="392" width="188" height="86" rx="10" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+
+    <rect x="70" y="410" width="38" height="38" rx="8" fill="#f0fdfa" stroke="#99f6e4"/>
+    <text x="89" y="434" text-anchor="middle" fill="#0f766e" font-size="13" font-weight="700">ME</text>
+    <text x="118" y="420" class="node-title">个人工作台</text>
+<text x="118" y="440" class="node-sub">我的 AI 资产</text>
+<text x="118" y="457" class="node-sub">确认/补充/排除</text>
+  </g>
+  <g filter="url(#soft-shadow)">
+    <rect x="56" y="516" width="188" height="86" rx="10" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+
+    <rect x="70" y="534" width="38" height="38" rx="8" fill="#fff7ed" stroke="#fed7aa"/>
+    <text x="89" y="558" text-anchor="middle" fill="#ea580c" font-size="13" font-weight="700">SK</text>
+    <text x="118" y="544" class="node-title">私有 Skill 消费方</text>
+<text x="118" y="564" class="node-sub">SkillHub Registry</text>
+<text x="118" y="581" class="node-sub">ClawHub / 同步客户端</text>
+  </g>
+  <g filter="url(#soft-shadow)">
+    <rect x="336" y="128" width="244" height="78" rx="10" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+
+    <rect x="350" y="146" width="38" height="38" rx="8" fill="#eff6ff" stroke="#bfdbfe"/>
+    <text x="369" y="170" text-anchor="middle" fill="#2563eb" font-size="13" font-weight="700">IAM</text>
+    <text x="398" y="156" class="node-title">Auth / IAM / RBAC</text>
+<text x="398" y="176" class="node-sub">用户、岗位状态、权限、审计</text>
+  </g>
+  <g filter="url(#soft-shadow)">
+    <rect x="336" y="236" width="244" height="78" rx="10" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+
+    <rect x="350" y="254" width="38" height="38" rx="8" fill="#eff6ff" stroke="#bfdbfe"/>
+    <text x="369" y="278" text-anchor="middle" fill="#2563eb" font-size="13" font-weight="700">ACP</text>
+    <text x="398" y="264" class="node-title">Agent 控制平面</text>
+<text x="398" y="284" class="node-sub">Runtime、Reporter Credential</text>
+<text x="398" y="301" class="node-sub">Report Session</text>
+  </g>
+  <g filter="url(#soft-shadow)">
+    <rect x="336" y="344" width="244" height="78" rx="10" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+
+    <rect x="350" y="362" width="38" height="38" rx="8" fill="#eff6ff" stroke="#bfdbfe"/>
+    <text x="369" y="386" text-anchor="middle" fill="#2563eb" font-size="13" font-weight="700">AST</text>
+    <text x="398" y="372" class="node-title">AI 资产与交接</text>
+<text x="398" y="392" class="node-sub">Assets、Ownership</text>
+<text x="398" y="409" class="node-sub">WorkTrace、Handover</text>
+  </g>
+  <g filter="url(#soft-shadow)">
+    <rect x="336" y="452" width="244" height="78" rx="10" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+
+    <rect x="350" y="470" width="38" height="38" rx="8" fill="#eff6ff" stroke="#bfdbfe"/>
+    <text x="369" y="494" text-anchor="middle" fill="#2563eb" font-size="13" font-weight="700">REG</text>
+    <text x="398" y="480" class="node-title">Skill 仓库治理</text>
+<text x="398" y="500" class="node-sub">Namespace、Version、Scan</text>
+<text x="398" y="517" class="node-sub">Public Release</text>
+  </g>
+  <g filter="url(#soft-shadow)">
+    <rect x="336" y="560" width="244" height="78" rx="10" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+
+    <rect x="350" y="578" width="38" height="38" rx="8" fill="#eff6ff" stroke="#bfdbfe"/>
+    <text x="369" y="602" text-anchor="middle" fill="#2563eb" font-size="13" font-weight="700">CMP</text>
+    <text x="398" y="588" class="node-title">组件管理</text>
+<text x="398" y="608" class="node-sub">核心服务默认启动</text>
+<text x="398" y="625" class="node-sub">可选 Langfuse</text>
+  </g>
+  <g filter="url(#soft-shadow)">
+    <ellipse cx="778" cy="134" rx="61" ry="17" fill="#e0f2fe" stroke="#4479A1" stroke-width="1.5"/>
+    <rect x="717" y="134" width="122" height="78" fill="#e0f2fe" stroke="none"/>
+    <line x1="717" y1="134" x2="717" y2="212" stroke="#4479A1" stroke-width="1.5"/>
+    <line x1="839" y1="134" x2="839" y2="212" stroke="#4479A1" stroke-width="1.5"/>
+    <ellipse cx="778" cy="212" rx="61" ry="17" fill="#e0f2fe" stroke="#4479A1" stroke-width="1.5"/>
+    <text x="778" y="173" text-anchor="middle" class="node-title">MySQL</text>
+    <text x="778" y="191" text-anchor="middle" class="node-sub">索引 + lease</text>
+  </g>
+  <g filter="url(#soft-shadow)">
+    <ellipse cx="778" cy="280" rx="61" ry="17" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+    <rect x="717" y="280" width="122" height="78" fill="#dcfce7" stroke="none"/>
+    <line x1="717" y1="280" x2="717" y2="358" stroke="#16a34a" stroke-width="1.5"/>
+    <line x1="839" y1="280" x2="839" y2="358" stroke="#16a34a" stroke-width="1.5"/>
+    <ellipse cx="778" cy="358" rx="61" ry="17" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+    <text x="778" y="319" text-anchor="middle" class="node-title">MinIO</text>
+    <text x="778" y="337" text-anchor="middle" class="node-sub">包与结果制品</text>
+  </g>
+  <g filter="url(#soft-shadow)">
+    <ellipse cx="778" cy="426" rx="61" ry="17" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/>
+    <rect x="717" y="426" width="122" height="78" fill="#fef3c7" stroke="none"/>
+    <line x1="717" y1="426" x2="717" y2="504" stroke="#d97706" stroke-width="1.5"/>
+    <line x1="839" y1="426" x2="839" y2="504" stroke="#d97706" stroke-width="1.5"/>
+    <ellipse cx="778" cy="504" rx="61" ry="17" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/>
+    <text x="778" y="465" text-anchor="middle" class="node-title">Git Bare</text>
+    <text x="778" y="483" text-anchor="middle" class="node-sub">Skill 版本</text>
+  </g>
+  <g filter="url(#soft-shadow)">
+    <ellipse cx="778" cy="572" rx="61" ry="17" fill="#fee2e2" stroke="#dc2626" stroke-width="1.5"/>
+    <rect x="717" y="572" width="122" height="78" fill="#fee2e2" stroke="none"/>
+    <line x1="717" y1="572" x2="717" y2="650" stroke="#dc2626" stroke-width="1.5"/>
+    <line x1="839" y1="572" x2="839" y2="650" stroke="#dc2626" stroke-width="1.5"/>
+    <ellipse cx="778" cy="650" rx="61" ry="17" fill="#fee2e2" stroke="#dc2626" stroke-width="1.5"/>
+    <text x="778" y="611" text-anchor="middle" class="node-title">Redis</text>
+    <text x="778" y="629" text-anchor="middle" class="node-sub">Celery 队列</text>
+  </g>
+  <g filter="url(#soft-shadow)">
+    <rect x="974" y="142" width="238" height="82" rx="10" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+
+    <rect x="988" y="160" width="38" height="38" rx="8" fill="#eff6ff" stroke="#bfdbfe"/>
+    <text x="1007" y="184" text-anchor="middle" fill="#2563eb" font-size="13" font-weight="700">REP</text>
+    <text x="1036" y="170" class="node-title">Reporter Skill</text>
+<text x="1036" y="190" class="node-sub">对话安装，周期上报</text>
+<text x="1036" y="207" class="node-sub">不持有 MinIO 密钥</text>
+  </g>
+  <g filter="url(#soft-shadow)">
+    <rect x="974" y="270" width="238" height="82" rx="10" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+
+    <rect x="988" y="288" width="38" height="38" rx="8" fill="#ede9fe" stroke="#c4b5fd"/>
+    <text x="1007" y="312" text-anchor="middle" fill="#7c3aed" font-size="13" font-weight="700">ANL</text>
+    <text x="1036" y="298" class="node-title">Analysis Worker</text>
+<text x="1036" y="318" class="node-sub">MySQL lease 领任务</text>
+<text x="1036" y="335" class="node-sub">baseline 或 qwen3.7-max</text>
+  </g>
+  <g filter="url(#soft-shadow)">
+    <rect x="974" y="398" width="238" height="82" rx="10" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+
+    <rect x="988" y="416" width="38" height="38" rx="8" fill="#fff7ed" stroke="#fed7aa"/>
+    <text x="1007" y="440" text-anchor="middle" fill="#ea580c" font-size="13" font-weight="700">QA</text>
+    <text x="1036" y="426" class="node-title">Clinic / Sandbox</text>
+<text x="1036" y="446" class="node-sub">扫描、运行验证、质量评估</text>
+  </g>
+  <g filter="url(#soft-shadow)">
+    <rect x="974" y="526" width="238" height="82" rx="10" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+
+    <rect x="988" y="544" width="38" height="38" rx="8" fill="#faf5ff" stroke="#e9d5ff"/>
+    <text x="1007" y="568" text-anchor="middle" fill="#9333ea" font-size="13" font-weight="700">LF</text>
+    <text x="1036" y="554" class="node-title">Langfuse 可选组件</text>
+<text x="1036" y="574" class="node-sub">Trace / Prompt 审计</text>
+<text x="1036" y="591" class="node-sub">Compose profile 解耦</text>
+  </g>
+  <line x1="244" y1="187" x2="336" y2="275" stroke="#2563eb" stroke-width="1.8" marker-end="url(#arrow-blue)"/>
+  <rect x="248" y="210" width="84" height="18" rx="4" fill="#ffffff" opacity="0.92"/>
+  <text x="290" y="223" text-anchor="middle" class="arrow-label">上报</text>
+  <line x1="244" y1="311" x2="336" y2="167" stroke="#ea580c" stroke-width="1.8" marker-end="url(#arrow-orange)"/>
+  <rect x="248" y="218" width="84" height="18" rx="4" fill="#ffffff" opacity="0.92"/>
+  <text x="290" y="231" text-anchor="middle" class="arrow-label">管理</text>
+  <line x1="244" y1="435" x2="336" y2="383" stroke="#2563eb" stroke-width="1.8" marker-end="url(#arrow-blue)"/>
+  <rect x="248" y="388" width="84" height="18" rx="4" fill="#ffffff" opacity="0.92"/>
+  <text x="290" y="401" text-anchor="middle" class="arrow-label">确认</text>
+  <line x1="244" y1="559" x2="336" y2="491" stroke="#2563eb" stroke-width="1.8" marker-end="url(#arrow-blue)"/>
+  <rect x="248" y="504" width="84" height="18" rx="4" fill="#ffffff" opacity="0.92"/>
+  <text x="290" y="517" text-anchor="middle" class="arrow-label">拉取</text>
+  <line x1="580" y1="167" x2="717" y2="173" stroke="#16a34a" stroke-width="1.8" stroke-dasharray="5,3" marker-end="url(#arrow-green)"/>
+  <rect x="606" y="149" width="84" height="18" rx="4" fill="#ffffff" opacity="0.92"/>
+  <text x="648" y="162" text-anchor="middle" class="arrow-label">用户/权限</text>
+  <line x1="580" y1="275" x2="717" y2="319" stroke="#16a34a" stroke-width="1.8" stroke-dasharray="5,3" marker-end="url(#arrow-green)"/>
+  <rect x="606" y="276" width="84" height="18" rx="4" fill="#ffffff" opacity="0.92"/>
+  <text x="648" y="289" text-anchor="middle" class="arrow-label">上传元数据</text>
+  <line x1="580" y1="383" x2="717" y2="173" stroke="#16a34a" stroke-width="1.8" stroke-dasharray="5,3" marker-end="url(#arrow-green)"/>
+  <rect x="606" y="257" width="84" height="18" rx="4" fill="#ffffff" opacity="0.92"/>
+  <text x="648" y="270" text-anchor="middle" class="arrow-label">资产索引</text>
+  <line x1="580" y1="491" x2="717" y2="465" stroke="#16a34a" stroke-width="1.8" stroke-dasharray="5,3" marker-end="url(#arrow-green)"/>
+  <rect x="606" y="457" width="84" height="18" rx="4" fill="#ffffff" opacity="0.92"/>
+  <text x="648" y="470" text-anchor="middle" class="arrow-label">Git tag</text>
+  <path d="M580,491 C626,532 666,594 717,611" stroke="#16a34a" stroke-width="1.8" fill="none" stroke-dasharray="5,3" marker-end="url(#arrow-green)"/>
+  <rect x="592" y="546" width="96" height="18" rx="4" fill="#ffffff" opacity="0.92"/>
+  <text x="640" y="560" text-anchor="middle" class="arrow-label">scan/clinic任务</text>
+  <path d="M580,275 C690,72 910,106 974,183" stroke="#ea580c" stroke-width="1.8" fill="none" marker-end="url(#arrow-orange)"/>
+  <rect x="836" y="108" width="96" height="18" rx="4" fill="#ffffff" opacity="0.92"/>
+  <text x="884" y="122" text-anchor="middle" class="arrow-label">安装说明</text>
+  <line x1="717" y1="173" x2="974" y2="311" stroke="#ea580c" stroke-width="1.8" marker-end="url(#arrow-orange)"/>
+  <rect x="803" y="221" width="84" height="18" rx="4" fill="#ffffff" opacity="0.92"/>
+  <text x="845" y="234" text-anchor="middle" class="arrow-label">lease任务</text>
+  <line x1="839" y1="319" x2="974" y2="311" stroke="#2563eb" stroke-width="1.8" marker-end="url(#arrow-blue)"/>
+  <rect x="864" y="294" width="84" height="18" rx="4" fill="#ffffff" opacity="0.92"/>
+  <text x="906" y="307" text-anchor="middle" class="arrow-label">下载包</text>
+  <line x1="974" y1="334" x2="839" y2="319" stroke="#16a34a" stroke-width="1.8" stroke-dasharray="5,3" marker-end="url(#arrow-green)"/>
+  <rect x="864" y="305" width="84" height="18" rx="4" fill="#ffffff" opacity="0.92"/>
+  <text x="906" y="318" text-anchor="middle" class="arrow-label">结果回写</text>
+  <path d="M839,611 C884,548 924,486 974,439" stroke="#6b7280" stroke-width="1.8" fill="none" stroke-dasharray="4,2" marker-end="url(#arrow-gray)"/>
+  <rect x="854" y="522" width="96" height="18" rx="4" fill="#ffffff" opacity="0.92"/>
+  <text x="902" y="536" text-anchor="middle" class="arrow-label">Celery执行</text>
+  <path d="M974,439 C850,456 720,478 580,491" stroke="#9333ea" stroke-width="1.8" fill="none" marker-end="url(#arrow-purple)"/>
+  <rect x="748" y="438" width="96" height="18" rx="4" fill="#ffffff" opacity="0.92"/>
+  <text x="796" y="452" text-anchor="middle" class="arrow-label">质量结果</text>
+  <line x1="580" y1="599" x2="974" y2="567" stroke="#6b7280" stroke-width="1.8" stroke-dasharray="4,2" marker-end="url(#arrow-gray)"/>
+  <rect x="735" y="562" width="84" height="18" rx="4" fill="#ffffff" opacity="0.92"/>
+  <text x="777" y="575" text-anchor="middle" class="arrow-label">启停组件</text><line x1="56" y1="662" x2="88" y2="662" stroke="#2563eb" stroke-width="1.6" marker-end="url(#arrow-blue)"/>
+<text x="98" y="666" class="tiny">主数据流</text>
+<line x1="56" y1="682" x2="88" y2="682" stroke="#16a34a" stroke-width="1.6" stroke-dasharray="5,3" marker-end="url(#arrow-green)"/>
+<text x="98" y="686" class="tiny">写入/入库</text>
+<line x1="56" y1="702" x2="88" y2="702" stroke="#ea580c" stroke-width="1.6" marker-end="url(#arrow-orange)"/>
+<text x="98" y="706" class="tiny">控制/触发</text>
+<line x1="56" y1="722" x2="88" y2="722" stroke="#9333ea" stroke-width="1.6" marker-end="url(#arrow-purple)"/>
+<text x="98" y="726" class="tiny">LLM/转换</text>
+<line x1="56" y1="742" x2="88" y2="742" stroke="#6b7280" stroke-width="1.6" stroke-dasharray="4,2" marker-end="url(#arrow-gray)"/>
+<text x="98" y="746" class="tiny">异步/可选</text>
+</svg>

@@ -1,0 +1,272 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 760" width="1200" height="760">
+  <style>
+    text {
+      font-family: 'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      fill: #111827;
+    }
+    .title { font-size: 24px; font-weight: 700; }
+    .subtitle { font-size: 13px; fill: #6b7280; }
+    .lane-label { font-size: 12px; font-weight: 700; fill: #374151; letter-spacing: .04em; }
+    .node-title { font-size: 14px; font-weight: 700; }
+    .node-sub { font-size: 11px; fill: #6b7280; }
+    .small { font-size: 11px; fill: #6b7280; }
+    .arrow-label { font-size: 11px; fill: #374151; font-weight: 600; }
+  </style>
+  <defs>
+    <marker id="arrow-blue" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#2563eb"/>
+    </marker>
+    <marker id="arrow-orange" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#ea580c"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#059669"/>
+    </marker>
+    <marker id="arrow-purple" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#7c3aed"/>
+    </marker>
+    <filter id="shadow" x="-15%" y="-15%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#111827" flood-opacity="0.12"/>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="760" fill="#ffffff"/>
+
+  <text x="600" y="34" text-anchor="middle" class="title">DuckDock 企业 AI Agent 资产与交接控制平面</text>
+  <text x="600" y="58" text-anchor="middle" class="subtitle">统一管理多厂商 Agent 资产、运行现场、工作成果与离职交接，让企业 AI 能力可复用、可延续、可审计</text>
+
+  <rect x="60" y="76" width="1080" height="38" rx="10" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.5"/>
+  <text x="600" y="100" text-anchor="middle" font-size="15" font-weight="700" fill="#1e40af">经营目标：资产看得见 ｜ 风险管得住 ｜ 离职接得住 ｜ 交付可复制</text>
+
+  <!-- Lanes -->
+  <rect x="36" y="136" width="178" height="444" rx="10" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="7,4"/>
+  <text x="52" y="160" class="lane-label">人员与组织</text>
+
+  <rect x="244" y="136" width="210" height="444" rx="10" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="7,4"/>
+  <text x="260" y="160" class="lane-label">多平台 Agent 运行现场</text>
+
+  <rect x="484" y="136" width="166" height="444" rx="10" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="7,4"/>
+  <text x="500" y="160" class="lane-label">厂商适配与采集</text>
+
+  <rect x="684" y="124" width="306" height="480" rx="14" fill="#faf5ff" stroke="#d8b4fe" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="837" y="152" text-anchor="middle" font-size="17" font-weight="800" fill="#581c87">DuckDock 控制平面</text>
+
+  <rect x="1022" y="136" width="142" height="444" rx="10" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="7,4"/>
+  <text x="1038" y="160" class="lane-label">企业交付结果</text>
+
+  <!-- People nodes -->
+  <g transform="translate(60,184)">
+    <rect width="130" height="64" rx="8" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+    <circle cx="28" cy="24" r="9" fill="#dbeafe" stroke="#60a5fa" stroke-width="1.2"/>
+    <path d="M15,50 Q15,34 28,34 Q41,34 41,50" fill="#dbeafe" stroke="#60a5fa" stroke-width="1.2"/>
+    <text x="76" y="25" text-anchor="middle" class="node-title">员工</text>
+    <text x="76" y="43" text-anchor="middle" class="node-sub">创建与使用</text>
+  </g>
+  <g transform="translate(60,268)">
+    <rect width="130" height="64" rx="8" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+    <rect x="18" y="17" width="28" height="32" rx="5" fill="#dcfce7" stroke="#86efac" stroke-width="1.2"/>
+    <line x1="24" y1="26" x2="40" y2="26" stroke="#16a34a" stroke-width="1.2"/>
+    <line x1="24" y1="36" x2="40" y2="36" stroke="#16a34a" stroke-width="1.2"/>
+    <text x="82" y="25" text-anchor="middle" class="node-title">部门/项目组</text>
+    <text x="82" y="43" text-anchor="middle" class="node-sub">归属与成本</text>
+  </g>
+  <g transform="translate(60,352)">
+    <rect width="130" height="64" rx="8" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+    <circle cx="32" cy="31" r="17" fill="#fff7ed" stroke="#fdba74" stroke-width="1.2"/>
+    <path d="M24,31 L30,37 L41,24" fill="none" stroke="#ea580c" stroke-width="2"/>
+    <text x="82" y="25" text-anchor="middle" class="node-title">主管/接收人</text>
+    <text x="82" y="43" text-anchor="middle" class="node-sub">审批与签收</text>
+  </g>
+  <g transform="translate(60,436)">
+    <rect width="130" height="64" rx="8" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+    <path d="M32,15 L49,23 L47,42 Q32,52 17,42 L15,23 Z" fill="#fee2e2" stroke="#f87171" stroke-width="1.2"/>
+    <text x="32" y="37" text-anchor="middle" font-size="13" font-weight="800" fill="#dc2626">!</text>
+    <text x="82" y="25" text-anchor="middle" class="node-title">安全/审计</text>
+    <text x="82" y="43" text-anchor="middle" class="node-sub">策略与追责</text>
+  </g>
+
+  <!-- Runtime nodes -->
+  <g transform="translate(270,178)">
+    <rect width="150" height="54" rx="8" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.5"/>
+    <circle cx="25" cy="27" r="17" fill="#2563eb"/>
+    <text x="25" y="31" text-anchor="middle" fill="#ffffff" font-size="9" font-weight="800">OC</text>
+    <text x="92" y="22" text-anchor="middle" class="node-title">OpenClaw</text>
+    <text x="92" y="39" text-anchor="middle" class="node-sub">私有化项目</text>
+  </g>
+  <g transform="translate(270,248)">
+    <rect width="150" height="54" rx="8" fill="#fff7ed" stroke="#fed7aa" stroke-width="1.5"/>
+    <circle cx="25" cy="27" r="17" fill="#ea580c"/>
+    <text x="25" y="31" text-anchor="middle" fill="#ffffff" font-size="8" font-weight="800">ARK</text>
+    <text x="92" y="22" text-anchor="middle" class="node-title">火山 ArkClaw</text>
+    <text x="92" y="39" text-anchor="middle" class="node-sub">云端 Agent</text>
+  </g>
+  <g transform="translate(270,318)">
+    <rect width="150" height="54" rx="8" fill="#f0fdfa" stroke="#99f6e4" stroke-width="1.5"/>
+    <rect x="12" y="14" width="28" height="24" rx="4" fill="#ccfbf1" stroke="#14b8a6" stroke-width="1.2"/>
+    <rect x="12" y="14" width="28" height="7" rx="3" fill="#14b8a6"/>
+    <text x="92" y="22" text-anchor="middle" class="node-title">WorkBuddy</text>
+    <text x="92" y="39" text-anchor="middle" class="node-sub">桌面工作台</text>
+  </g>
+  <g transform="translate(270,388)">
+    <rect width="150" height="54" rx="8" fill="#faf5ff" stroke="#ddd6fe" stroke-width="1.5"/>
+    <circle cx="25" cy="27" r="17" fill="#7c3aed"/>
+    <text x="25" y="31" text-anchor="middle" fill="#ffffff" font-size="9" font-weight="800">JVS</text>
+    <text x="92" y="22" text-anchor="middle" class="node-title">阿里 JVS</text>
+    <text x="92" y="39" text-anchor="middle" class="node-sub">企业套件</text>
+  </g>
+  <g transform="translate(270,458)">
+    <rect width="150" height="54" rx="8" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1.5"/>
+    <polygon points="25,11 39,19 39,35 25,43 11,35 11,19" fill="#dcfce7" stroke="#22c55e" stroke-width="1.2"/>
+    <text x="25" y="31" text-anchor="middle" fill="#15803d" font-size="8" font-weight="800">SITE</text>
+    <text x="92" y="22" text-anchor="middle" class="node-title">线下定制</text>
+    <text x="92" y="39" text-anchor="middle" class="node-sub">客户现场项目</text>
+  </g>
+
+  <!-- Adapter nodes -->
+  <g transform="translate(505,190)">
+    <polygon points="62,0 116,31 116,93 62,124 8,93 8,31" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+    <text x="62" y="48" text-anchor="middle" font-size="20" fill="#2563eb">⚙</text>
+    <text x="62" y="70" text-anchor="middle" class="node-title">Adapter</text>
+    <text x="62" y="88" text-anchor="middle" class="node-sub">厂商连接器</text>
+  </g>
+  <g transform="translate(505,340)">
+    <rect width="124" height="74" rx="8" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+    <rect x="20" y="17" width="32" height="28" rx="5" fill="#f0fdfa" stroke="#14b8a6" stroke-width="1.2"/>
+    <path d="M25,53 L47,53" stroke="#14b8a6" stroke-width="1.5"/>
+    <text x="85" y="31" text-anchor="middle" class="node-title">Sidecar</text>
+    <text x="85" y="49" text-anchor="middle" class="node-sub">本地采集</text>
+  </g>
+  <g transform="translate(505,454)">
+    <ellipse cx="62" cy="26" rx="48" ry="16" fill="#ede9fe" stroke="#a78bfa" stroke-width="1.5"/>
+    <rect x="14" y="26" width="96" height="48" fill="#ede9fe" stroke="none"/>
+    <line x1="14" y1="26" x2="14" y2="74" stroke="#a78bfa" stroke-width="1.5"/>
+    <line x1="110" y1="26" x2="110" y2="74" stroke="#a78bfa" stroke-width="1.5"/>
+    <ellipse cx="62" cy="74" rx="48" ry="16" fill="#ddd6fe" stroke="#a78bfa" stroke-width="1.5"/>
+    <text x="62" y="48" text-anchor="middle" class="node-title">Sync</text>
+    <text x="62" y="64" text-anchor="middle" class="node-sub">资产/事件</text>
+  </g>
+
+  <!-- Control plane nodes -->
+  <g transform="translate(710,176)">
+    <rect width="118" height="74" rx="8" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+    <circle cx="26" cy="30" r="13" fill="#dbeafe" stroke="#60a5fa" stroke-width="1.1"/>
+    <path d="M15,58 Q15,43 26,43 Q37,43 37,58" fill="#dbeafe" stroke="#60a5fa" stroke-width="1.1"/>
+    <text x="76" y="31" text-anchor="middle" class="node-title">身份组织</text>
+    <text x="76" y="49" text-anchor="middle" class="node-sub">SSO/RBAC</text>
+  </g>
+  <g transform="translate(846,176)">
+    <rect width="118" height="74" rx="8" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+    <path d="M22,18 L43,18 L52,27 L52,57 L22,57 Z" fill="#eff6ff" stroke="#60a5fa" stroke-width="1.1"/>
+    <path d="M43,18 L43,27 L52,27" fill="none" stroke="#60a5fa" stroke-width="1.1"/>
+    <text x="82" y="31" text-anchor="middle" class="node-title">AI资产目录</text>
+    <text x="82" y="49" text-anchor="middle" class="node-sub">Skill/Prompt</text>
+  </g>
+  <g transform="translate(710,274)">
+    <rect width="118" height="74" rx="8" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+    <rect x="16" y="18" width="40" height="34" rx="6" fill="#f0fdf4" stroke="#86efac" stroke-width="1.1"/>
+    <path d="M23,30 L49,30 M23,40 L42,40" stroke="#16a34a" stroke-width="1.2"/>
+    <text x="82" y="31" text-anchor="middle" class="node-title">工作历程</text>
+    <text x="82" y="49" text-anchor="middle" class="node-sub">任务/产物</text>
+  </g>
+  <g transform="translate(846,274)">
+    <rect width="118" height="74" rx="8" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+    <path d="M35,17 L54,27 L51,52 Q35,62 19,52 L16,27 Z" fill="#fee2e2" stroke="#f87171" stroke-width="1.1"/>
+    <path d="M26,38 L33,45 L46,30" fill="none" stroke="#dc2626" stroke-width="2"/>
+    <text x="82" y="31" text-anchor="middle" class="node-title">治理门禁</text>
+    <text x="82" y="49" text-anchor="middle" class="node-sub">扫描/沙箱</text>
+  </g>
+  <g transform="translate(724,386)">
+    <rect width="226" height="96" rx="10" fill="#ffffff" stroke="#a78bfa" stroke-width="2"/>
+    <rect x="4" y="4" width="218" height="88" rx="8" fill="none" stroke="#ddd6fe" stroke-width="1"/>
+    <text x="113" y="28" text-anchor="middle" font-size="15" font-weight="800" fill="#581c87">离职/项目交接编排</text>
+    <text x="113" y="51" text-anchor="middle" class="node-sub">盘点 → 冻结 → 迁移 → 轮换</text>
+    <text x="113" y="70" text-anchor="middle" class="node-sub">归档 → 审批 → 签收</text>
+  </g>
+  <g transform="translate(724,512)">
+    <rect width="226" height="54" rx="8" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+    <circle cx="30" cy="27" r="14" fill="#fff7ed" stroke="#fdba74" stroke-width="1.1"/>
+    <text x="30" y="32" text-anchor="middle" font-size="13" font-weight="800" fill="#ea580c">LOG</text>
+    <text x="128" y="24" text-anchor="middle" class="node-title">审计与报表</text>
+    <text x="128" y="41" text-anchor="middle" class="node-sub">责任人/时间线/风险项</text>
+  </g>
+
+  <!-- Output nodes -->
+  <g transform="translate(1038,184)">
+    <rect width="106" height="64" rx="8" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1.5"/>
+    <text x="53" y="26" text-anchor="middle" class="node-title">能力复用</text>
+    <text x="53" y="44" text-anchor="middle" class="node-sub">组织沉淀</text>
+  </g>
+  <g transform="translate(1038,272)">
+    <rect width="106" height="64" rx="8" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.5"/>
+    <text x="53" y="26" text-anchor="middle" class="node-title">业务延续</text>
+    <text x="53" y="44" text-anchor="middle" class="node-sub">离职不断档</text>
+  </g>
+  <g transform="translate(1038,360)">
+    <rect width="106" height="64" rx="8" fill="#fef2f2" stroke="#fecaca" stroke-width="1.5"/>
+    <text x="53" y="26" text-anchor="middle" class="node-title">风险可控</text>
+    <text x="53" y="44" text-anchor="middle" class="node-sub">权限可追踪</text>
+  </g>
+  <g transform="translate(1038,448)">
+    <rect width="106" height="64" rx="8" fill="#fff7ed" stroke="#fed7aa" stroke-width="1.5"/>
+    <text x="53" y="26" text-anchor="middle" class="node-title">交付标准化</text>
+    <text x="53" y="44" text-anchor="middle" class="node-sub">代理可复制</text>
+  </g>
+
+  <!-- Primary chain arrows -->
+  <path d="M190,216 C220,216 232,205 268,205" fill="none" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow-blue)"/>
+  <rect x="202" y="193" width="48" height="18" rx="4" fill="#ffffff"/>
+  <text x="226" y="207" text-anchor="middle" class="arrow-label">创建</text>
+
+  <path d="M420,345 C454,345 466,260 505,252" fill="none" stroke="#7c3aed" stroke-width="1.8" marker-end="url(#arrow-purple)"/>
+  <rect x="439" y="287" width="50" height="18" rx="4" fill="#ffffff"/>
+  <text x="464" y="301" text-anchor="middle" class="arrow-label">接入</text>
+
+  <path d="M420,485 C455,485 470,377 505,377" fill="none" stroke="#7c3aed" stroke-width="1.8" stroke-dasharray="5,3" marker-end="url(#arrow-purple)"/>
+  <rect x="438" y="421" width="64" height="18" rx="4" fill="#ffffff"/>
+  <text x="470" y="435" text-anchor="middle" class="arrow-label">本地采集</text>
+
+  <path d="M567,314 C567,338 567,425 567,454" fill="none" stroke="#6b7280" stroke-width="1.6" stroke-dasharray="4,3" marker-end="url(#arrow-purple)"/>
+  <rect x="581" y="374" width="42" height="18" rx="4" fill="#ffffff"/>
+  <text x="602" y="388" text-anchor="middle" class="arrow-label">汇聚</text>
+
+  <path d="M629,492 C656,492 673,312 710,312" fill="none" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow-blue)"/>
+  <rect x="647" y="398" width="64" height="18" rx="4" fill="#ffffff"/>
+  <text x="679" y="412" text-anchor="middle" class="arrow-label">统一纳管</text>
+
+  <path d="M950,434 C986,434 1004,304 1038,304" fill="none" stroke="#059669" stroke-width="2" marker-end="url(#arrow-green)"/>
+  <rect x="969" y="357" width="64" height="18" rx="4" fill="#ffffff"/>
+  <text x="1001" y="371" text-anchor="middle" class="arrow-label">交付结果</text>
+
+  <!-- Control arrows inside DuckDock -->
+  <path d="M828,213 L846,213" fill="none" stroke="#2563eb" stroke-width="1.6" marker-end="url(#arrow-blue)"/>
+  <path d="M769,250 L769,274" fill="none" stroke="#059669" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrow-green)"/>
+  <path d="M828,311 L846,311" fill="none" stroke="#ea580c" stroke-width="1.5" marker-end="url(#arrow-orange)"/>
+  <path d="M905,348 C905,370 884,377 860,386" fill="none" stroke="#ea580c" stroke-width="1.5" marker-end="url(#arrow-orange)"/>
+  <path d="M837,482 L837,512" fill="none" stroke="#6b7280" stroke-width="1.5" stroke-dasharray="4,2" marker-end="url(#arrow-purple)"/>
+
+  <!-- Governance direct influences -->
+  <path d="M190,384 C405,384 520,434 724,434" fill="none" stroke="#ea580c" stroke-width="1.4" stroke-dasharray="6,4" marker-end="url(#arrow-orange)"/>
+  <rect x="371" y="398" width="76" height="18" rx="4" fill="#ffffff"/>
+  <text x="409" y="412" text-anchor="middle" class="arrow-label">审批交接</text>
+
+  <path d="M190,468 C420,468 585,311 846,311" fill="none" stroke="#ea580c" stroke-width="1.4" stroke-dasharray="6,4" marker-end="url(#arrow-orange)"/>
+  <rect x="429" y="443" width="76" height="18" rx="4" fill="#ffffff"/>
+  <text x="467" y="457" text-anchor="middle" class="arrow-label">安全策略</text>
+
+  <!-- Bottom value statement -->
+  <rect x="130" y="626" width="940" height="54" rx="12" fill="#111827" stroke="#374151" stroke-width="1.5"/>
+  <text x="600" y="650" text-anchor="middle" font-size="16" font-weight="800" fill="#ffffff">核心价值：不是再做一个 Skill 仓库，而是把“谁拥有、谁使用、在哪运行、产出什么、离职谁接”统一管理起来</text>
+  <text x="600" y="670" text-anchor="middle" font-size="12" fill="#d1d5db">面向云计算与 AI 代理服务商：把多厂商、多项目、多员工沉淀下来的 Agent 能力变成企业可运营资产</text>
+
+  <!-- Legend -->
+  <g transform="translate(40,704)">
+    <line x1="0" y1="8" x2="34" y2="8" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow-blue)"/>
+    <text x="42" y="12" class="small">主链路</text>
+    <line x1="118" y1="8" x2="152" y2="8" stroke="#7c3aed" stroke-width="1.8" marker-end="url(#arrow-purple)"/>
+    <text x="160" y="12" class="small">平台接入</text>
+    <line x1="250" y1="8" x2="284" y2="8" stroke="#ea580c" stroke-width="1.5" stroke-dasharray="6,4" marker-end="url(#arrow-orange)"/>
+    <text x="292" y="12" class="small">审批/策略</text>
+    <line x1="392" y1="8" x2="426" y2="8" stroke="#059669" stroke-width="2" marker-end="url(#arrow-green)"/>
+    <text x="434" y="12" class="small">经营结果</text>
+  </g>
+</svg>

@@ -1,0 +1,15 @@
+id: documentation
+name: Documentation
+weight: 10
+judge_mode: deterministic
+thresholds:
+  excellent: 90
+  good: 75
+  warning: 60
+criteria:
+  - usage section presence
+  - examples presence
+  - structure and readability
+  - metadata completeness
+guidance:
+  - Reward skills with concrete usage examples and clear markdown structure.

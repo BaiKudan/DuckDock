@@ -1,0 +1,263 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 760" width="1280" height="760" role="img" aria-labelledby="title desc">
+  <title id="title">DuckDock 业务功能架构图</title>
+  <desc id="desc">面向业务和产品视角展示 DuckDock 的核心用户入口、运行时接入、Reporter 上报、AI 资产控制、分析归档、交接治理、私有 Skill 仓库、质量诊断、组件管理和审计权限。</desc>
+  <style>
+    text {
+      font-family: 'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', 'Microsoft JhengHei', 'SimHei', sans-serif;
+    }
+    .title { fill:#111827; font-size:28px; font-weight:700; }
+    .subtitle { fill:#6b7280; font-size:14px; }
+    .section-title { fill:#111827; font-size:16px; font-weight:700; }
+    .section-sub { fill:#6b7280; font-size:12px; }
+    .node-title { fill:#111827; font-size:14px; font-weight:700; }
+    .node-sub { fill:#6b7280; font-size:12px; }
+    .label { fill:#4b5563; font-size:12px; font-weight:600; }
+    .tiny { fill:#6b7280; font-size:11px; }
+    .lane { fill:#ffffff; stroke:#d1d5db; stroke-width:1.5; rx:14; }
+    .node { fill:#ffffff; stroke:#d1d5db; stroke-width:1.5; rx:10; }
+    .badge-blue { fill:#eff6ff; stroke:#bfdbfe; }
+    .badge-green { fill:#f0fdf4; stroke:#bbf7d0; }
+    .badge-purple { fill:#faf5ff; stroke:#e9d5ff; }
+    .badge-orange { fill:#fff7ed; stroke:#fed7aa; }
+    .badge-teal { fill:#f0fdfa; stroke:#ccfbf1; }
+    .badge-red { fill:#fef2f2; stroke:#fecaca; }
+    .arrow-label { fill:#6b7280; font-size:11px; font-weight:600; }
+  </style>
+  <defs>
+    <marker id="arrow-blue" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#2563eb"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#16a34a"/>
+    </marker>
+    <marker id="arrow-purple" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#9333ea"/>
+    </marker>
+    <marker id="arrow-orange" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#ea580c"/>
+    </marker>
+    <marker id="arrow-red" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#dc2626"/>
+    </marker>
+  </defs>
+
+  <rect width="1280" height="760" fill="#ffffff"/>
+
+  <text x="40" y="48" class="title">DuckDock 业务功能架构图</text>
+  <text x="40" y="74" class="subtitle">企业 AI Agent 资产与交接控制平面：把各种 OpenClaw/WorkBuddy/ArkClaw 运行时的能力、工作历程和交接证据统一接入、分析、确认和治理。</text>
+
+  <!-- Actors -->
+  <rect x="40" y="104" width="250" height="602" class="lane"/>
+  <text x="64" y="136" class="section-title">使用入口</text>
+  <text x="64" y="156" class="section-sub">谁在使用 DuckDock</text>
+
+  <g transform="translate(64,184)">
+    <rect width="202" height="86" class="node"/>
+    <rect x="16" y="18" width="42" height="42" rx="10" class="badge-purple"/>
+    <text x="37" y="44" text-anchor="middle" fill="#7c3aed" font-size="13" font-weight="700">ADM</text>
+    <text x="72" y="34" class="node-title">管理员控制台</text>
+    <text x="72" y="55" class="node-sub">运行时、资产、交接</text>
+    <text x="72" y="72" class="node-sub">组件、审计、权限</text>
+  </g>
+
+  <g transform="translate(64,296)">
+    <rect width="202" height="86" class="node"/>
+    <rect x="16" y="18" width="42" height="42" rx="10" class="badge-teal"/>
+    <text x="37" y="44" text-anchor="middle" fill="#0f766e" font-size="13" font-weight="700">ME</text>
+    <text x="72" y="34" class="node-title">个人工作台</text>
+    <text x="72" y="55" class="node-sub">我的 AI 资产</text>
+    <text x="72" y="72" class="node-sub">确认、补充、排除</text>
+  </g>
+
+  <g transform="translate(64,408)">
+    <rect width="202" height="86" class="node"/>
+    <rect x="16" y="18" width="42" height="42" rx="10" class="badge-blue"/>
+    <text x="37" y="44" text-anchor="middle" fill="#2563eb" font-size="13" font-weight="700">RT</text>
+    <text x="72" y="31" class="node-title">Agent 运行时</text>
+    <text x="72" y="52" class="node-sub">OpenClaw / WorkBuddy</text>
+    <text x="72" y="69" class="node-sub">ArkClaw / JVS / 定制</text>
+  </g>
+
+  <g transform="translate(64,520)">
+    <rect width="202" height="86" class="node"/>
+    <rect x="16" y="18" width="42" height="42" rx="10" class="badge-orange"/>
+    <text x="37" y="44" text-anchor="middle" fill="#ea580c" font-size="13" font-weight="700">SK</text>
+    <text x="72" y="34" class="node-title">Skill 使用方</text>
+    <text x="72" y="55" class="node-sub">私有 Skills Registry</text>
+    <text x="72" y="72" class="node-sub">安装 Reporter 探针</text>
+  </g>
+
+  <!-- Core functions -->
+  <rect x="330" y="104" width="590" height="602" class="lane"/>
+  <text x="354" y="136" class="section-title">核心业务功能</text>
+  <text x="354" y="156" class="section-sub">平台真正提供的业务能力，而不是组织管理系统</text>
+
+  <g transform="translate(354,184)">
+    <rect width="244" height="94" class="node"/>
+    <rect x="16" y="18" width="42" height="42" rx="10" class="badge-blue"/>
+    <text x="37" y="44" text-anchor="middle" fill="#2563eb" font-size="13" font-weight="700">01</text>
+    <text x="72" y="30" class="node-title">运行时接入与身份</text>
+    <text x="72" y="52" class="node-sub">自助 Runtime + Credential</text>
+    <text x="72" y="70" class="node-sub">记录上传者身份与运行时来源</text>
+  </g>
+
+  <g transform="translate(632,184)">
+    <rect width="244" height="94" class="node"/>
+    <rect x="16" y="18" width="42" height="42" rx="10" class="badge-green"/>
+    <text x="37" y="44" text-anchor="middle" fill="#16a34a" font-size="13" font-weight="700">02</text>
+    <text x="72" y="30" class="node-title">Reporter 上报归档</text>
+    <text x="72" y="52" class="node-sub">日报/周报包直传 MinIO</text>
+    <text x="72" y="70" class="node-sub">MySQL 只保留必要元数据</text>
+  </g>
+
+  <g transform="translate(354,314)">
+    <rect width="244" height="94" class="node"/>
+    <rect x="16" y="18" width="42" height="42" rx="10" class="badge-purple"/>
+    <text x="37" y="44" text-anchor="middle" fill="#7c3aed" font-size="13" font-weight="700">03</text>
+    <text x="72" y="30" class="node-title">Analysis Worker 分析</text>
+    <text x="72" y="52" class="node-sub">MySQL lease 领取任务</text>
+    <text x="72" y="70" class="node-sub">baseline 或 qwen3.7-max 处理</text>
+  </g>
+
+  <g transform="translate(632,314)">
+    <rect width="244" height="94" class="node"/>
+    <rect x="16" y="18" width="42" height="42" rx="10" class="badge-teal"/>
+    <text x="37" y="44" text-anchor="middle" fill="#0f766e" font-size="13" font-weight="700">04</text>
+    <text x="72" y="30" class="node-title">AI 资产与工作历程</text>
+    <text x="72" y="52" class="node-sub">Skills / Agents / Prompts</text>
+    <text x="72" y="70" class="node-sub">Workflows / Memory / Context</text>
+  </g>
+
+  <g transform="translate(354,444)">
+    <rect width="244" height="94" class="node"/>
+    <rect x="16" y="18" width="42" height="42" rx="10" class="badge-orange"/>
+    <text x="37" y="44" text-anchor="middle" fill="#ea580c" font-size="13" font-weight="700">05</text>
+    <text x="72" y="30" class="node-title">交接闭环控制</text>
+    <text x="72" y="52" class="node-sub">审批、执行、回执、验收</text>
+    <text x="72" y="70" class="node-sub">离职状态后展示交接卡片</text>
+  </g>
+
+  <g transform="translate(632,444)">
+    <rect width="244" height="94" class="node"/>
+    <rect x="16" y="18" width="42" height="42" rx="10" class="badge-blue"/>
+    <text x="37" y="44" text-anchor="middle" fill="#2563eb" font-size="13" font-weight="700">06</text>
+    <text x="72" y="30" class="node-title">私有 Skill 仓库</text>
+    <text x="72" y="52" class="node-sub">Namespace、版本、发布</text>
+    <text x="72" y="70" class="node-sub">Registry 给运行时安装 Skill</text>
+  </g>
+
+  <g transform="translate(354,574)">
+    <rect width="244" height="94" class="node"/>
+    <rect x="16" y="18" width="42" height="42" rx="10" class="badge-red"/>
+    <text x="37" y="44" text-anchor="middle" fill="#dc2626" font-size="13" font-weight="700">07</text>
+    <text x="72" y="30" class="node-title">诊断与质量治理</text>
+    <text x="72" y="52" class="node-sub">扫描、Sandbox、Clinic</text>
+    <text x="72" y="70" class="node-sub">控制 Skill 发布风险</text>
+  </g>
+
+  <g transform="translate(632,574)">
+    <rect width="244" height="94" class="node"/>
+    <rect x="16" y="18" width="42" height="42" rx="10" class="badge-purple"/>
+    <text x="37" y="44" text-anchor="middle" fill="#7c3aed" font-size="13" font-weight="700">08</text>
+    <text x="72" y="30" class="node-title">组件与观测管理</text>
+    <text x="72" y="52" class="node-sub">核心服务默认启动</text>
+    <text x="72" y="70" class="node-sub">Langfuse 可选安装</text>
+  </g>
+
+  <!-- Governance and storage -->
+  <rect x="960" y="104" width="280" height="602" class="lane"/>
+  <text x="984" y="136" class="section-title">数据沉淀与治理</text>
+  <text x="984" y="156" class="section-sub">沉淀为可查、可确认、可交接的资产索引</text>
+
+  <g transform="translate(984,184)">
+    <rect width="232" height="86" class="node"/>
+    <rect x="16" y="18" width="42" height="42" rx="10" class="badge-green"/>
+    <text x="37" y="44" text-anchor="middle" fill="#16a34a" font-size="13" font-weight="700">S3</text>
+    <text x="72" y="34" class="node-title">MinIO 原始与结果包</text>
+    <text x="72" y="55" class="node-sub">原始上报包、分析结果</text>
+    <text x="72" y="72" class="node-sub">大内容不进 MySQL</text>
+  </g>
+
+  <g transform="translate(984,296)">
+    <rect width="232" height="86" class="node"/>
+    <rect x="16" y="18" width="42" height="42" rx="10" class="badge-blue"/>
+    <text x="37" y="44" text-anchor="middle" fill="#2563eb" font-size="13" font-weight="700">DB</text>
+    <text x="72" y="34" class="node-title">MySQL 结构化索引</text>
+    <text x="72" y="55" class="node-sub">资产卡片、归属关系</text>
+    <text x="72" y="72" class="node-sub">任务 lease、审计记录</text>
+  </g>
+
+  <g transform="translate(984,408)">
+    <rect width="232" height="86" class="node"/>
+    <rect x="16" y="18" width="42" height="42" rx="10" class="badge-teal"/>
+    <text x="37" y="44" text-anchor="middle" fill="#0f766e" font-size="13" font-weight="700">MEM</text>
+    <text x="72" y="34" class="node-title">长期记忆候选</text>
+    <text x="72" y="55" class="node-sub">摘要、项目上下文</text>
+    <text x="72" y="72" class="node-sub">员工确认后成为资产档案</text>
+  </g>
+
+  <g transform="translate(984,520)">
+    <rect width="232" height="86" class="node"/>
+    <rect x="16" y="18" width="42" height="42" rx="10" class="badge-orange"/>
+    <text x="37" y="44" text-anchor="middle" fill="#ea580c" font-size="13" font-weight="700">AUD</text>
+    <text x="72" y="34" class="node-title">权限与审计</text>
+    <text x="72" y="55" class="node-sub">system_role + permissions</text>
+    <text x="72" y="72" class="node-sub">操作留痕、Token 生命周期</text>
+  </g>
+
+  <!-- Main flow arrows -->
+  <path d="M266 451 C304 451 310 232 354 232" fill="none" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow-blue)"/>
+  <text x="298" y="338" class="arrow-label">登记运行时</text>
+
+  <path d="M266 563 C322 563 318 491 354 491" fill="none" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow-blue)"/>
+  <text x="284" y="518" class="arrow-label">安装私有 Skill</text>
+
+  <path d="M598 232 L632 232" fill="none" stroke="#16a34a" stroke-width="2" marker-end="url(#arrow-green)"/>
+  <text x="607" y="222" class="arrow-label">上报包</text>
+
+  <path d="M754 278 C754 292 476 296 476 314" fill="none" stroke="#9333ea" stroke-width="2" marker-end="url(#arrow-purple)"/>
+  <text x="560" y="300" class="arrow-label">生成分析任务</text>
+
+  <path d="M598 361 L632 361" fill="none" stroke="#0f766e" stroke-width="2" marker-end="url(#arrow-green)"/>
+  <text x="607" y="351" class="arrow-label">产出资产</text>
+
+  <path d="M754 408 C754 426 476 426 476 444" fill="none" stroke="#ea580c" stroke-width="2" marker-end="url(#arrow-orange)"/>
+  <text x="560" y="431" class="arrow-label">交接信号</text>
+
+  <path d="M876 361 C922 361 934 227 984 227" fill="none" stroke="#16a34a" stroke-width="2" marker-end="url(#arrow-green)"/>
+  <text x="906" y="260" class="arrow-label">结果包</text>
+
+  <path d="M876 361 C924 361 936 339 984 339" fill="none" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow-blue)"/>
+  <text x="906" y="351" class="arrow-label">索引入库</text>
+
+  <path d="M876 361 C922 361 936 451 984 451" fill="none" stroke="#0f766e" stroke-width="2" marker-end="url(#arrow-green)"/>
+  <text x="906" y="426" class="arrow-label">记忆候选</text>
+
+  <path d="M266 339 C310 339 310 361 354 361" fill="none" stroke="#0f766e" stroke-width="2" marker-end="url(#arrow-green)"/>
+  <text x="292" y="361" class="arrow-label">员工确认</text>
+
+  <path d="M266 227 C318 227 314 621 354 621" fill="none" stroke="#dc2626" stroke-width="2" marker-end="url(#arrow-red)"/>
+  <text x="286" y="634" class="arrow-label">管理员治理</text>
+
+  <path d="M876 621 C922 621 934 563 984 563" fill="none" stroke="#ea580c" stroke-width="2" marker-end="url(#arrow-orange)"/>
+  <text x="905" y="603" class="arrow-label">审计留痕</text>
+
+  <path d="M754 574 C754 554 754 558 754 538" fill="none" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow-blue)"/>
+  <text x="764" y="557" class="arrow-label">发布治理</text>
+
+  <!-- Bottom notes -->
+  <rect x="40" y="720" width="1200" height="1" fill="#e5e7eb"/>
+  <g transform="translate(48,733)">
+    <line x1="0" y1="8" x2="32" y2="8" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow-blue)"/>
+    <text x="42" y="12" class="tiny">配置/管理流</text>
+    <line x1="138" y1="8" x2="170" y2="8" stroke="#16a34a" stroke-width="2" marker-end="url(#arrow-green)"/>
+    <text x="180" y="12" class="tiny">数据/资产流</text>
+    <line x1="286" y1="8" x2="318" y2="8" stroke="#9333ea" stroke-width="2" marker-end="url(#arrow-purple)"/>
+    <text x="328" y="12" class="tiny">异步分析流</text>
+    <line x1="444" y1="8" x2="476" y2="8" stroke="#ea580c" stroke-width="2" marker-end="url(#arrow-orange)"/>
+    <text x="486" y="12" class="tiny">交接/审计流</text>
+    <line x1="602" y1="8" x2="634" y2="8" stroke="#dc2626" stroke-width="2" marker-end="url(#arrow-red)"/>
+    <text x="644" y="12" class="tiny">治理/风险流</text>
+    <text x="820" y="12" class="tiny">说明：组织管理只做用户与岗位交接闭环，不扩展成完整 HR/OA 系统。</text>
+  </g>
+</svg>

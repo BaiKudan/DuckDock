@@ -1,0 +1,209 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1140 730" width="1140" height="730">
+  <style>
+text { font-family: 'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif; }
+.title { fill:#111827; font-size:24px; font-weight:700; }
+.subtitle { fill:#6b7280; font-size:13px; }
+.lane-label { fill:#4f46e5; font-size:11px; font-weight:700; letter-spacing:.08em; }
+.node-title { fill:#111827; font-size:14px; font-weight:700; }
+.node-sub { fill:#6b7280; font-size:11px; }
+.tiny { fill:#6b7280; font-size:10px; }
+.arrow-label { fill:#374151; font-size:11px; font-weight:600; }
+.tag { fill:#4b5563; font-size:10px; font-weight:600; }
+</style>
+  
+<defs>
+  <filter id="soft-shadow" x="-20%" y="-20%" width="140%" height="140%">
+    <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#0f172a" flood-opacity="0.10"/>
+  </filter>
+  <marker id="arrow-blue" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+    <polygon points="0 0,10 3.5,0 7" fill="#2563eb"/>
+  </marker>
+  <marker id="arrow-green" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+    <polygon points="0 0,10 3.5,0 7" fill="#16a34a"/>
+  </marker>
+  <marker id="arrow-orange" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+    <polygon points="0 0,10 3.5,0 7" fill="#ea580c"/>
+  </marker>
+  <marker id="arrow-purple" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+    <polygon points="0 0,10 3.5,0 7" fill="#9333ea"/>
+  </marker>
+  <marker id="arrow-gray" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+    <polygon points="0 0,10 3.5,0 7" fill="#6b7280"/>
+  </marker>
+</defs>
+
+  <rect width="1140" height="730" fill="#ffffff"/>
+  <text x="36" y="42" class="title">私有 Skill 仓库与发布治理流程</text>
+  <text x="36" y="66" class="subtitle">Skill 仓库仍是 DuckDock 的底座能力：版本、扫描、沙箱验证、质量诊所和私有/公开分发。</text>
+
+  <rect x="28" y="96" width="220" height="600" rx="10" fill="#eff6ff" fill-opacity="0.42" stroke="#bfdbfe" stroke-dasharray="7,5"/>
+  <text x="44" y="120" class="lane-label">DEVELOPER</text>
+  <rect x="272" y="96" width="292" height="600" rx="10" fill="#f8fafc" fill-opacity="0.42" stroke="#d1d5db" stroke-dasharray="7,5"/>
+  <text x="288" y="120" class="lane-label">REGISTRY GOVERNANCE</text>
+  <rect x="588" y="96" width="270" height="600" rx="10" fill="#fff7ed" fill-opacity="0.42" stroke="#fed7aa" stroke-dasharray="7,5"/>
+  <text x="604" y="120" class="lane-label">QUALITY GATES</text>
+  <rect x="882" y="96" width="226" height="600" rx="10" fill="#f0fdf4" fill-opacity="0.42" stroke="#bbf7d0" stroke-dasharray="7,5"/>
+  <text x="898" y="120" class="lane-label">DISTRIBUTION</text>
+  <g filter="url(#soft-shadow)">
+    <rect x="54" y="150" width="168" height="78" rx="10" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+
+    <rect x="68" y="168" width="38" height="38" rx="8" fill="#eff6ff" stroke="#bfdbfe"/>
+    <text x="87" y="192" text-anchor="middle" fill="#2563eb" font-size="13" font-weight="700">NS</text>
+    <text x="116" y="178" class="node-title">命名空间</text>
+<text x="116" y="198" class="node-sub">团队/项目隔离</text>
+<text x="116" y="215" class="node-sub">RBAC 成员</text>
+  </g>
+  <g filter="url(#soft-shadow)">
+    <rect x="54" y="282" width="168" height="78" rx="10" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+
+    <rect x="68" y="300" width="38" height="38" rx="8" fill="#eff6ff" stroke="#bfdbfe"/>
+    <text x="87" y="324" text-anchor="middle" fill="#2563eb" font-size="13" font-weight="700">DEV</text>
+    <text x="116" y="310" class="node-title">提交 Skill</text>
+<text x="116" y="330" class="node-sub">SKILL.md / files</text>
+<text x="116" y="347" class="node-sub">版本说明</text>
+  </g>
+  <g filter="url(#soft-shadow)">
+    <rect x="54" y="414" width="168" height="78" rx="10" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+
+    <rect x="68" y="432" width="38" height="38" rx="8" fill="#eff6ff" stroke="#bfdbfe"/>
+    <text x="87" y="456" text-anchor="middle" fill="#2563eb" font-size="13" font-weight="700">PUB</text>
+    <text x="116" y="442" class="node-title">发布请求</text>
+<text x="116" y="462" class="node-sub">tag / semver</text>
+<text x="116" y="479" class="node-sub">artifact build</text>
+  </g>
+  <g filter="url(#soft-shadow)">
+    <rect x="300" y="136" width="236" height="78" rx="10" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+
+    <rect x="314" y="154" width="38" height="38" rx="8" fill="#eff6ff" stroke="#bfdbfe"/>
+    <text x="333" y="178" text-anchor="middle" fill="#2563eb" font-size="13" font-weight="700">GIT</text>
+    <text x="362" y="164" class="node-title">版本事务</text>
+<text x="362" y="184" class="node-sub">advisory lock</text>
+<text x="362" y="201" class="node-sub">Git commit + tag</text>
+  </g>
+  <g filter="url(#soft-shadow)">
+    <rect x="300" y="260" width="236" height="78" rx="10" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+
+    <rect x="314" y="278" width="38" height="38" rx="8" fill="#fee2e2" stroke="#fecaca"/>
+    <text x="333" y="302" text-anchor="middle" fill="#dc2626" font-size="13" font-weight="700">SCN</text>
+    <text x="362" y="288" class="node-title">扫描与策略</text>
+<text x="362" y="308" class="node-sub">静态扫描、敏感信息</text>
+<text x="362" y="325" class="node-sub">治理规则</text>
+  </g>
+  <g filter="url(#soft-shadow)">
+    <rect x="300" y="384" width="236" height="78" rx="10" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+
+    <rect x="314" y="402" width="38" height="38" rx="8" fill="#eff6ff" stroke="#bfdbfe"/>
+    <text x="333" y="426" text-anchor="middle" fill="#2563eb" font-size="13" font-weight="700">PKG</text>
+    <text x="362" y="412" class="node-title">Artifact 打包</text>
+<text x="362" y="432" class="node-sub">tar.gz/manifest</text>
+<text x="362" y="449" class="node-sub">bytes safe path</text>
+  </g>
+  <g filter="url(#soft-shadow)">
+    <rect x="616" y="150" width="214" height="78" rx="10" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+
+    <rect x="630" y="168" width="38" height="38" rx="8" fill="#fff7ed" stroke="#fed7aa"/>
+    <text x="649" y="192" text-anchor="middle" fill="#ea580c" font-size="13" font-weight="700">SBX</text>
+    <text x="678" y="178" class="node-title">Sandbox 验证</text>
+<text x="678" y="198" class="node-sub">OpenClaw/容器/SSH</text>
+<text x="678" y="215" class="node-sub">运行 smoke test</text>
+  </g>
+  <g filter="url(#soft-shadow)">
+    <rect x="616" y="282" width="214" height="78" rx="10" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+
+    <rect x="630" y="300" width="38" height="38" rx="8" fill="#ede9fe" stroke="#c4b5fd"/>
+    <text x="649" y="324" text-anchor="middle" fill="#7c3aed" font-size="13" font-weight="700">QA</text>
+    <text x="678" y="310" class="node-title">Clinic 质量诊所</text>
+<text x="678" y="330" class="node-sub">LLM judge 维度评测</text>
+<text x="678" y="347" class="node-sub">可接 Langfuse trace</text>
+  </g>
+  <g filter="url(#soft-shadow)">
+    <rect x="616" y="414" width="214" height="78" rx="10" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+
+    <rect x="630" y="432" width="38" height="38" rx="8" fill="#eff6ff" stroke="#bfdbfe"/>
+    <text x="649" y="456" text-anchor="middle" fill="#2563eb" font-size="13" font-weight="700">GATE</text>
+    <text x="678" y="442" class="node-title">发布门禁</text>
+<text x="678" y="462" class="node-sub">通过/阻断/人工复核</text>
+<text x="678" y="479" class="node-sub">审计日志</text>
+  </g>
+  <g filter="url(#soft-shadow)">
+    <ellipse cx="982" cy="150" rx="56" ry="16" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/>
+    <rect x="926" y="150" width="112" height="72" fill="#fef3c7" stroke="none"/>
+    <line x1="926" y1="150" x2="926" y2="222" stroke="#d97706" stroke-width="1.5"/>
+    <line x1="1038" y1="150" x2="1038" y2="222" stroke="#d97706" stroke-width="1.5"/>
+    <ellipse cx="982" cy="222" rx="56" ry="16" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/>
+    <text x="982" y="186" text-anchor="middle" class="node-title">Git</text>
+    <text x="982" y="204" text-anchor="middle" class="node-sub">版本源</text>
+  </g>
+  <g filter="url(#soft-shadow)">
+    <ellipse cx="982" cy="286" rx="56" ry="16" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+    <rect x="926" y="286" width="112" height="72" fill="#dcfce7" stroke="none"/>
+    <line x1="926" y1="286" x2="926" y2="358" stroke="#16a34a" stroke-width="1.5"/>
+    <line x1="1038" y1="286" x2="1038" y2="358" stroke="#16a34a" stroke-width="1.5"/>
+    <ellipse cx="982" cy="358" rx="56" ry="16" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+    <text x="982" y="322" text-anchor="middle" class="node-title">MinIO</text>
+    <text x="982" y="340" text-anchor="middle" class="node-sub">包分发</text>
+  </g>
+  <g filter="url(#soft-shadow)">
+    <rect x="912" y="420" width="168" height="82" rx="10" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+
+    <rect x="926" y="438" width="38" height="38" rx="8" fill="#eff6ff" stroke="#bfdbfe"/>
+    <text x="945" y="462" text-anchor="middle" fill="#2563eb" font-size="13" font-weight="700">REG</text>
+    <text x="974" y="448" class="node-title">私有 Registry</text>
+<text x="974" y="468" class="node-sub">skill.md</text>
+<text x="974" y="485" class="node-sub">signed URL</text>
+  </g>
+  <g filter="url(#soft-shadow)">
+    <rect x="912" y="552" width="168" height="78" rx="10" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+
+    <rect x="926" y="570" width="38" height="38" rx="8" fill="#eff6ff" stroke="#bfdbfe"/>
+    <text x="945" y="594" text-anchor="middle" fill="#2563eb" font-size="13" font-weight="700">HUB</text>
+    <text x="974" y="580" class="node-title">ClawHub / Sync</text>
+<text x="974" y="600" class="node-sub">公开或私有分发</text>
+<text x="974" y="617" class="node-sub">OpenClaw 拉取</text>
+  </g>
+  <line x1="138" y1="228" x2="138" y2="282" stroke="#2563eb" stroke-width="1.8" marker-end="url(#arrow-blue)"/>
+  <rect x="96" y="234" width="84" height="18" rx="4" fill="#ffffff" opacity="0.92"/>
+  <text x="138" y="247" text-anchor="middle" class="arrow-label">开发</text>
+  <line x1="138" y1="360" x2="138" y2="414" stroke="#2563eb" stroke-width="1.8" marker-end="url(#arrow-blue)"/>
+  <rect x="96" y="366" width="84" height="18" rx="4" fill="#ffffff" opacity="0.92"/>
+  <text x="138" y="379" text-anchor="middle" class="arrow-label">提交</text>
+  <line x1="222" y1="453" x2="300" y2="175" stroke="#ea580c" stroke-width="1.8" marker-end="url(#arrow-orange)"/>
+  <rect x="219" y="293" width="84" height="18" rx="4" fill="#ffffff" opacity="0.92"/>
+  <text x="261" y="306" text-anchor="middle" class="arrow-label">发布</text>
+  <line x1="418" y1="214" x2="418" y2="260" stroke="#ea580c" stroke-width="1.8" marker-end="url(#arrow-orange)"/>
+  <rect x="376" y="216" width="84" height="18" rx="4" fill="#ffffff" opacity="0.92"/>
+  <text x="418" y="229" text-anchor="middle" class="arrow-label">扫描</text>
+  <line x1="418" y1="338" x2="418" y2="384" stroke="#2563eb" stroke-width="1.8" marker-end="url(#arrow-blue)"/>
+  <rect x="376" y="340" width="84" height="18" rx="4" fill="#ffffff" opacity="0.92"/>
+  <text x="418" y="353" text-anchor="middle" class="arrow-label">打包</text>
+  <line x1="536" y1="299" x2="616" y2="189" stroke="#9333ea" stroke-width="1.8" marker-end="url(#arrow-purple)"/>
+  <rect x="534" y="223" width="84" height="18" rx="4" fill="#ffffff" opacity="0.92"/>
+  <text x="576" y="236" text-anchor="middle" class="arrow-label">验证</text>
+  <line x1="724" y1="228" x2="724" y2="282" stroke="#9333ea" stroke-width="1.8" marker-end="url(#arrow-purple)"/>
+  <rect x="682" y="234" width="84" height="18" rx="4" fill="#ffffff" opacity="0.92"/>
+  <text x="724" y="247" text-anchor="middle" class="arrow-label">评测</text>
+  <line x1="724" y1="360" x2="724" y2="414" stroke="#ea580c" stroke-width="1.8" marker-end="url(#arrow-orange)"/>
+  <rect x="682" y="366" width="84" height="18" rx="4" fill="#ffffff" opacity="0.92"/>
+  <text x="724" y="379" text-anchor="middle" class="arrow-label">门禁</text>
+  <line x1="830" y1="453" x2="982" y2="186" stroke="#16a34a" stroke-width="1.8" stroke-dasharray="5,3" marker-end="url(#arrow-green)"/>
+  <rect x="864" y="298" width="84" height="18" rx="4" fill="#ffffff" opacity="0.92"/>
+  <text x="906" y="311" text-anchor="middle" class="arrow-label">tag</text>
+  <line x1="830" y1="453" x2="982" y2="322" stroke="#16a34a" stroke-width="1.8" stroke-dasharray="5,3" marker-end="url(#arrow-green)"/>
+  <rect x="864" y="366" width="84" height="18" rx="4" fill="#ffffff" opacity="0.92"/>
+  <text x="906" y="379" text-anchor="middle" class="arrow-label">artifact</text>
+  <line x1="982" y1="358" x2="996" y2="420" stroke="#2563eb" stroke-width="1.8" marker-end="url(#arrow-blue)"/>
+  <rect x="947" y="368" width="84" height="18" rx="4" fill="#ffffff" opacity="0.92"/>
+  <text x="989" y="381" text-anchor="middle" class="arrow-label">索引</text>
+  <line x1="996" y1="502" x2="996" y2="552" stroke="#2563eb" stroke-width="1.8" marker-end="url(#arrow-blue)"/>
+  <rect x="954" y="506" width="84" height="18" rx="4" fill="#ffffff" opacity="0.92"/>
+  <text x="996" y="519" text-anchor="middle" class="arrow-label">同步</text><line x1="54" y1="638" x2="86" y2="638" stroke="#2563eb" stroke-width="1.6" marker-end="url(#arrow-blue)"/>
+<text x="96" y="642" class="tiny">主数据流</text>
+<line x1="54" y1="658" x2="86" y2="658" stroke="#16a34a" stroke-width="1.6" stroke-dasharray="5,3" marker-end="url(#arrow-green)"/>
+<text x="96" y="662" class="tiny">写入/入库</text>
+<line x1="54" y1="678" x2="86" y2="678" stroke="#ea580c" stroke-width="1.6" marker-end="url(#arrow-orange)"/>
+<text x="96" y="682" class="tiny">控制/触发</text>
+<line x1="54" y1="698" x2="86" y2="698" stroke="#9333ea" stroke-width="1.6" marker-end="url(#arrow-purple)"/>
+<text x="96" y="702" class="tiny">LLM/转换</text>
+<line x1="54" y1="718" x2="86" y2="718" stroke="#6b7280" stroke-width="1.6" stroke-dasharray="4,2" marker-end="url(#arrow-gray)"/>
+<text x="96" y="722" class="tiny">异步/可选</text>
+</svg>

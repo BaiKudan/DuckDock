@@ -1,0 +1,270 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend compile and migrations
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_DATABASE: duckdock_test
+          MYSQL_USER: duckdock
+          MYSQL_PASSWORD: duckdock
+          MYSQL_ROOT_PASSWORD: duckdock-root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uduckdock -pduckdock --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+
+    env:
+      APP_NAME: DuckDock
+      DEBUG: "false"
+      DATABASE_URL: mysql+aiomysql://duckdock:duckdock@127.0.0.1:3306/duckdock_test?charset=utf8mb4
+      REDIS_URL: redis://127.0.0.1:6379/0
+      SECRET_KEY: duckdock-ci-secret
+      DUCKDOCK_CREDENTIAL_KEY: qyEzvqJMVf9na6CRD2YKj4LzWhm521Q8-w8XY5nm2K4=
+      MINIO_ENDPOINT: 127.0.0.1:9000
+      MINIO_PUBLIC_ENDPOINT: 127.0.0.1:9000
+      MINIO_ACCESS_KEY: duckdock
+      MINIO_SECRET_KEY: duckdock_secret
+      MINIO_BUCKET: duckdock-reports
+      MINIO_SECURE: "false"
+      COMPONENT_MANAGER_ENABLED: "false"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: python -m pip install --upgrade pip && pip install -r requirements-dev.txt
+
+      - name: Audit backend dependencies
+        working-directory: backend
+        run: python -m pip_audit -r requirements.txt
+
+      - name: Lint (ruff)
+        working-directory: backend
+        run: python -m ruff check app alembic
+
+      - name: Type check (mypy, baseline ratchet)
+        working-directory: backend
+        shell: bash
+        run: |
+          set +e
+          output=$(python -m mypy app)
+          status=$?
+          echo "$output" | tail -2
+          count=$(echo "$output" | sed -n 's/^Found \([0-9][0-9]*\) error.*/\1/p')
+          count=${count:-0}
+          [ "$status" -eq 0 ] && count=0
+          baseline=$(cat .mypy-baseline)
+          echo "mypy errors: $count (baseline ceiling: $baseline)"
+          if [ "$count" -gt "$baseline" ]; then
+            echo "::error::mypy errors increased to $count (> baseline $baseline). Fix new type errors."
+            exit 1
+          fi
+
+      - name: Compile backend modules
+        working-directory: backend
+        run: python -m compileall app alembic
+
+      - name: Run backend tests (+ core-module coverage gate)
+        working-directory: backend
+        run: >-
+          python -m pytest
+          --cov=app.core.deps
+          --cov=app.services.iam_service
+          --cov=app.services.release_gate_service
+          --cov=app.services.credential_service
+          --cov-report=term-missing
+          --cov-fail-under=65
+
+      - name: Run MySQL-marked backend tests
+        working-directory: backend
+        env:
+          TEST_MYSQL_URL: mysql+aiomysql://duckdock:duckdock@127.0.0.1:3306/duckdock_test?charset=utf8mb4
+        run: python -m pytest -m mysql
+
+      - name: Import FastAPI app
+        working-directory: backend
+        run: python -c "from app.main import app; print(app.title)"
+
+      - name: Apply Alembic migrations
+        working-directory: backend
+        run: |
+          python -m alembic -c alembic.ini upgrade head
+          python -m alembic -c alembic.ini check
+
+  frontend:
+    name: Frontend build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Audit frontend dependencies
+        working-directory: frontend
+        run: npm audit --audit-level=high
+
+      - name: Lint (eslint)
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Run frontend tests
+        working-directory: frontend
+        run: npm test
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+  e2e:
+    name: Frontend E2E (Playwright)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install Playwright runner (ad-hoc; intentionally not in package-lock)
+        working-directory: frontend
+        run: npm install -D @playwright/test@1.61.1 --no-save --package-lock=false
+
+      - name: Install Playwright browsers
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Start DuckDock dev stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp .env.example .env
+          bash scripts/dev.sh up
+
+      - name: Wait for app readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+          for _ in {1..60}; do
+            if curl -fsS http://localhost:8801/health >/dev/null \
+              && curl -fsS http://localhost:5174/login >/dev/null; then
+              echo "DuckDock ready"
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose ps
+          docker compose logs --tail=120 backend frontend
+          exit 1
+
+      - name: Run E2E (auth smoke + seeded handover closed-loop)
+        working-directory: frontend
+        env:
+          DEBUG: "true"
+          E2E_AUTO_SEED: "1"
+          E2E_BASE_URL: http://localhost:5174
+          E2E_SEED_COMMAND: cd .. && docker compose exec -T backend python scripts/seed_handover_e2e.py --json
+        run: npx playwright test
+
+      - name: Dump stack logs on E2E failure
+        if: failure()
+        run: docker compose logs --tail=200 backend frontend worker beat
+
+      - name: Stop DuckDock dev stack
+        if: always()
+        run: docker compose down
+
+  compose:
+    name: Compose configuration
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare local env file
+        run: cp .env.example .env
+
+      - name: Validate default core services
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose config --services | sort | tee /tmp/duckdock-services.txt
+          grep -qx "mysql" /tmp/duckdock-services.txt
+          grep -qx "redis" /tmp/duckdock-services.txt
+          grep -qx "minio" /tmp/duckdock-services.txt
+          if grep -qx "analysis-worker" /tmp/duckdock-services.txt; then
+            echo "Analysis worker must not be enabled by default."
+            exit 1
+          fi
+          if grep -Eq "^(postgres|clickhouse|langfuse-db-init|langfuse-minio-init|langfuse-worker|langfuse-web)$" /tmp/duckdock-services.txt; then
+            echo "Optional observability services must not be enabled by default."
+            exit 1
+          fi
+
+      - name: Validate analysis worker profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose --profile analysis-worker config --services | sort | tee /tmp/duckdock-analysis-worker-services.txt
+          grep -qx "analysis-worker" /tmp/duckdock-analysis-worker-services.txt
+
+      - name: Validate observability profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose --profile observability config --services | sort | tee /tmp/duckdock-observability-services.txt
+          grep -qx "postgres" /tmp/duckdock-observability-services.txt
+          grep -qx "clickhouse" /tmp/duckdock-observability-services.txt
+          grep -qx "langfuse-worker" /tmp/duckdock-observability-services.txt
+          grep -qx "langfuse-web" /tmp/duckdock-observability-services.txt

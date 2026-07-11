@@ -1,0 +1,335 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 820" width="1200" height="820">
+  <style>
+    text { font-family: 'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif; }
+    .title { fill: #111827; font-size: 24px; font-weight: 700; }
+    .subtitle { fill: #6b7280; font-size: 13px; }
+    .lane-label { fill: #374151; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; }
+    .node-title { fill: #111827; font-size: 14px; font-weight: 700; }
+    .node-sub { fill: #6b7280; font-size: 11px; }
+    .small { fill: #6b7280; font-size: 10px; }
+    .pill { fill: #374151; font-size: 10px; font-weight: 700; }
+    .arrow-label { fill: #374151; font-size: 10px; font-weight: 600; }
+    .box { fill: #ffffff; stroke: #d1d5db; stroke-width: 1.5; }
+    .lane { fill: #f8fafc; stroke: #cbd5e1; stroke-width: 1; stroke-dasharray: 6 4; }
+    .shadow { filter: url(#shadow); }
+  </style>
+
+  <defs>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="4" stdDeviation="5" flood-color="#0f172a" flood-opacity="0.12"/>
+    </filter>
+    <marker id="arrow-blue" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#2563eb"/>
+    </marker>
+    <marker id="arrow-orange" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#ea580c"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#059669"/>
+    </marker>
+    <marker id="arrow-purple" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#7c3aed"/>
+    </marker>
+    <marker id="arrow-gray" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#6b7280"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="820" fill="#ffffff"/>
+
+  <text x="40" y="42" class="title">DuckDock 通用 Adapter 采集与交接流程</text>
+  <text x="40" y="65" class="subtitle">控制平面负责任务、状态、审计和交接；厂商差异收敛在 Adapter；原始记录与证据链可追溯。</text>
+
+  <!-- Lanes -->
+  <rect x="30" y="88" width="1140" height="122" rx="10" class="lane"/>
+  <text x="46" y="110" class="lane-label">1. 使用入口：接入运行时、触发同步、上传备份包</text>
+
+  <rect x="30" y="232" width="1140" height="152" rx="10" class="lane"/>
+  <text x="46" y="254" class="lane-label">2. 采集任务：统一状态机、异步执行、步骤留痕</text>
+
+  <rect x="30" y="406" width="1140" height="152" rx="10" class="lane"/>
+  <text x="46" y="428" class="lane-label">3. Adapter 与数据标准化：API / Backup / 导出包 / 浏览器兜底</text>
+
+  <rect x="30" y="580" width="1140" height="142" rx="10" class="lane"/>
+  <text x="46" y="602" class="lane-label">4. 控制平面资产库与交接治理：资产、归属、工作历程、证据、审批执行</text>
+
+  <!-- User -->
+  <g transform="translate(72 126)">
+    <circle cx="30" cy="16" r="12" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.4"/>
+    <path d="M12,56 Q12,34 30,34 Q48,34 48,56" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.4"/>
+    <text x="30" y="79" text-anchor="middle" class="node-title">管理员</text>
+    <text x="30" y="95" text-anchor="middle" class="node-sub">交付 / HR / 安全</text>
+  </g>
+
+  <!-- UI -->
+  <g transform="translate(180 112)" class="shadow">
+    <rect x="0" y="0" width="150" height="78" rx="8" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+    <rect x="0" y="0" width="150" height="22" rx="8" fill="#dbeafe"/>
+    <rect x="0" y="16" width="150" height="6" fill="#dbeafe"/>
+    <circle cx="14" cy="11" r="4" fill="#ef4444" opacity="0.75"/>
+    <circle cx="28" cy="11" r="4" fill="#f59e0b" opacity="0.75"/>
+    <circle cx="42" cy="11" r="4" fill="#10b981" opacity="0.75"/>
+    <text x="75" y="45" text-anchor="middle" class="node-title">控制平面页面</text>
+    <text x="75" y="62" text-anchor="middle" class="node-sub">/control-plane</text>
+  </g>
+
+  <!-- FastAPI -->
+  <g transform="translate(395 112)" class="shadow">
+    <polygon points="75,0 145,39 75,78 5,39" fill="#f0fdfa" stroke="#5eead4" stroke-width="1.6"/>
+    <text x="75" y="34" text-anchor="middle" class="node-title">FastAPI</text>
+    <text x="75" y="52" text-anchor="middle" class="node-sub">REST API</text>
+  </g>
+
+  <!-- Runtime config -->
+  <g transform="translate(595 104)" class="shadow">
+    <rect x="0" y="0" width="170" height="94" rx="8" fill="#fff7ed" stroke="#fed7aa" stroke-width="1.5"/>
+    <text x="85" y="27" text-anchor="middle" class="node-title">RuntimeInstance</text>
+    <text x="85" y="47" text-anchor="middle" class="node-sub">OpenClaw / JVS / WorkBuddy</text>
+    <text x="85" y="65" text-anchor="middle" class="node-sub">base_url + credential_ref</text>
+  </g>
+
+  <!-- Upload source -->
+  <g transform="translate(880 102)" class="shadow">
+    <path d="M0,0 L136,0 L154,18 L154,96 L0,96 Z" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
+    <path d="M136,0 L136,18 L154,18" fill="#e2e8f0" stroke="#cbd5e1" stroke-width="1"/>
+    <line x1="18" y1="46" x2="136" y2="46" stroke="#94a3b8" stroke-width="1"/>
+    <line x1="18" y1="61" x2="120" y2="61" stroke="#94a3b8" stroke-width="1"/>
+    <text x="77" y="30" text-anchor="middle" class="node-title">备份 / 导出包</text>
+    <text x="77" y="81" text-anchor="middle" class="node-sub">openclaw backup / JSON / ZIP</text>
+  </g>
+
+  <!-- Collection job -->
+  <g transform="translate(92 278)" class="shadow">
+    <rect x="0" y="0" width="170" height="78" rx="8" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+    <text x="85" y="29" text-anchor="middle" class="node-title">CollectionJob</text>
+    <text x="85" y="49" text-anchor="middle" class="node-sub">pending → running → succeeded</text>
+  </g>
+
+  <!-- Steps -->
+  <g transform="translate(325 278)" class="shadow">
+    <rect x="0" y="0" width="170" height="78" rx="8" fill="#faf5ff" stroke="#d8b4fe" stroke-width="1.5"/>
+    <text x="85" y="28" text-anchor="middle" class="node-title">AdapterRunStep</text>
+    <text x="85" y="48" text-anchor="middle" class="node-sub">认证 / 探测 / 采集 / 入库</text>
+  </g>
+
+  <!-- Queue -->
+  <g transform="translate(570 296)">
+    <ellipse cx="0" cy="21" rx="13" ry="21" fill="#fee2e2" stroke="#fca5a5" stroke-width="1.5"/>
+    <rect x="0" y="0" width="145" height="42" fill="#fef2f2" stroke="none"/>
+    <line x1="0" y1="0" x2="145" y2="0" stroke="#fca5a5" stroke-width="1.5"/>
+    <line x1="0" y1="42" x2="145" y2="42" stroke="#fca5a5" stroke-width="1.5"/>
+    <ellipse cx="145" cy="21" rx="13" ry="21" fill="#fff1f2" stroke="#fca5a5" stroke-width="1.5"/>
+    <text x="72" y="18" text-anchor="middle" class="node-title">Redis / Celery</text>
+    <text x="72" y="34" text-anchor="middle" class="node-sub">异步任务队列</text>
+  </g>
+
+  <!-- Worker -->
+  <g transform="translate(790 266)" class="shadow">
+    <polygon points="90,0 168,45 90,90 12,45" fill="#ede9fe" stroke="#c4b5fd" stroke-width="1.8"/>
+    <polygon points="90,7 156,45 90,83 24,45" fill="none" stroke="#7c3aed" stroke-width="0.8" opacity="0.45"/>
+    <text x="90" y="39" text-anchor="middle" class="node-title">Adapter Worker</text>
+    <text x="90" y="58" text-anchor="middle" class="node-sub">run_adapter_collection_job</text>
+  </g>
+
+  <!-- Capability snapshot -->
+  <g transform="translate(995 278)" class="shadow">
+    <rect x="0" y="0" width="136" height="78" rx="8" fill="#f0fdf4" stroke="#86efac" stroke-width="1.5"/>
+    <text x="68" y="28" text-anchor="middle" class="node-title">能力快照</text>
+    <text x="68" y="48" text-anchor="middle" class="node-sub">API / Backup / Restore</text>
+  </g>
+
+  <!-- Providers -->
+  <g transform="translate(72 454)" class="shadow">
+    <rect x="0" y="0" width="154" height="78" rx="8" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.5"/>
+    <text x="77" y="25" text-anchor="middle" class="node-title">厂商运行时</text>
+    <text x="77" y="45" text-anchor="middle" class="node-sub">OpenClaw / JVS</text>
+    <text x="77" y="62" text-anchor="middle" class="node-sub">ArkClaw / WorkBuddy</text>
+  </g>
+
+  <!-- Adapter contract -->
+  <g transform="translate(285 440)" class="shadow">
+    <rect x="0" y="0" width="185" height="106" rx="8" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+    <text x="92" y="27" text-anchor="middle" class="node-title">Adapter Contract</text>
+    <text x="92" y="49" text-anchor="middle" class="node-sub">test_connection()</text>
+    <text x="92" y="66" text-anchor="middle" class="node-sub">list_capabilities()</text>
+    <text x="92" y="83" text-anchor="middle" class="node-sub">collect()</text>
+  </g>
+
+  <!-- OpenClaw adapter -->
+  <g transform="translate(530 432)" class="shadow">
+    <rect x="0" y="0" width="170" height="118" rx="8" fill="#f0fdfa" stroke="#5eead4" stroke-width="1.5"/>
+    <text x="85" y="27" text-anchor="middle" class="node-title">OpenClaw Adapter</text>
+    <text x="85" y="50" text-anchor="middle" class="node-sub">已实现：backup/json 导入</text>
+    <text x="85" y="68" text-anchor="middle" class="node-sub">下一步：Live API</text>
+    <rect x="25" y="84" width="120" height="22" rx="11" fill="#ccfbf1" stroke="#2dd4bf"/>
+    <text x="85" y="99" text-anchor="middle" class="pill">参考实现</text>
+  </g>
+
+  <!-- Normalizer -->
+  <g transform="translate(760 432)" class="shadow">
+    <rect x="0" y="0" width="165" height="118" rx="8" fill="#faf5ff" stroke="#d8b4fe" stroke-width="1.5"/>
+    <text x="82" y="27" text-anchor="middle" class="node-title">Normalizer</text>
+    <text x="82" y="49" text-anchor="middle" class="node-sub">Principal</text>
+    <text x="82" y="66" text-anchor="middle" class="node-sub">Asset / WorkTrace</text>
+    <text x="82" y="83" text-anchor="middle" class="node-sub">Evidence</text>
+  </g>
+
+  <!-- Raw records -->
+  <g transform="translate(982 440)" class="shadow">
+    <rect x="0" y="0" width="150" height="104" rx="8" fill="#fff7ed" stroke="#fed7aa" stroke-width="1.5"/>
+    <text x="75" y="27" text-anchor="middle" class="node-title">Raw Records</text>
+    <text x="75" y="49" text-anchor="middle" class="node-sub">payload + hash</text>
+    <text x="75" y="66" text-anchor="middle" class="node-sub">幂等 / 追溯</text>
+    <text x="75" y="83" text-anchor="middle" class="node-sub">证据链基础</text>
+  </g>
+
+  <!-- Database cylinder -->
+  <g transform="translate(88 628)" class="shadow">
+    <ellipse cx="80" cy="0" rx="72" ry="18" fill="#dbeafe" stroke="#60a5fa" stroke-width="1.5"/>
+    <rect x="8" y="0" width="144" height="74" fill="#eff6ff" stroke="none"/>
+    <line x1="8" y1="0" x2="8" y2="74" stroke="#60a5fa" stroke-width="1.5"/>
+    <line x1="152" y1="0" x2="152" y2="74" stroke="#60a5fa" stroke-width="1.5"/>
+    <ellipse cx="80" cy="74" rx="72" ry="18" fill="#dbeafe" stroke="#60a5fa" stroke-width="1.5"/>
+    <text x="80" y="31" text-anchor="middle" class="node-title">MySQL</text>
+    <text x="80" y="51" text-anchor="middle" class="node-sub">控制平面资产库</text>
+  </g>
+
+  <!-- Tables -->
+  <g transform="translate(310 620)" class="shadow">
+    <rect x="0" y="0" width="210" height="92" rx="8" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+    <text x="105" y="27" text-anchor="middle" class="node-title">核心表</text>
+    <text x="105" y="49" text-anchor="middle" class="node-sub">runtime_instances / ai_assets</text>
+    <text x="105" y="67" text-anchor="middle" class="node-sub">provider_principals / work_traces</text>
+  </g>
+
+  <!-- Evidence tables -->
+  <g transform="translate(565 620)" class="shadow">
+    <rect x="0" y="0" width="210" height="92" rx="8" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+    <text x="105" y="27" text-anchor="middle" class="node-title">采集运行态</text>
+    <text x="105" y="49" text-anchor="middle" class="node-sub">adapter_steps / cursors</text>
+    <text x="105" y="67" text-anchor="middle" class="node-sub">raw_records / errors</text>
+  </g>
+
+  <!-- Handover -->
+  <g transform="translate(830 608)" class="shadow">
+    <rect x="0" y="0" width="160" height="118" rx="8" fill="#fef2f2" stroke="#fecaca" stroke-width="1.5"/>
+    <text x="80" y="28" text-anchor="middle" class="node-title">交接分析</text>
+    <text x="80" y="51" text-anchor="middle" class="node-sub">归属识别</text>
+    <text x="80" y="68" text-anchor="middle" class="node-sub">风险评分</text>
+    <text x="80" y="85" text-anchor="middle" class="node-sub">推荐动作</text>
+  </g>
+
+  <!-- Output -->
+  <g transform="translate(1030 612)" class="shadow">
+    <rect x="0" y="0" width="118" height="110" rx="8" fill="#f0fdf4" stroke="#86efac" stroke-width="1.5"/>
+    <text x="59" y="28" text-anchor="middle" class="node-title">交接包</text>
+    <text x="59" y="51" text-anchor="middle" class="node-sub">handover_cases</text>
+    <text x="59" y="68" text-anchor="middle" class="node-sub">items / approvals</text>
+    <text x="59" y="85" text-anchor="middle" class="node-sub">execute actions</text>
+  </g>
+
+  <!-- Arrows top -->
+  <path d="M132,150 L178,150" stroke="#2563eb" stroke-width="2" fill="none" marker-end="url(#arrow-blue)"/>
+  <rect x="139" y="137" width="34" height="16" rx="4" fill="#ffffff"/>
+  <text x="156" y="149" text-anchor="middle" class="arrow-label">操作</text>
+
+  <path d="M330,151 L394,151" stroke="#2563eb" stroke-width="2" fill="none" marker-end="url(#arrow-blue)"/>
+  <rect x="343" y="137" width="42" height="16" rx="4" fill="#ffffff"/>
+  <text x="364" y="149" text-anchor="middle" class="arrow-label">API</text>
+
+  <path d="M540,151 L594,151" stroke="#ea580c" stroke-width="1.8" fill="none" marker-end="url(#arrow-orange)"/>
+  <rect x="548" y="137" width="40" height="16" rx="4" fill="#ffffff"/>
+  <text x="568" y="149" text-anchor="middle" class="arrow-label">登记</text>
+
+  <path d="M765,151 L878,151" stroke="#2563eb" stroke-width="2" fill="none" marker-end="url(#arrow-blue)"/>
+  <rect x="793" y="137" width="56" height="16" rx="4" fill="#ffffff"/>
+  <text x="821" y="149" text-anchor="middle" class="arrow-label">上传包</text>
+
+  <!-- API to job -->
+  <path d="M470,190 C470,226 178,232 178,276" stroke="#ea580c" stroke-width="1.8" fill="none" marker-end="url(#arrow-orange)"/>
+  <rect x="276" y="219" width="64" height="16" rx="4" fill="#ffffff"/>
+  <text x="308" y="231" text-anchor="middle" class="arrow-label">创建任务</text>
+
+  <!-- Job to steps/queue/worker -->
+  <path d="M262,317 L324,317" stroke="#059669" stroke-width="1.8" fill="none" marker-end="url(#arrow-green)"/>
+  <rect x="272" y="304" width="42" height="16" rx="4" fill="#ffffff"/>
+  <text x="293" y="316" text-anchor="middle" class="arrow-label">留痕</text>
+
+  <path d="M495,317 L557,317" stroke="#7c3aed" stroke-width="1.8" stroke-dasharray="5 3" fill="none" marker-end="url(#arrow-purple)"/>
+  <rect x="506" y="304" width="38" height="16" rx="4" fill="#ffffff"/>
+  <text x="525" y="316" text-anchor="middle" class="arrow-label">入队</text>
+
+  <path d="M728,317 L802,317" stroke="#7c3aed" stroke-width="1.8" stroke-dasharray="5 3" fill="none" marker-end="url(#arrow-purple)"/>
+  <rect x="742" y="304" width="42" height="16" rx="4" fill="#ffffff"/>
+  <text x="763" y="316" text-anchor="middle" class="arrow-label">执行</text>
+
+  <path d="M958,317 L994,317" stroke="#059669" stroke-width="1.8" fill="none" marker-end="url(#arrow-green)"/>
+  <rect x="958" y="304" width="34" height="16" rx="4" fill="#ffffff"/>
+  <text x="975" y="316" text-anchor="middle" class="arrow-label">探测</text>
+
+  <!-- Worker to contract/adapter -->
+  <path d="M880,356 C880,410 430,388 380,438" stroke="#ea580c" stroke-width="1.8" fill="none" marker-end="url(#arrow-orange)"/>
+  <rect x="608" y="382" width="82" height="16" rx="4" fill="#ffffff"/>
+  <text x="649" y="394" text-anchor="middle" class="arrow-label">选择 Adapter</text>
+
+  <path d="M470,493 L529,493" stroke="#ea580c" stroke-width="1.8" fill="none" marker-end="url(#arrow-orange)"/>
+  <rect x="478" y="480" width="42" height="16" rx="4" fill="#ffffff"/>
+  <text x="499" y="492" text-anchor="middle" class="arrow-label">实现</text>
+
+  <path d="M226,493 L284,493" stroke="#2563eb" stroke-width="2" fill="none" marker-end="url(#arrow-blue)"/>
+  <rect x="231" y="480" width="48" height="16" rx="4" fill="#ffffff"/>
+  <text x="255" y="492" text-anchor="middle" class="arrow-label">API/包</text>
+
+  <path d="M700,493 L759,493" stroke="#2563eb" stroke-width="2" fill="none" marker-end="url(#arrow-blue)"/>
+  <rect x="710" y="480" width="38" height="16" rx="4" fill="#ffffff"/>
+  <text x="729" y="492" text-anchor="middle" class="arrow-label">标准化</text>
+
+  <path d="M925,493 L981,493" stroke="#059669" stroke-width="1.8" stroke-dasharray="5 3" fill="none" marker-end="url(#arrow-green)"/>
+  <rect x="932" y="480" width="42" height="16" rx="4" fill="#ffffff"/>
+  <text x="953" y="492" text-anchor="middle" class="arrow-label">保存</text>
+
+  <!-- Normalize to stores -->
+  <path d="M842,550 C842,590 420,580 416,619" stroke="#059669" stroke-width="1.8" fill="none" marker-end="url(#arrow-green)"/>
+  <rect x="614" y="568" width="52" height="16" rx="4" fill="#ffffff"/>
+  <text x="640" y="580" text-anchor="middle" class="arrow-label">资产入库</text>
+
+  <path d="M1058,544 C1058,590 672,576 670,619" stroke="#059669" stroke-width="1.8" stroke-dasharray="5 3" fill="none" marker-end="url(#arrow-green)"/>
+  <rect x="828" y="566" width="58" height="16" rx="4" fill="#ffffff"/>
+  <text x="857" y="578" text-anchor="middle" class="arrow-label">证据留存</text>
+
+  <path d="M775,666 L829,666" stroke="#7c3aed" stroke-width="1.8" fill="none" marker-end="url(#arrow-purple)"/>
+  <rect x="784" y="653" width="38" height="16" rx="4" fill="#ffffff"/>
+  <text x="803" y="665" text-anchor="middle" class="arrow-label">分析</text>
+
+  <path d="M990,666 L1029,666" stroke="#ea580c" stroke-width="1.8" fill="none" marker-end="url(#arrow-orange)"/>
+  <rect x="994" y="653" width="30" height="16" rx="4" fill="#ffffff"/>
+  <text x="1009" y="665" text-anchor="middle" class="arrow-label">审批</text>
+
+  <path d="M102,628 C102,590 1018,586 1088,612" stroke="#6b7280" stroke-width="1.5" stroke-dasharray="5 3" fill="none" marker-end="url(#arrow-gray)"/>
+  <rect x="488" y="586" width="74" height="16" rx="4" fill="#ffffff"/>
+  <text x="525" y="598" text-anchor="middle" class="arrow-label">页面读取状态</text>
+
+  <!-- Legend -->
+  <g transform="translate(40 756)">
+    <rect x="0" y="-18" width="470" height="48" rx="8" fill="#ffffff" stroke="#e5e7eb"/>
+    <line x1="16" y1="0" x2="56" y2="0" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow-blue)"/>
+    <text x="64" y="4" class="small">主数据流 / API 请求</text>
+    <line x1="178" y1="0" x2="218" y2="0" stroke="#ea580c" stroke-width="1.8" marker-end="url(#arrow-orange)"/>
+    <text x="226" y="4" class="small">控制触发</text>
+    <line x1="310" y1="0" x2="350" y2="0" stroke="#059669" stroke-width="1.8" stroke-dasharray="5 3" marker-end="url(#arrow-green)"/>
+    <text x="358" y="4" class="small">写入 / 证据留存</text>
+    <line x1="16" y1="22" x2="56" y2="22" stroke="#7c3aed" stroke-width="1.8" stroke-dasharray="5 3" marker-end="url(#arrow-purple)"/>
+    <text x="64" y="26" class="small">异步任务</text>
+    <line x1="178" y1="22" x2="218" y2="22" stroke="#6b7280" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#arrow-gray)"/>
+    <text x="226" y="26" class="small">状态回读</text>
+  </g>
+
+  <!-- Current state -->
+  <g transform="translate(610 738)">
+    <rect x="0" y="0" width="550" height="54" rx="8" fill="#f8fafc" stroke="#e2e8f0"/>
+    <text x="18" y="22" class="node-title">当前可用：</text>
+    <text x="102" y="22" class="node-sub">backup/json 导入、Adapter Contract、任务步骤、Raw Record、Celery。</text>
+    <text x="18" y="42" class="node-title">下一步：</text>
+    <text x="84" y="42" class="node-sub">OpenClaw Live API、JVS、ArkClaw/WorkBuddy 导出或浏览器兜底。</text>
+  </g>
+</svg>

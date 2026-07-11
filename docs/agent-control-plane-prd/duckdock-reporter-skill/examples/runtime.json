@@ -1,0 +1,22 @@
+{
+  "runtime_id": "workbuddy-local-001",
+  "provider": "workbuddy",
+  "name": "Local WorkBuddy",
+  "deploy_type": "desktop",
+  "host": {
+    "os": "windows",
+    "hostname_hash": "sha256-prefix",
+    "username_hash": "sha256-prefix"
+  },
+  "app": {
+    "name": "WorkBuddy",
+    "version": null,
+    "install_root": null,
+    "workspace_root": null
+  },
+  "collection_policy": {
+    "include_raw": false,
+    "respect_duckdockignore": true,
+    "redaction": true
+  }
+}

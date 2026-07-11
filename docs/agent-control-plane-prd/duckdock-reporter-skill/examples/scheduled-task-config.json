@@ -1,0 +1,24 @@
+{
+  "name": "DuckDock Weekly Reporter",
+  "runtime_provider": "workbuddy",
+  "skill": "duckdock_reporter",
+  "mode": "run",
+  "schedule": {
+    "type": "weekly",
+    "day_of_week": "friday",
+    "time": "16:00",
+    "timezone": "local"
+  },
+  "retry": {
+    "max_attempts": 3,
+    "interval_minutes": 10
+  },
+  "timeout_minutes": 30,
+  "environment": {
+    "DUCKDOCK_API_BASE": "https://duckdock.example.com/api/v1",
+    "DUCKDOCK_RUNTIME_ID": "12",
+    "DUCKDOCK_REPORT_TYPE": "weekly",
+    "DUCKDOCK_INCLUDE_RAW": "false",
+    "DUCKDOCK_REPORT_TOKEN": "<secure-secret-ref>"
+  }
+}

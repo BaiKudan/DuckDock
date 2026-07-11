@@ -1,0 +1,14 @@
+id: style_consistency
+name: Style Consistency
+weight: 5
+judge_mode: hybrid
+thresholds:
+  excellent: 90
+  good: 75
+  warning: 60
+criteria:
+  - consistent prompt formatting
+  - tone consistency
+  - structural consistency across skills
+guidance:
+  - Reward consistency, but avoid punishing intentional variation when scope differs.

@@ -1,0 +1,41 @@
+# DuckDock backend tooling config (Tier 0.2 quality gates).
+# 渐进式 strict：当前阻塞集 = ruff `F`（pyflakes，真实 bug 类）。
+# 后续按 specs/002 逐步加 E/I/B/UP 并收紧 mypy。
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+# 先只卡 pyflakes：unused-import / undefined-name / f-string 等真实问题。
+# E501(行长)、I(import 排序)、B/UP 暂不阻塞，留作后续逐步开启。
+select = ["F"]
+
+[tool.ruff.lint.per-file-ignores]
+# ORM 模型里的 F821 是 SQLAlchemy 带引号前向引用（Mapped["Namespace"]）的误报，
+# 应用可正常 import、测试通过；规范修法是加 TYPE_CHECKING import，非紧急，先按文件豁免。
+"app/models/*.py" = ["F821"]
+"**/models/*.py" = ["F821"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+follow_imports = "silent"
+warn_unused_ignores = false
+# CI 用 baseline ratchet(backend/.mypy-baseline):错误数只准降不准升;mypy 版本 pin 2.1.0 保证计数确定。
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "mysql: tests that require TEST_MYSQL_URL and run against a real MySQL database",
+]
+
+[tool.coverage.run]
+source = ["app"]
+omit = ["app/*/__init__.py"]
+
+[tool.coverage.report]
+# 核心模块覆盖率门槛在 CI 显式指定(--cov-fail-under=65,见 ci.yml);
+# 全局覆盖率当前约 31%,核心安全模块约 69%,逐步抬升。
+show_missing = true

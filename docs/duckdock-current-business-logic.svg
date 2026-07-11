@@ -1,0 +1,299 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 780" width="1200" height="780">
+  <style>
+    text { font-family: 'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif; }
+    .title { fill: #111827; font-size: 24px; font-weight: 700; }
+    .subtitle { fill: #6b7280; font-size: 13px; }
+    .lane-label { fill: #4f46e5; font-size: 11px; font-weight: 700; letter-spacing: .08em; }
+    .node-title { fill: #111827; font-size: 14px; font-weight: 700; }
+    .node-sub { fill: #6b7280; font-size: 11px; }
+    .tiny { fill: #6b7280; font-size: 10px; }
+    .arrow-label { fill: #374151; font-size: 11px; font-weight: 600; }
+    .tag { fill: #4b5563; font-size: 10px; font-weight: 600; }
+  </style>
+
+  <defs>
+    <filter id="soft-shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#0f172a" flood-opacity="0.10"/>
+    </filter>
+    <marker id="arrow-blue" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#2563eb"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#16a34a"/>
+    </marker>
+    <marker id="arrow-orange" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#ea580c"/>
+    </marker>
+    <marker id="arrow-purple" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#9333ea"/>
+    </marker>
+    <marker id="arrow-gray" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#6b7280"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="780" fill="#ffffff"/>
+
+  <text x="40" y="42" class="title">DuckDock 当前业务逻辑图</text>
+  <text x="40" y="66" class="subtitle">基于现有代码和已验证链路：企业 AI Agent 资产控制平面、Reporter 自报、结构化轻报告、MinIO 交接包、MySQL 精简索引。</text>
+
+  <!-- Swim lanes -->
+  <rect x="28" y="92" width="276" height="628" rx="10" fill="#eff6ff" fill-opacity="0.42" stroke="#bfdbfe" stroke-dasharray="7,5"/>
+  <text x="46" y="116" class="lane-label">USERS &amp; RUNTIMES</text>
+
+  <rect x="332" y="92" width="332" height="628" rx="10" fill="#f8fafc" stroke="#d1d5db" stroke-dasharray="7,5"/>
+  <text x="350" y="116" class="lane-label">DUCKDOCK FASTAPI CONTROL PLANE</text>
+
+  <rect x="692" y="92" width="248" height="628" rx="10" fill="#f0fdf4" fill-opacity="0.42" stroke="#bbf7d0" stroke-dasharray="7,5"/>
+  <text x="710" y="116" class="lane-label">PERSISTENCE</text>
+
+  <rect x="970" y="92" width="202" height="628" rx="10" fill="#faf5ff" fill-opacity="0.48" stroke="#e9d5ff" stroke-dasharray="7,5"/>
+  <text x="988" y="116" class="lane-label">ASYNC / OPTIONAL</text>
+
+  <!-- Left lane nodes -->
+  <g filter="url(#soft-shadow)">
+    <rect x="52" y="146" width="226" height="96" rx="10" fill="#ffffff" stroke="#bfdbfe" stroke-width="1.5"/>
+    <rect x="68" y="166" width="38" height="38" rx="8" fill="#dbeafe" stroke="#93c5fd"/>
+    <text x="87" y="190" text-anchor="middle" fill="#2563eb" font-size="16" font-weight="700">RT</text>
+    <text x="118" y="174" class="node-title">Agent 运行时</text>
+    <text x="118" y="194" class="node-sub">Hermes / OpenClaw / WorkBuddy</text>
+    <text x="118" y="211" class="node-sub">ArkClaw / JVS / 定制项目</text>
+    <text x="68" y="229" class="tiny">安装 duckdock-reporter，周期结构化日报/周报</text>
+  </g>
+
+  <g filter="url(#soft-shadow)">
+    <rect x="52" y="280" width="226" height="96" rx="10" fill="#ffffff" stroke="#bfdbfe" stroke-width="1.5"/>
+    <rect x="68" y="300" width="38" height="38" rx="8" fill="#ede9fe" stroke="#c4b5fd"/>
+    <text x="87" y="324" text-anchor="middle" fill="#7c3aed" font-size="15" font-weight="700">UI</text>
+    <text x="118" y="308" class="node-title">管理员控制台</text>
+    <text x="118" y="328" class="node-sub">运行时、Token、任务、组件</text>
+    <text x="68" y="359" class="tiny">/control-plane /analysis /components /people</text>
+  </g>
+
+  <g filter="url(#soft-shadow)">
+    <rect x="52" y="414" width="226" height="96" rx="10" fill="#ffffff" stroke="#bfdbfe" stroke-width="1.5"/>
+    <rect x="68" y="434" width="38" height="38" rx="8" fill="#f0fdfa" stroke="#99f6e4"/>
+    <text x="87" y="458" text-anchor="middle" fill="#0f766e" font-size="15" font-weight="700">ME</text>
+    <text x="118" y="442" class="node-title">个人工作台</text>
+    <text x="118" y="462" class="node-sub">我的资产、工作历程</text>
+    <text x="118" y="479" class="node-sub">Reporter 状态、确认/补充/排除</text>
+    <text x="68" y="493" class="tiny">/my-assets /reporter-setup</text>
+  </g>
+
+  <g filter="url(#soft-shadow)">
+    <rect x="52" y="548" width="226" height="92" rx="10" fill="#ffffff" stroke="#fed7aa" stroke-width="1.5"/>
+    <rect x="68" y="568" width="38" height="38" rx="8" fill="#fff7ed" stroke="#fdba74"/>
+    <text x="87" y="592" text-anchor="middle" fill="#ea580c" font-size="15" font-weight="700">SOP</text>
+    <text x="118" y="576" class="node-title">接入引导 / MCP</text>
+    <text x="118" y="596" class="node-sub">私有 Registry 地址</text>
+    <text x="118" y="613" class="node-sub">安装 Reporter、dry-run、定时任务</text>
+  </g>
+
+  <!-- FastAPI nodes -->
+  <g filter="url(#soft-shadow)">
+    <rect x="360" y="140" width="124" height="74" rx="10" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+    <text x="422" y="165" text-anchor="middle" class="node-title">Registry API</text>
+    <text x="422" y="185" text-anchor="middle" class="node-sub">/registry/skill.md</text>
+    <text x="422" y="201" text-anchor="middle" class="node-sub">私有技能镜像</text>
+  </g>
+
+  <g filter="url(#soft-shadow)">
+    <rect x="512" y="140" width="124" height="74" rx="10" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+    <text x="574" y="165" text-anchor="middle" class="node-title">Runtime API</text>
+    <text x="574" y="185" text-anchor="middle" class="node-sub">/runtimes</text>
+    <text x="574" y="201" text-anchor="middle" class="node-sub">Reporter Credential</text>
+  </g>
+
+  <g filter="url(#soft-shadow)">
+    <rect x="360" y="252" width="276" height="84" rx="10" fill="#ffffff" stroke="#bfdbfe" stroke-width="1.5"/>
+    <rect x="378" y="273" width="42" height="42" rx="8" fill="#dbeafe" stroke="#93c5fd"/>
+    <text x="399" y="299" text-anchor="middle" fill="#2563eb" font-size="16" font-weight="700">API</text>
+    <text x="436" y="278" class="node-title">Report Upload API</text>
+    <text x="436" y="299" class="node-sub">/reports/upload-sessions</text>
+    <text x="436" y="316" class="node-sub">创建上传会话、返回一次性 MinIO PUT URL、finalize</text>
+  </g>
+
+  <g filter="url(#soft-shadow)">
+    <rect x="360" y="374" width="276" height="84" rx="10" fill="#ffffff" stroke="#fdba74" stroke-width="1.5"/>
+    <polygon points="399,388 425,403 425,433 399,448 373,433 373,403" fill="#fff7ed" stroke="#fb923c" stroke-width="1.5"/>
+    <text x="399" y="422" text-anchor="middle" fill="#ea580c" font-size="13" font-weight="700">JOB</text>
+    <text x="436" y="400" class="node-title">Analysis Job API</text>
+    <text x="436" y="421" class="node-sub">/analysis/jobs/lease heartbeat finalize fail</text>
+    <text x="436" y="438" class="node-sub">租约、重试、禁用 Worker、结果文件校验</text>
+  </g>
+
+  <g filter="url(#soft-shadow)">
+    <rect x="360" y="496" width="276" height="84" rx="10" fill="#ffffff" stroke="#c4b5fd" stroke-width="1.5"/>
+    <rect x="378" y="517" width="42" height="42" rx="8" fill="#ede9fe" stroke="#c4b5fd"/>
+    <text x="399" y="543" text-anchor="middle" fill="#7c3aed" font-size="13" font-weight="700">IDX</text>
+    <text x="436" y="522" class="node-title">Materializer / Workspace API</text>
+    <text x="436" y="543" class="node-sub">analysis_materializer.py / /me/ai-workspace</text>
+    <text x="436" y="560" class="node-sub">资产卡片、归属、工作历程、记忆候选</text>
+  </g>
+
+  <g filter="url(#soft-shadow)">
+    <rect x="360" y="620" width="276" height="58" rx="10" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+    <text x="498" y="646" text-anchor="middle" class="node-title">Auth / IAM / Audit</text>
+  <text x="498" y="665" text-anchor="middle" class="node-sub">登录、RBAC、用户/岗位交接闭环、审计日志</text>
+  </g>
+
+  <!-- Persistence lane nodes -->
+  <g filter="url(#soft-shadow)">
+    <rect x="724" y="134" width="184" height="96" rx="10" fill="#ffffff" stroke="#86efac" stroke-width="1.5"/>
+    <ellipse cx="816" cy="158" rx="48" ry="13" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+    <rect x="768" y="158" width="96" height="46" fill="#dcfce7"/>
+    <line x1="768" y1="158" x2="768" y2="204" stroke="#16a34a" stroke-width="1.5"/>
+    <line x1="864" y1="158" x2="864" y2="204" stroke="#16a34a" stroke-width="1.5"/>
+    <ellipse cx="816" cy="204" rx="48" ry="13" fill="#bbf7d0" stroke="#16a34a" stroke-width="1.5"/>
+    <text x="816" y="183" text-anchor="middle" fill="#166534" font-size="15" font-weight="700">MinIO / S3</text>
+    <text x="816" y="247" text-anchor="middle" class="node-sub">Registry 包、交接/审计 pack、分析结果文件</text>
+  </g>
+
+  <g filter="url(#soft-shadow)">
+    <rect x="724" y="288" width="184" height="112" rx="10" fill="#ffffff" stroke="#93c5fd" stroke-width="1.5"/>
+    <ellipse cx="816" cy="313" rx="48" ry="13" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+    <rect x="768" y="313" width="96" height="56" fill="#dbeafe"/>
+    <line x1="768" y1="313" x2="768" y2="369" stroke="#2563eb" stroke-width="1.5"/>
+    <line x1="864" y1="313" x2="864" y2="369" stroke="#2563eb" stroke-width="1.5"/>
+    <ellipse cx="816" cy="369" rx="48" ry="13" fill="#bfdbfe" stroke="#2563eb" stroke-width="1.5"/>
+    <text x="816" y="339" text-anchor="middle" fill="#1d4ed8" font-size="15" font-weight="700">MySQL</text>
+    <text x="816" y="416" text-anchor="middle" class="node-sub">runtime / session / job / asset / trace / memory / audit</text>
+  </g>
+
+  <g filter="url(#soft-shadow)">
+    <rect x="724" y="462" width="184" height="74" rx="10" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+    <path d="M768,482 L850,482 L864,496 L864,520 L768,520 Z" fill="#f9fafb" stroke="#9ca3af" stroke-width="1.5"/>
+    <path d="M850,482 L850,496 L864,496" fill="#e5e7eb" stroke="#9ca3af"/>
+    <text x="816" y="511" text-anchor="middle" class="node-title">Git Repos</text>
+    <text x="816" y="553" text-anchor="middle" class="node-sub">Skill 源码与版本历史</text>
+  </g>
+
+  <g filter="url(#soft-shadow)">
+    <rect x="724" y="596" width="184" height="58" rx="10" fill="#ffffff" stroke="#fecaca" stroke-width="1.5"/>
+    <text x="816" y="622" text-anchor="middle" class="node-title">Redis / Celery</text>
+    <text x="816" y="641" text-anchor="middle" class="node-sub">后台任务、同步、扫描、异步作业</text>
+  </g>
+
+  <!-- Async lane nodes -->
+  <g filter="url(#soft-shadow)">
+    <rect x="996" y="176" width="148" height="116" rx="12" fill="#ffffff" stroke="#c4b5fd" stroke-width="1.5"/>
+    <polygon points="1070,196 1113,221 1113,267 1070,292 1027,267 1027,221" fill="#ede9fe" stroke="#8b5cf6" stroke-width="1.8"/>
+    <text x="1070" y="239" text-anchor="middle" fill="#6d28d9" font-size="14" font-weight="700">Worker</text>
+    <text x="1070" y="258" text-anchor="middle" class="node-sub">OpenClaw 兼容</text>
+    <text x="1070" y="313" text-anchor="middle" class="node-sub">lease / analyze / upload / finalize</text>
+  </g>
+
+  <g filter="url(#soft-shadow)">
+    <rect x="996" y="398" width="148" height="108" rx="12" fill="#ffffff" stroke="#fed7aa" stroke-width="1.5"/>
+    <rect x="1026" y="425" width="88" height="42" rx="8" fill="#fff7ed" stroke="#fdba74"/>
+    <text x="1070" y="451" text-anchor="middle" fill="#ea580c" font-size="14" font-weight="700">Langfuse</text>
+    <text x="1070" y="487" text-anchor="middle" class="node-sub">可选观测组件</text>
+    <text x="1070" y="503" text-anchor="middle" class="node-sub">由组件管理启动</text>
+  </g>
+
+  <g filter="url(#soft-shadow)">
+    <rect x="996" y="566" width="148" height="74" rx="12" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
+    <text x="1070" y="594" text-anchor="middle" class="node-title">Component Manager</text>
+    <text x="1070" y="614" text-anchor="middle" class="node-sub">/components</text>
+    <text x="1070" y="631" text-anchor="middle" class="node-sub">start / stop optional stack</text>
+  </g>
+
+  <!-- Arrow label helper backgrounds and flows -->
+  <path d="M278 188 C314 188 324 177 360 177" stroke="#2563eb" stroke-width="2" fill="none" marker-end="url(#arrow-blue)"/>
+  <rect x="295" y="157" width="78" height="18" rx="4" fill="#ffffff" opacity="0.96"/>
+  <text x="334" y="170" text-anchor="middle" class="arrow-label">拉 skill.md</text>
+
+  <path d="M484 160 C566 116 650 122 724 158" stroke="#16a34a" stroke-width="1.8" fill="none" marker-end="url(#arrow-green)"/>
+  <rect x="570" y="124" width="78" height="18" rx="4" fill="#ffffff" opacity="0.96"/>
+  <text x="609" y="137" text-anchor="middle" class="arrow-label">读包索引</text>
+
+  <path d="M512 170 C458 108 760 98 790 134" stroke="#16a34a" stroke-width="1.5" fill="none" stroke-dasharray="5,3" marker-end="url(#arrow-green)"/>
+  <rect x="622" y="95" width="86" height="18" rx="4" fill="#ffffff" opacity="0.96"/>
+  <text x="665" y="108" text-anchor="middle" class="arrow-label">Registry 包</text>
+
+  <path d="M278 328 C315 328 325 294 360 294" stroke="#2563eb" stroke-width="2" fill="none" marker-end="url(#arrow-blue)"/>
+  <rect x="285" y="296" width="86" height="18" rx="4" fill="#ffffff" opacity="0.96"/>
+  <text x="328" y="309" text-anchor="middle" class="arrow-label">登记/发 token</text>
+
+  <path d="M278 206 C318 222 318 286 360 294" stroke="#2563eb" stroke-width="2" fill="none" marker-end="url(#arrow-blue)"/>
+  <rect x="278" y="244" width="92" height="18" rx="4" fill="#ffffff" opacity="0.96"/>
+  <text x="324" y="257" text-anchor="middle" class="arrow-label">创建/完成会话</text>
+
+  <path d="M278 226 C430 245 580 246 724 180" stroke="#16a34a" stroke-width="2.5" fill="none" stroke-dasharray="6,4" marker-end="url(#arrow-green)"/>
+  <rect x="474" y="218" width="116" height="18" rx="4" fill="#ffffff" opacity="0.96"/>
+  <text x="532" y="231" text-anchor="middle" class="arrow-label">presigned PUT pack</text>
+
+  <path d="M498 336 L498 374" stroke="#ea580c" stroke-width="1.8" fill="none" marker-end="url(#arrow-orange)"/>
+  <rect x="512" y="346" width="84" height="18" rx="4" fill="#ffffff" opacity="0.96"/>
+  <text x="554" y="359" text-anchor="middle" class="arrow-label">创建分析任务</text>
+
+  <path d="M636 416 C760 416 878 238 996 238" stroke="#ea580c" stroke-width="2" fill="none" marker-end="url(#arrow-orange)"/>
+  <rect x="748" y="307" width="104" height="18" rx="4" fill="#ffffff" opacity="0.96"/>
+  <text x="800" y="320" text-anchor="middle" class="arrow-label">lease / heartbeat</text>
+
+  <path d="M996 252 C936 252 930 198 908 183" stroke="#16a34a" stroke-width="2.5" fill="none" marker-end="url(#arrow-green)"/>
+  <rect x="913" y="218" width="70" height="18" rx="4" fill="#ffffff" opacity="0.96"/>
+  <text x="948" y="231" text-anchor="middle" class="arrow-label">GET pack</text>
+
+  <path d="M996 272 C948 322 941 185 908 188" stroke="#16a34a" stroke-width="2.5" fill="none" stroke-dasharray="6,4" marker-end="url(#arrow-green)"/>
+  <rect x="918" y="278" width="76" height="18" rx="4" fill="#ffffff" opacity="0.96"/>
+  <text x="956" y="291" text-anchor="middle" class="arrow-label">PUT results</text>
+
+  <path d="M996 226 C876 372 764 416 636 416" stroke="#ea580c" stroke-width="1.8" fill="none" marker-end="url(#arrow-orange)"/>
+  <rect x="814" y="384" width="72" height="18" rx="4" fill="#ffffff" opacity="0.96"/>
+  <text x="850" y="397" text-anchor="middle" class="arrow-label">finalize</text>
+
+  <path d="M498 458 L498 496" stroke="#9333ea" stroke-width="2" fill="none" marker-end="url(#arrow-purple)"/>
+  <rect x="512" y="468" width="74" height="18" rx="4" fill="#ffffff" opacity="0.96"/>
+  <text x="549" y="481" text-anchor="middle" class="arrow-label">materialize</text>
+
+  <path d="M636 538 C662 538 682 354 724 350" stroke="#9333ea" stroke-width="2" fill="none" marker-end="url(#arrow-purple)"/>
+  <rect x="647" y="440" width="86" height="18" rx="4" fill="#ffffff" opacity="0.96"/>
+  <text x="690" y="453" text-anchor="middle" class="arrow-label">写精简索引</text>
+
+  <path d="M278 462 C318 462 320 538 360 538" stroke="#2563eb" stroke-width="2" fill="none" marker-end="url(#arrow-blue)"/>
+  <rect x="282" y="489" width="86" height="18" rx="4" fill="#ffffff" opacity="0.96"/>
+  <text x="325" y="502" text-anchor="middle" class="arrow-label">查询个人资产</text>
+
+  <path d="M724 344 C674 344 664 520 636 538" stroke="#16a34a" stroke-width="1.8" fill="none" marker-end="url(#arrow-green)"/>
+  <rect x="652" y="372" width="68" height="18" rx="4" fill="#ffffff" opacity="0.96"/>
+  <text x="686" y="385" text-anchor="middle" class="arrow-label">读索引</text>
+
+  <path d="M636 538 C798 572 912 608 996 606" stroke="#6b7280" stroke-width="1.6" fill="none" stroke-dasharray="5,4" marker-end="url(#arrow-gray)"/>
+  <rect x="775" y="565" width="90" height="18" rx="4" fill="#ffffff" opacity="0.96"/>
+  <text x="820" y="578" text-anchor="middle" class="arrow-label">组件状态管理</text>
+
+  <path d="M1070 566 L1070 506" stroke="#6b7280" stroke-width="1.6" fill="none" stroke-dasharray="5,4" marker-end="url(#arrow-gray)"/>
+  <rect x="1082" y="526" width="54" height="18" rx="4" fill="#ffffff" opacity="0.96"/>
+  <text x="1109" y="539" text-anchor="middle" class="arrow-label">可选</text>
+
+  <path d="M636 650 C666 666 695 642 724 626" stroke="#6b7280" stroke-width="1.6" fill="none" stroke-dasharray="5,4" marker-end="url(#arrow-gray)"/>
+  <rect x="638" y="649" width="72" height="18" rx="4" fill="#ffffff" opacity="0.96"/>
+  <text x="674" y="662" text-anchor="middle" class="arrow-label">异步后台</text>
+
+  <path d="M724 498 C676 498 662 177 484 177" stroke="#16a34a" stroke-width="1.5" fill="none" marker-end="url(#arrow-green)"/>
+  <rect x="618" y="192" width="72" height="18" rx="4" fill="#ffffff" opacity="0.96"/>
+  <text x="654" y="205" text-anchor="middle" class="arrow-label">版本源码</text>
+
+  <!-- Status ribbon -->
+  <g transform="translate(40 728)">
+    <rect x="0" y="0" width="1120" height="34" rx="8" fill="#f9fafb" stroke="#e5e7eb"/>
+    <text x="16" y="22" class="tag">当前已验证主链路：</text>
+    <text x="130" y="22" class="tiny">Hermes 已实测 pack 重链路；006 后默认结构化日报/周报直写索引，交接/审计再走 MinIO + Analysis Worker。</text>
+  </g>
+
+  <!-- Legend -->
+  <g transform="translate(752 682)">
+    <rect x="0" y="0" width="410" height="36" rx="8" fill="#ffffff" stroke="#e5e7eb"/>
+    <line x1="14" y1="12" x2="44" y2="12" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow-blue)"/>
+    <text x="52" y="16" class="tiny">API / UI 调用</text>
+    <line x1="134" y1="12" x2="164" y2="12" stroke="#16a34a" stroke-width="2" marker-end="url(#arrow-green)"/>
+    <text x="172" y="16" class="tiny">对象/数据流</text>
+    <line x1="254" y1="12" x2="284" y2="12" stroke="#ea580c" stroke-width="2" marker-end="url(#arrow-orange)"/>
+    <text x="292" y="16" class="tiny">任务控制</text>
+    <line x1="14" y1="27" x2="44" y2="27" stroke="#9333ea" stroke-width="2" marker-end="url(#arrow-purple)"/>
+    <text x="52" y="31" class="tiny">入库归档</text>
+    <line x1="134" y1="27" x2="164" y2="27" stroke="#6b7280" stroke-width="1.6" stroke-dasharray="5,4" marker-end="url(#arrow-gray)"/>
+    <text x="172" y="31" class="tiny">可选/异步</text>
+  </g>
+</svg>

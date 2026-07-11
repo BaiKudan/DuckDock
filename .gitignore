@@ -1,0 +1,40 @@
+.env
+.venv/
+.logs/
+.logs/*.pid
+.runtime-logs/
+.claude/
+.claude/settings.local.json
+.workbuddy/
+repos/
+DuckDock_Design_System/
+
+# spec-kit scaffolding — keep tooling local-only; track ONLY the constitution
+.specify/*
+!.specify/memory/
+.specify/memory/*
+!.specify/memory/constitution.md
+
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
+frontend/.tmp_start_frontend.ps1
+
+backend/.pytest_cache/
+backend/.mypy_cache/
+
+.DS_Store
+Thumbs.db
+
+# coverage artifacts
+.coverage
+backend/.coverage
+htmlcov/
+
+# production secrets
+.env.prod

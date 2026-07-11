@@ -1,0 +1,150 @@
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-slate-50 text-slate-900 antialiased;
+    font-family: "IBM Plex Sans", ui-sans-serif, sans-serif;
+  }
+
+  code,
+  pre,
+  .font-mono {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+  }
+
+  * {
+    @apply border-slate-200;
+  }
+
+  ::selection {
+    @apply bg-indigo-100 text-slate-900;
+  }
+
+  ::-webkit-scrollbar {
+    @apply h-2 w-2;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply rounded-full bg-slate-300;
+  }
+}
+
+@layer components {
+  .app-page {
+    @apply mx-auto w-full max-w-[1440px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8;
+  }
+
+  .surface-card {
+    @apply rounded-lg border border-slate-200 bg-white shadow-sm;
+  }
+
+  .surface-muted {
+    @apply rounded-lg border border-slate-200 bg-slate-50;
+  }
+
+  .section-kicker {
+    @apply text-xs font-semibold uppercase tracking-[0.18em] text-indigo-600;
+  }
+
+  .section-title {
+    @apply text-3xl font-bold tracking-tight text-slate-900 lg:text-4xl;
+  }
+
+  .section-subtitle {
+    @apply mt-2 text-sm text-slate-500;
+  }
+
+  .input-control {
+    @apply w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100;
+  }
+
+  .button-primary {
+    @apply inline-flex items-center justify-center rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .button-secondary {
+    @apply inline-flex items-center justify-center rounded-md border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50;
+  }
+
+  .button-link {
+    @apply text-sm font-medium text-indigo-600 transition hover:text-indigo-700;
+  }
+
+  .mono-pill {
+    @apply rounded-md bg-slate-100 px-2 py-1 font-mono text-xs text-slate-600;
+  }
+
+  .soft-emerald {
+    @apply border border-emerald-200 bg-emerald-50 text-emerald-700;
+  }
+
+  .soft-amber {
+    @apply border border-amber-200 bg-amber-50 text-amber-700;
+  }
+
+  .soft-rose {
+    @apply border border-rose-200 bg-rose-50 text-rose-700;
+  }
+
+  .soft-indigo {
+    @apply border border-indigo-200 bg-indigo-50 text-indigo-700;
+  }
+
+  .soft-violet {
+    @apply border border-violet-200 bg-violet-50 text-violet-700;
+  }
+
+  .soft-orange {
+    @apply border border-orange-200 bg-orange-50 text-orange-700;
+  }
+
+  .table-label {
+    @apply text-xs font-semibold uppercase tracking-[0.14em] text-slate-500;
+  }
+
+  .page-stack {
+    @apply space-y-6;
+  }
+
+  .page-header {
+    @apply flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between;
+  }
+
+  .card-header {
+    @apply flex flex-col gap-3 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6;
+  }
+
+  .metric-card {
+    @apply surface-card min-h-[148px] p-5 sm:p-6;
+  }
+
+  .data-row {
+    @apply px-5 py-4 transition hover:bg-slate-50/70 sm:px-6;
+  }
+
+  .empty-state {
+    @apply flex min-h-[150px] flex-col items-center justify-center px-6 py-10 text-center text-sm text-slate-500;
+  }
+
+  .icon-tile {
+    @apply flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-500;
+  }
+
+  .status-pill {
+    @apply inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-semibold;
+  }
+}

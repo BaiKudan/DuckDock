@@ -1,0 +1,14 @@
+{
+  "schema_version": "duckdock-pack-v1",
+  "generated_at": "2026-05-22T16:00:00+08:00",
+  "runtime_id": "workbuddy-local-001",
+  "provider": "workbuddy",
+  "report_type": "weekly",
+  "period_start": "2026-05-15T00:00:00+08:00",
+  "period_end": "2026-05-22T00:00:00+08:00",
+  "collector": {
+    "name": "duckdock_reporter",
+    "version": "0.1.0",
+    "mode": "summary_index"
+  }
+}

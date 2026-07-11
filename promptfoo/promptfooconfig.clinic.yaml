@@ -1,0 +1,30 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: DuckDock Clinic exploratory evaluation workspace
+
+prompts:
+  - "Run Clinic evaluation for fixture {{case_id}}"
+
+providers:
+  - id: file://clinic_provider.py
+    label: duckdock-clinic
+    config:
+      pythonExecutable: ../.venv/Scripts/python.exe
+
+tests:
+  - vars:
+      case_id: deterministic-strong-quality
+      fixture_path: ../backend/app/clinic_assets/fixtures/clinic_golden_set.v1.jsonl
+      mode: deterministic
+  - vars:
+      case_id: deterministic-security-failure
+      fixture_path: ../backend/app/clinic_assets/fixtures/clinic_golden_set.v1.jsonl
+      mode: deterministic
+  - vars:
+      case_id: hybrid-live-quality
+      fixture_path: ../backend/app/clinic_assets/fixtures/clinic_golden_set.v1.jsonl
+      mode: hybrid
+
+commandLineOptions:
+  maxConcurrency: 1
+  table: true
+  cache: false

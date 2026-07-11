@@ -1,0 +1,16 @@
+id: interaction_quality
+name: Interaction Quality
+weight: 10
+judge_mode: hybrid
+thresholds:
+  excellent: 90
+  good: 75
+  warning: 60
+criteria:
+  - role clarity
+  - output constraints
+  - context awareness
+  - collaboration and fallback behavior
+guidance:
+  - Reward prompts that clearly define role, output shape, and guardrails.
+  - Penalize prompts that are generic or lack failure-mode guidance.

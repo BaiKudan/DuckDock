@@ -1,0 +1,15 @@
+id: security_health
+name: Security Health
+weight: 10
+judge_mode: deterministic
+thresholds:
+  excellent: 95
+  good: 80
+  warning: 60
+criteria:
+  - scan coverage
+  - critical and high issue count
+  - failed scan ratio
+guidance:
+  - Unresolved critical issues must cause major score reductions.
+  - A namespace with no scans should not receive a strong score.

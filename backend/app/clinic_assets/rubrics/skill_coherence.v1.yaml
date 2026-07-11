@@ -1,0 +1,16 @@
+id: skill_coherence
+name: Skill Coherence
+weight: 15
+judge_mode: hybrid
+thresholds:
+  excellent: 90
+  good: 75
+  warning: 60
+criteria:
+  - namespace skill taxonomy consistency
+  - naming consistency
+  - overlap and duplication
+  - separation of responsibilities across skills
+guidance:
+  - Penalize duplicated or confusingly similar skills.
+  - Reward namespaces whose skills have distinct scopes.

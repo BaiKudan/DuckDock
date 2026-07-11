@@ -1,0 +1,381 @@
+# ────────────────────────────────────────────────────────────────────
+#  DuckDock — default development port map
+#
+#    frontend (Vite)     host  5174/5175   → container 5174
+#    backend  (FastAPI)  host  8801/8990   → container 8801
+#    MySQL 8.x           host  3307   → container 3306   (primary business DB)
+#    PostgreSQL          host  5432   → container 5432   (observability profile — Langfuse)
+#    Redis               host  6379   → container 6379   (celery db=0, langfuse db=1)
+#    MinIO S3 API        host  9000   → container 9000
+#    MinIO Console       host  9001   → container 9001
+#    Langfuse Web        host  3200   → container 3000   (observability profile)
+#    ClickHouse          (internal only — no host binding; observability profile)
+#
+#  If a host port conflicts with another local service, change the LHS only; container-side
+#  ports and internal service URLs must stay as-is.
+# ────────────────────────────────────────────────────────────────────
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-duckdock}
+      MYSQL_USER: ${MYSQL_USER:-duckdock}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-duckdock}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-duckdock-root}
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+    volumes:
+      - mysql_data:/var/lib/mysql
+    ports:
+      - "3307:3306"
+    deploy:
+      resources:
+        limits:
+          memory: ${MYSQL_MEM_LIMIT:-1g}
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$${MYSQL_USER} -p$${MYSQL_PASSWORD} --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    profiles: ["observability"]
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+      POSTGRES_USER: ${POSTGRES_USER:-duckdock}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-duckdock-postgres}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER in .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    deploy:
+      resources:
+        limits:
+          memory: ${MINIO_MEM_LIMIT:-512m}
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file: .env
+    volumes:
+      - ./backend:/app
+      - repos_data:/repos
+    environment:
+      DATABASE_URL: mysql+aiomysql://${MYSQL_USER:-duckdock}:${MYSQL_PASSWORD:-duckdock}@mysql:3306/${MYSQL_DATABASE:-duckdock}?charset=utf8mb4
+      REDIS_URL: ${DUCKDOCK_INTERNAL_REDIS_URL:-redis://redis:6379/0}
+      MINIO_ENDPOINT: ${DUCKDOCK_INTERNAL_MINIO_ENDPOINT:-minio:9000}
+      DUCKDOCK_LLM_API_KEY: ${DUCKDOCK_LLM_API_KEY:-}
+      DUCKDOCK_LLM_BASE_URL: ${DUCKDOCK_LLM_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      DUCKDOCK_LLM_MODEL: ${DUCKDOCK_LLM_MODEL:-qwen3.7-max}
+      DUCKDOCK_LLM_ENABLE_THINKING: ${DUCKDOCK_LLM_ENABLE_THINKING:-true}
+      DUCKDOCK_LLM_TIMEOUT_SECONDS: ${DUCKDOCK_LLM_TIMEOUT_SECONDS:-90}
+      DUCKDOCK_LLM_MAX_INPUT_CHARS: ${DUCKDOCK_LLM_MAX_INPUT_CHARS:-24000}
+      LLM_ALLOW_PRIVATE_BASE_URL: ${LLM_ALLOW_PRIVATE_BASE_URL:-false}
+    ports:
+      - "8801:8801"
+      - "8990:8801"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8801 --reload
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8801/health', timeout=3).read()\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file: .env
+    volumes:
+      - ./backend:/app
+      - repos_data:/repos
+    environment:
+      DATABASE_URL: mysql+aiomysql://${MYSQL_USER:-duckdock}:${MYSQL_PASSWORD:-duckdock}@mysql:3306/${MYSQL_DATABASE:-duckdock}?charset=utf8mb4
+      REDIS_URL: ${DUCKDOCK_INTERNAL_REDIS_URL:-redis://redis:6379/0}
+      MINIO_ENDPOINT: ${DUCKDOCK_INTERNAL_MINIO_ENDPOINT:-minio:9000}
+      DUCKDOCK_LLM_API_KEY: ${DUCKDOCK_LLM_API_KEY:-}
+      DUCKDOCK_LLM_BASE_URL: ${DUCKDOCK_LLM_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      DUCKDOCK_LLM_MODEL: ${DUCKDOCK_LLM_MODEL:-qwen3.7-max}
+      DUCKDOCK_LLM_ENABLE_THINKING: ${DUCKDOCK_LLM_ENABLE_THINKING:-true}
+      DUCKDOCK_LLM_TIMEOUT_SECONDS: ${DUCKDOCK_LLM_TIMEOUT_SECONDS:-90}
+      DUCKDOCK_LLM_MAX_INPUT_CHARS: ${DUCKDOCK_LLM_MAX_INPUT_CHARS:-24000}
+      LLM_ALLOW_PRIVATE_BASE_URL: ${LLM_ALLOW_PRIVATE_BASE_URL:-false}
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: ${WORKER_MEM_LIMIT:-1g}
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
+
+  # celery beat scheduler — drives periodic tasks (analysis-job lease reaper, PUSH-01).
+  # A `celery worker` alone does NOT execute beat_schedule entries, so this is required
+  # for the reaper to ever fire. Schedule state lives in /tmp to keep the source mount clean.
+  beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file: .env
+    volumes:
+      - ./backend:/app
+      - repos_data:/repos
+    environment:
+      DATABASE_URL: mysql+aiomysql://${MYSQL_USER:-duckdock}:${MYSQL_PASSWORD:-duckdock}@mysql:3306/${MYSQL_DATABASE:-duckdock}?charset=utf8mb4
+      REDIS_URL: ${DUCKDOCK_INTERNAL_REDIS_URL:-redis://redis:6379/0}
+      MINIO_ENDPOINT: ${DUCKDOCK_INTERNAL_MINIO_ENDPOINT:-minio:9000}
+      DUCKDOCK_LLM_API_KEY: ${DUCKDOCK_LLM_API_KEY:-}
+      DUCKDOCK_LLM_BASE_URL: ${DUCKDOCK_LLM_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      DUCKDOCK_LLM_MODEL: ${DUCKDOCK_LLM_MODEL:-qwen3.7-max}
+      DUCKDOCK_LLM_ENABLE_THINKING: ${DUCKDOCK_LLM_ENABLE_THINKING:-true}
+      DUCKDOCK_LLM_TIMEOUT_SECONDS: ${DUCKDOCK_LLM_TIMEOUT_SECONDS:-90}
+      DUCKDOCK_LLM_MAX_INPUT_CHARS: ${DUCKDOCK_LLM_MAX_INPUT_CHARS:-24000}
+      LLM_ALLOW_PRIVATE_BASE_URL: ${LLM_ALLOW_PRIVATE_BASE_URL:-false}
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: celery -A app.workers.celery_app beat --loglevel=info --schedule=/tmp/celerybeat-schedule
+
+  analysis-worker:
+    image: python:3.12-slim
+    profiles: ["analysis-worker"]
+    env_file: .env
+    working_dir: /workspace
+    volumes:
+      - ./:/workspace:ro
+    environment:
+      DUCKDOCK_API_BASE: ${DUCKDOCK_ANALYSIS_API_BASE:-http://backend:8801/api/v1}
+      DUCKDOCK_WORKER_TOKEN: ${DUCKDOCK_ANALYSIS_WORKER_TOKEN:-}
+      DUCKDOCK_WORKER_NAME: ${DUCKDOCK_ANALYSIS_WORKER_NAME:-DuckDock Compose Analysis Worker}
+      DUCKDOCK_WORKER_POLL_SECONDS: ${DUCKDOCK_ANALYSIS_WORKER_POLL_SECONDS:-60}
+      DUCKDOCK_WORKER_LEASE_SECONDS: ${DUCKDOCK_ANALYSIS_WORKER_LEASE_SECONDS:-1800}
+      DUCKDOCK_WORKER_WORK_DIR: ${DUCKDOCK_ANALYSIS_WORKER_WORK_DIR:-/tmp/duckdock-analysis-worker}
+      DUCKDOCK_ANALYSIS_MODE: ${DUCKDOCK_ANALYSIS_MODE:-baseline}
+      DUCKDOCK_LLM_API_KEY: ${DUCKDOCK_LLM_API_KEY:-}
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+      SKILL_GEN_API_KEY: ${SKILL_GEN_API_KEY:-}
+      DUCKDOCK_LLM_BASE_URL: ${DUCKDOCK_LLM_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      DUCKDOCK_LLM_MODEL: ${DUCKDOCK_LLM_MODEL:-qwen3.7-max}
+      DUCKDOCK_LLM_ENABLE_THINKING: ${DUCKDOCK_LLM_ENABLE_THINKING:-true}
+      DUCKDOCK_LLM_TIMEOUT_SECONDS: ${DUCKDOCK_LLM_TIMEOUT_SECONDS:-90}
+      DUCKDOCK_LLM_MAX_INPUT_CHARS: ${DUCKDOCK_LLM_MAX_INPUT_CHARS:-24000}
+    depends_on:
+      backend:
+        condition: service_healthy
+    command:
+      - sh
+      - -c
+      - >
+        python /workspace/docs/agent-control-plane-prd/duckdock-analysis-worker/scripts/duckdock_analysis_worker.py
+        --poll
+        --api-base "$$DUCKDOCK_API_BASE"
+        --worker-token "$$DUCKDOCK_WORKER_TOKEN"
+        --worker-name "$$DUCKDOCK_WORKER_NAME"
+        --analysis-mode "$$DUCKDOCK_ANALYSIS_MODE"
+        --poll-seconds "$$DUCKDOCK_WORKER_POLL_SECONDS"
+        --lease-seconds "$$DUCKDOCK_WORKER_LEASE_SECONDS"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    environment:
+      VITE_API_PROXY_TARGET: http://backend:8801
+    ports:
+      - "5174:5174"
+      - "5175:5174"
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+
+  # ── Langfuse self-hosted stack (Clinic observability) ────────────────
+  # All internal-only except langfuse-web on 3000. ClickHouse stays
+  # unexposed on host to avoid clashing with other stacks using 8123.
+  # Reuses the shared postgres (separate DB `langfuse`), redis (db=1),
+  # and minio (bucket `langfuse`) to keep the footprint small.
+
+  langfuse-db-init:
+    image: postgres:16-alpine
+    profiles: ["observability"]
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      - sh
+      - -c
+      - |
+        set -eu
+        export PGPASSWORD="$$POSTGRES_PASSWORD"
+        exists=$$(psql -h postgres -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -tAc "SELECT 1 FROM pg_database WHERE datname='langfuse'")
+        if [ "$$exists" = "1" ]; then
+          echo "langfuse database already exists — skipping"
+        else
+          psql -h postgres -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -c "CREATE DATABASE langfuse"
+          echo "langfuse database created"
+        fi
+    restart: "no"
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    profiles: ["observability"]
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - clickhouse_logs:/var/log/clickhouse-server
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8123/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  # One-shot bucket bootstrap — Langfuse v3 does NOT auto-create its
+  # S3 bucket on first use, and ingest silently fails with
+  # "The specified bucket does not exist" until this runs.
+  # Uses MinIO's mc client against the compose-internal minio endpoint.
+  langfuse-minio-init:
+    image: minio/mc:latest
+    profiles: ["observability"]
+    env_file: .env
+    depends_on:
+      minio:
+        condition: service_started
+    entrypoint: ["sh", "-c"]
+    command: >
+      "until mc alias set local http://minio:9000 \"$$MINIO_ROOT_USER\" \"$$MINIO_ROOT_PASSWORD\" >/dev/null 2>&1; do
+         echo waiting for minio; sleep 2;
+       done;
+       mc mb --ignore-existing local/$${LANGFUSE_S3_BUCKET:-langfuse} &&
+       echo \"langfuse bucket ready\""
+    restart: "no"
+
+  langfuse-worker:
+    image: langfuse/langfuse-worker:3
+    profiles: ["observability"]
+    restart: unless-stopped
+    depends_on:
+      langfuse-db-init:
+        condition: service_completed_successfully
+      langfuse-minio-init:
+        condition: service_completed_successfully
+      clickhouse:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    environment: &langfuse-env
+      DATABASE_URL: postgres://${POSTGRES_USER:-duckdock}:${POSTGRES_PASSWORD:-duckdock-postgres}@postgres:5432/langfuse
+      SALT: ${LANGFUSE_SALT:-duckdock-local-langfuse-salt}
+      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+      TELEMETRY_ENABLED: "false"
+      LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "false"
+      CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse}
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      REDIS_CONNECTION_STRING: redis://redis:6379/1
+      LANGFUSE_S3_EVENT_UPLOAD_ENABLED: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: ${LANGFUSE_S3_BUCKET:-langfuse}
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+      LANGFUSE_S3_MEDIA_UPLOAD_ENABLED: "true"
+      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: ${LANGFUSE_S3_BUCKET:-langfuse}
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+
+  langfuse-web:
+    image: langfuse/langfuse:3
+    profiles: ["observability"]
+    restart: unless-stopped
+    depends_on:
+      langfuse-worker:
+        condition: service_started
+    ports:
+      - "${LANGFUSE_HOST_PORT:-3200}:3000"
+    environment:
+      <<: *langfuse-env
+      NEXTAUTH_URL: ${LANGFUSE_NEXTAUTH_URL:-http://localhost:3200}
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-duckdock-local-nextauth-secret}
+      # Auto-provision a bootstrap org/project/user on first boot so the
+      # Clinic backend can pick up the keys without a manual UI step.
+      LANGFUSE_INIT_ORG_ID: duckdock
+      LANGFUSE_INIT_ORG_NAME: DuckDock
+      LANGFUSE_INIT_PROJECT_ID: duckdock-dev
+      LANGFUSE_INIT_PROJECT_NAME: DuckDock Dev
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-pk-lf-duckdock-local-public}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-sk-lf-duckdock-local-secret}
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:-admin@duckdock.local}
+      LANGFUSE_INIT_USER_NAME: ${LANGFUSE_INIT_USER_NAME:-DuckDock Admin}
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:-DuckDock@2026!}
+
+volumes:
+  mysql_data:
+  postgres_data:
+  redis_data:
+  minio_data:
+  repos_data:
+  clickhouse_data:
+  clickhouse_logs:

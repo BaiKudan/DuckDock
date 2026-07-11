@@ -1,0 +1,14 @@
+id: version_currency
+name: Version Currency
+weight: 15
+judge_mode: deterministic
+thresholds:
+  excellent: 90
+  good: 75
+  warning: 60
+criteria:
+  - recent updates
+  - stale skill ratio
+  - unpublished skill ratio
+guidance:
+  - Penalize stale namespaces where many skills have not been updated recently.

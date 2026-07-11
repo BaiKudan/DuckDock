@@ -1,0 +1,16 @@
+id: skill_completeness
+name: Skill Completeness
+weight: 15
+judge_mode: deterministic
+thresholds:
+  excellent: 90
+  good: 75
+  warning: 60
+criteria:
+  - front matter completeness
+  - system_prompt presence
+  - examples presence
+  - production readiness ratio
+guidance:
+  - Penalize missing required metadata heavily.
+  - Penalize namespaces where many skills have never reached production.
