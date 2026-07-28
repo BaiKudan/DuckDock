@@ -14,6 +14,9 @@ from app.models.control_plane import EvidenceItem
 
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
+FOUNDATION_MIGRATION_PATH = (
+    BACKEND_DIR / "alembic" / "versions" / "20260518_0009_agent_control_plane.py"
+)
 MIGRATION_PATH = (
     BACKEND_DIR / "alembic" / "versions" / "20260720_0028_evidence_work_trace_link.py"
 )
@@ -25,6 +28,27 @@ def _load_migration_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_foundation_revision_orders_internal_fk_targets_before_dependents() -> None:
+    spec = importlib.util.spec_from_file_location(
+        "agent_control_plane_0009", FOUNDATION_MIGRATION_PATH
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    table_positions = {table.name: position for position, table in enumerate(module.TABLES)}
+    ordering_violations = [
+        (table.name, foreign_key.column.table.name)
+        for table in module.TABLES
+        for constraint in table.foreign_key_constraints
+        for foreign_key in constraint.elements
+        if foreign_key.column.table.name in table_positions
+        and table_positions[foreign_key.column.table.name] >= table_positions[table.name]
+    ]
+
+    assert ordering_violations == []
 
 
 class _OperationRecorder:
