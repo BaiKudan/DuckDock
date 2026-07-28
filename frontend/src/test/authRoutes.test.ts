@@ -4,7 +4,13 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { canAccessIam, canAccessManagement, canAccessNamespaceTools, defaultRouteForUser } from "../authRoutes";
+import {
+  canAccessIam,
+  canAccessManagement,
+  canAccessNamespaceTools,
+  defaultRouteForUser,
+  safeInternalRoute,
+} from "../authRoutes";
 import type { UserProfile } from "../api/client";
 
 const adminUser = { system_role: "admin" } as unknown as UserProfile;
@@ -66,5 +72,31 @@ describe("defaultRouteForUser", () => {
     expect(defaultRouteForUser(adminUser, [])).toBe("/dashboard");
     expect(defaultRouteForUser(plainUser, ["runtime.read"])).toBe("/dashboard");
     expect(defaultRouteForUser(plainUser, [])).toBe("/my-assets");
+  });
+});
+
+describe("safeInternalRoute", () => {
+  it("accepts same-origin application paths", () => {
+    expect(safeInternalRoute("/my-assets", "/dashboard")).toBe("/my-assets");
+    expect(safeInternalRoute("/namespaces/demo?tab=skills#latest", "/dashboard")).toBe(
+      "/namespaces/demo?tab=skills#latest",
+    );
+  });
+
+  it.each([
+    undefined,
+    null,
+    "",
+    "dashboard",
+    "https://evil.example/phish",
+    "//evil.example/phish",
+    "/\\evil.example/phish",
+    "/%5cevil.example/phish",
+    "/%255cevil.example/phish",
+    "/%2f%2fevil.example/phish",
+    "/\u0000evil",
+    "/\nevil",
+  ])("rejects unsafe redirect target %s", (value) => {
+    expect(safeInternalRoute(value, "/dashboard")).toBe("/dashboard");
   });
 });

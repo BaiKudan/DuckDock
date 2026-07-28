@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Protocol, TypeAlias
+from typing import Any, Protocol, TypeAlias, cast
 
 from sqlalchemy import select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.control_plane import AIAsset, EvidenceItem, RuntimeBinding, RuntimeInstance, WorkTrace
@@ -271,10 +272,13 @@ async def _apply_resolution(
     if status is TenantResolutionStatus.RESOLVED and not dry_run:
         if namespace_id is None:
             raise ValueError("resolved tenant result requires namespace_id")
-        write_result = await db.execute(
-            update(model)
-            .where(model.id == result.target_id, model.namespace_id.is_(None))
-            .values(namespace_id=namespace_id)
+        write_result = cast(
+            CursorResult[Any],
+            await db.execute(
+                update(model)
+                .where(model.id == result.target_id, model.namespace_id.is_(None))
+                .values(namespace_id=namespace_id)
+            ),
         )
         updated = write_result.rowcount == 1
         if not updated:
