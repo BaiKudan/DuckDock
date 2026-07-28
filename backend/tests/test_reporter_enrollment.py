@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
 from sqlalchemy import select
 
 from fastapi import HTTPException
@@ -24,6 +25,7 @@ from app.models.control_plane import (
     RuntimeReportToken,
     RuntimeStatus,
 )
+from app.models.namespace import Namespace, NamespaceMember, NamespaceRole
 from app.models.user import SystemRole, User
 from app.schemas.control_plane import ReporterCredentialRevoke, ReporterCredentialRotate, ReporterEnrollmentCreate, ReporterHeartbeat
 from app.services.report_upload_service import authenticate_runtime_report_token
@@ -42,11 +44,28 @@ async def _user(session) -> User:
     return user
 
 
+async def _namespace(session, user: User, suffix: str = "default") -> Namespace:
+    namespace = Namespace(name=f"reporter-{user.username}-{suffix}", owner_id=user.id)
+    session.add(namespace)
+    await session.flush()
+    session.add(
+        NamespaceMember(
+            namespace_id=namespace.id,
+            user_id=user.id,
+            role=NamespaceRole.ADMIN,
+        )
+    )
+    await session.flush()
+    return namespace
+
+
 async def test_self_service_reporter_enrollment_issues_long_lived_reporter_credential(async_session):
     user = await _user(async_session)
+    namespace = await _namespace(async_session, user)
 
     out = await enroll_reporter_endpoint(
         ReporterEnrollmentCreate(
+            namespace_id=namespace.id,
             runtime_name="Employee Hermes Mac mini",
             device_id="test-workstation",
             agent_kind="hermes",
@@ -107,8 +126,14 @@ async def test_legacy_runtime_report_token_still_authenticates(async_session):
 
 async def test_reporter_heartbeat_updates_runtime_liveness_without_admin_jwt(async_session):
     user = await _user(async_session)
+    namespace = await _namespace(async_session, user)
     enrolled = await enroll_reporter_endpoint(
-        ReporterEnrollmentCreate(runtime_name="Employee Hermes", device_id="test-workstation", agent_kind="hermes"),
+        ReporterEnrollmentCreate(
+            namespace_id=namespace.id,
+            runtime_name="Employee Hermes",
+            device_id="test-workstation",
+            agent_kind="hermes",
+        ),
         async_session,
         user,
     )
@@ -147,10 +172,59 @@ async def test_reporter_heartbeat_updates_runtime_liveness_without_admin_jwt(asy
     assert reporter.token.heartbeat_json == heartbeat
 
 
+@pytest.mark.parametrize("tenant_state", ["missing", "inactive"])
+async def test_reporter_heartbeat_rejects_runtime_without_active_namespace(
+    async_session,
+    tenant_state: str,
+):
+    user = await _user(async_session)
+    namespace = await _namespace(async_session, user, suffix=tenant_state)
+    enrolled = await enroll_reporter_endpoint(
+        ReporterEnrollmentCreate(
+            namespace_id=namespace.id,
+            runtime_name=f"Invalid tenant reporter {tenant_state}",
+            device_id=f"test-workstation-{tenant_state}",
+            agent_kind="hermes",
+        ),
+        async_session,
+        user,
+    )
+    reporter = await authenticate_runtime_report_token(
+        async_session,
+        enrolled.credential.token,
+    )
+    if tenant_state == "missing":
+        reporter.runtime.namespace_id = None
+    else:
+        namespace.deleted_at = datetime.now(timezone.utc)
+
+    original_metadata = reporter.runtime.metadata_json
+    original_status = reporter.runtime.status
+
+    with pytest.raises(HTTPException) as exc_info:
+        await reporter_heartbeat_endpoint(
+            ReporterHeartbeat(status="degraded"),
+            async_session,
+            reporter,
+        )
+
+    assert exc_info.value.status_code == 422
+    assert reporter.runtime.metadata_json == original_metadata
+    assert reporter.runtime.status == original_status
+    assert reporter.token.last_heartbeat_at is None
+    assert reporter.token.heartbeat_json is None
+
+
 async def test_runtime_self_check_accepts_self_service_reporter_credential(async_session):
     user = await _user(async_session)
+    namespace = await _namespace(async_session, user)
     enrolled = await enroll_reporter_endpoint(
-        ReporterEnrollmentCreate(runtime_name="Employee Hermes", device_id="test-workstation", agent_kind="hermes"),
+        ReporterEnrollmentCreate(
+            namespace_id=namespace.id,
+            runtime_name="Employee Hermes",
+            device_id="test-workstation",
+            agent_kind="hermes",
+        ),
         async_session,
         user,
     )
@@ -163,8 +237,14 @@ async def test_runtime_self_check_accepts_self_service_reporter_credential(async
 
 async def test_reporter_credential_rotation_revokes_old_token_and_returns_new_secret(async_session):
     user = await _user(async_session)
+    namespace = await _namespace(async_session, user)
     enrolled = await enroll_reporter_endpoint(
-        ReporterEnrollmentCreate(runtime_name="Employee Hermes", device_id="test-workstation", agent_kind="hermes"),
+        ReporterEnrollmentCreate(
+            namespace_id=namespace.id,
+            runtime_name="Employee Hermes",
+            device_id="test-workstation",
+            agent_kind="hermes",
+        ),
         async_session,
         user,
     )
@@ -195,8 +275,14 @@ async def test_reporter_credential_rotation_revokes_old_token_and_returns_new_se
 
 async def test_reporter_credential_revoke_blocks_future_auth(async_session):
     user = await _user(async_session)
+    namespace = await _namespace(async_session, user)
     enrolled = await enroll_reporter_endpoint(
-        ReporterEnrollmentCreate(runtime_name="Employee Hermes", device_id="test-workstation", agent_kind="hermes"),
+        ReporterEnrollmentCreate(
+            namespace_id=namespace.id,
+            runtime_name="Employee Hermes",
+            device_id="test-workstation",
+            agent_kind="hermes",
+        ),
         async_session,
         user,
     )
@@ -225,13 +311,25 @@ async def test_user_lists_only_own_reporter_credentials(async_session):
     )
     async_session.add(other)
     await async_session.flush()
+    mine_namespace = await _namespace(async_session, user, "mine")
+    other_namespace = await _namespace(async_session, other, "other")
     mine = await enroll_reporter_endpoint(
-        ReporterEnrollmentCreate(runtime_name="Mine", device_id="mine", agent_kind="hermes"),
+        ReporterEnrollmentCreate(
+            namespace_id=mine_namespace.id,
+            runtime_name="Mine",
+            device_id="mine",
+            agent_kind="hermes",
+        ),
         async_session,
         user,
     )
     await enroll_reporter_endpoint(
-        ReporterEnrollmentCreate(runtime_name="Other", device_id="other", agent_kind="hermes"),
+        ReporterEnrollmentCreate(
+            namespace_id=other_namespace.id,
+            runtime_name="Other",
+            device_id="other",
+            agent_kind="hermes",
+        ),
         async_session,
         other,
     )

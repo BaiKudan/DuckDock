@@ -17,6 +17,7 @@ from app.models.control_plane import (
     ReportUploadSession,
     ReportUploadStatus,
 )
+from app.models.namespace import Namespace, NamespaceMember, NamespaceRole
 from app.models.user import SystemRole, User
 from app.schemas.control_plane import (
     ReporterEnrollmentCreate,
@@ -43,8 +44,20 @@ async def _seed_user(session) -> User:
 
 async def _seed_structured_report(session) -> tuple[User, int]:
     user = await _seed_user(session)
+    namespace = Namespace(name="agent-overview", owner_id=user.id)
+    session.add(namespace)
+    await session.flush()
+    session.add(
+        NamespaceMember(
+            namespace_id=namespace.id,
+            user_id=user.id,
+            role=NamespaceRole.ADMIN,
+        )
+    )
+    await session.flush()
     enrolled = await enroll_reporter_endpoint(
         ReporterEnrollmentCreate(
+            namespace_id=namespace.id,
             runtime_name="Hermes Mac Mini",
             device_id="test-workstation",
             agent_kind="hermes",

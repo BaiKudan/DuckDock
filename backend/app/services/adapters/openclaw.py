@@ -268,6 +268,11 @@ def _evidence_from_item(item: dict[str, Any]) -> NormalizedEvidence:
     return NormalizedEvidence(
         summary=summary,
         source_type=source_type,
+        work_trace_external_session_id=_string_or_none(
+            item.get("work_trace_external_session_id")
+            or item.get("trace_external_session_id")
+            or item.get("external_session_id")
+        ),
         object_uri=_string_or_none(item.get("object_uri") or item.get("uri") or item.get("url")),
         sha256=_string_or_none(item.get("sha256")),
         confidence=float(item.get("confidence", 1.0)),

@@ -15,6 +15,7 @@ from __future__ import annotations
 import io
 import zipfile
 from datetime import datetime, timezone
+from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
@@ -46,6 +47,7 @@ from app.models.control_plane import (
     TraceType,
 )
 from app.models.iam import Role, RoleBinding
+from app.models.namespace import Namespace
 from app.models.user import SystemRole, User
 from app.schemas.control_plane import EvidenceDownloadLinkRequest
 from app.services import handover_package_service
@@ -106,12 +108,20 @@ async def _bind_enterprise_admin(session, user):
     await session.flush()
 
 
-async def _seed_asset(session, *, name, criticality=Criticality.HIGH, asset_type=AssetType.SKILL):
+async def _seed_asset(
+    session,
+    *,
+    namespace_id: int,
+    name,
+    criticality=Criticality.HIGH,
+    asset_type=AssetType.SKILL,
+):
     asset = AIAsset(
         asset_type=asset_type,
         name=name,
         source_provider=RuntimeProvider.OPENCLAW,
         criticality=criticality,
+        namespace_id=namespace_id,
     )
     session.add(asset)
     await session.flush()
@@ -119,17 +129,23 @@ async def _seed_asset(session, *, name, criticality=Criticality.HIGH, asset_type
 
 
 async def _seed_completed_case_with_items(session, admin, *, status=HandoverStatus.COMPLETED):
+    namespace = Namespace(name=f"package-{uuid4().hex[:8]}", owner_id=admin.id)
+    session.add(namespace)
+    await session.flush()
     case = HandoverCase(
         case_type=HandoverCaseType.EMPLOYEE_OFFBOARDING,
         title="张三离职交接",
         status=status,
         created_by=admin.id,
+        namespace_id=namespace.id,
         summary_json={"runtime_ids": [1]},
     )
     session.add(case)
     await session.flush()
 
-    asset = await _seed_asset(session, name="离职交接摘要 Skill")
+    asset = await _seed_asset(
+        session, namespace_id=namespace.id, name="离职交接摘要 Skill"
+    )
     # 关联证据(item 引用)
     ev = EvidenceItem(
         source_type=EvidenceSourceType.LLM_ANALYSIS,
@@ -137,6 +153,7 @@ async def _seed_completed_case_with_items(session, admin, *, status=HandoverStat
         summary="分析建议:转移 owner",
         sha256="b" * 64,
         created_by=admin.id,
+        namespace_id=namespace.id,
     )
     session.add(ev)
     await session.flush()
@@ -169,6 +186,7 @@ async def _seed_completed_case_with_items(session, admin, *, status=HandoverStat
             summary="普通工作摘要",
             trace_type=TraceType.SESSION,
             sensitivity=Sensitivity.INTERNAL,
+            namespace_id=namespace.id,
         )
     )
     session.add(
@@ -178,6 +196,7 @@ async def _seed_completed_case_with_items(session, admin, *, status=HandoverStat
             summary=f"机密细节 包含凭证 {_SECRET}",
             trace_type=TraceType.SESSION,
             sensitivity=Sensitivity.RESTRICTED,
+            namespace_id=namespace.id,
             metadata_json={"token": _SECRET},
         )
     )
@@ -280,23 +299,30 @@ _FREETEXT_SECRETS = [
 
 async def _seed_case_with_freetext_secrets(session, admin):
     """种入 evidence.summary / execution note / item risk_reason / 非敏感 trace.summary 各含凭证样串。"""
+    namespace = Namespace(name=f"package-secret-{uuid4().hex[:8]}", owner_id=admin.id)
+    session.add(namespace)
+    await session.flush()
     case = HandoverCase(
         case_type=HandoverCaseType.EMPLOYEE_OFFBOARDING,
         title="自由文本凭证泄漏用例",
         status=HandoverStatus.COMPLETED,
         created_by=admin.id,
+        namespace_id=namespace.id,
         summary_json={"runtime_ids": [1]},
     )
     session.add(case)
     await session.flush()
 
-    asset = await _seed_asset(session, name=f"生产管线 {_NAME_SECRET}")
+    asset = await _seed_asset(
+        session, namespace_id=namespace.id, name=f"生产管线 {_NAME_SECRET}"
+    )
     ev = EvidenceItem(
         source_type=EvidenceSourceType.LLM_ANALYSIS,
         source_provider=RuntimeProvider.OPENCLAW,
         summary=f"分析建议:转移 owner，附带 {_EV_SECRET}",
         sha256="c" * 64,
         created_by=admin.id,
+        namespace_id=namespace.id,
     )
     session.add(ev)
     await session.flush()
@@ -329,6 +355,7 @@ async def _seed_case_with_freetext_secrets(session, admin):
             summary=f"普通工作摘要 {_TRACE_SECRET}",
             trace_type=TraceType.SESSION,
             sensitivity=Sensitivity.INTERNAL,
+            namespace_id=namespace.id,
         )
     )
     await session.flush()

@@ -12,6 +12,7 @@ from sqlalchemy import select
 from app.api.v1.endpoints.control_plane import create_runtime, update_runtime
 from app.core.config import settings
 from app.models.control_plane import CredentialRecord, RuntimeProvider
+from app.models.namespace import Namespace
 from app.models.user import SystemRole, User
 from app.schemas.control_plane import RuntimeInstanceCreate, RuntimeInstanceOut, RuntimeInstanceUpdate
 from app.services.credential_service import (
@@ -42,6 +43,13 @@ async def _make_admin(session, username="cred-admin"):
     session.add(user)
     await session.flush()
     return user
+
+
+async def _make_namespace(session, owner: User, suffix: str) -> Namespace:
+    namespace = Namespace(name=f"cred-{suffix}", owner_id=owner.id)
+    session.add(namespace)
+    await session.flush()
+    return namespace
 
 
 def test_encrypt_decrypt_round_trip(credential_key):
@@ -81,8 +89,14 @@ async def test_env_ref_and_unknown_scheme(async_session, monkeypatch):
 
 async def test_create_runtime_encrypts_and_never_returns_plaintext(async_session, credential_key):
     admin = await _make_admin(async_session)
+    namespace = await _make_namespace(async_session, admin, "create")
     runtime = await create_runtime(
-        RuntimeInstanceCreate(provider=RuntimeProvider.OPENCLAW, name="oc-prod", credential="tok-plain-123"),
+        RuntimeInstanceCreate(
+            namespace_id=namespace.id,
+            provider=RuntimeProvider.OPENCLAW,
+            name="oc-prod",
+            credential="tok-plain-123",
+        ),
         async_session,
         admin,
     )
@@ -98,8 +112,14 @@ async def test_create_runtime_encrypts_and_never_returns_plaintext(async_session
 
 async def test_update_runtime_rotates_credential(async_session, credential_key):
     admin = await _make_admin(async_session, username="cred-admin2")
+    namespace = await _make_namespace(async_session, admin, "rotate")
     runtime = await create_runtime(
-        RuntimeInstanceCreate(provider=RuntimeProvider.JVS, name="jvs-1", credential="old-token"),
+        RuntimeInstanceCreate(
+            namespace_id=namespace.id,
+            provider=RuntimeProvider.JVS,
+            name="jvs-1",
+            credential="old-token",
+        ),
         async_session,
         admin,
     )
@@ -113,8 +133,14 @@ async def test_update_runtime_rotates_credential(async_session, credential_key):
 
 async def test_update_runtime_attaches_credential_when_ref_was_legacy(async_session, credential_key):
     admin = await _make_admin(async_session, username="cred-admin3")
+    namespace = await _make_namespace(async_session, admin, "legacy")
     runtime = await create_runtime(
-        RuntimeInstanceCreate(provider=RuntimeProvider.CUSTOM, name="legacy", credential_ref="vault://duckdock/demo"),
+        RuntimeInstanceCreate(
+            namespace_id=namespace.id,
+            provider=RuntimeProvider.CUSTOM,
+            name="legacy",
+            credential_ref="vault://duckdock/demo",
+        ),
         async_session,
         admin,
     )

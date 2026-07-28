@@ -1,0 +1,60 @@
+{
+  "schema_version": "1.0",
+  "manifest_id": "manifest-openclaw-research-2.0.0",
+  "release_id": "release-openclaw-research-2.0.0",
+  "namespace_id": "namespace-research",
+  "created_at": "2026-07-17T09:00:00Z",
+  "package": {
+    "package_id": "pkg-openclaw-research-agent-2.0.0",
+    "package_version": "2.0.0",
+    "uri": "s3://duckdock-packages/research-agent/2.0.0/agent-package.json",
+    "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+  },
+  "target": {
+    "environment": "production",
+    "runtime_instance_ids": [
+      "runtime-openclaw-prod-01"
+    ],
+    "strategy": "canary"
+  },
+  "quality_gate": {
+    "policy_id": "quality-policy-agent-default-v1",
+    "decision": "pass",
+    "evaluated_at": "2026-07-17T08:45:00Z",
+    "evaluation_result_ids": [
+      "eval-result-openclaw-research-2.0.0"
+    ]
+  },
+  "approvals": [
+    {
+      "approval_id": "approval-release-manager-20260717-001",
+      "role": "release_manager",
+      "approver_id": "user-release-manager-01",
+      "decision": "approved",
+      "decided_at": "2026-07-17T08:50:00Z",
+      "reason": "Quality evidence and canary rollback plan reviewed."
+    },
+    {
+      "approval_id": "approval-owner-20260717-001",
+      "role": "owner",
+      "approver_id": "user-agent-owner-01",
+      "decision": "approved",
+      "decided_at": "2026-07-17T08:52:00Z"
+    }
+  ],
+  "provenance": {
+    "source_revision": "33b4eec54b6ea9a44f612b886dfd6ce46c5870f6",
+    "build_id": "build-20260717-001",
+    "created_by": "duckdock-release-service"
+  },
+  "rollback": {
+    "reversible": true,
+    "strategy": "redeploy_previous",
+    "previous_release_id": "release-openclaw-research-1.9.0"
+  },
+  "signature": {
+    "algorithm": "ed25519",
+    "key_id": "duckdock-release-signing-key-2026-01",
+    "value": "MEUCIQDUCKDOCK20260717EXAMPLESIGNATUREVALUE"
+  }
+}

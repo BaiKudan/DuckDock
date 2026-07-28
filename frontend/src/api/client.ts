@@ -207,6 +207,7 @@ export interface ManagedComponentActionResult {
 
 export interface RuntimeInstance {
   id: number;
+  namespace_id: number | null;
   provider: RuntimeProvider;
   name: string;
   base_url: string | null;
@@ -222,6 +223,7 @@ export interface RuntimeInstance {
 
 export interface AIAsset {
   id: number;
+  namespace_id: number | null;
   asset_type: AssetType;
   name: string;
   description: string | null;
@@ -448,6 +450,7 @@ export interface MemoryCandidate {
 
 export interface WorkTrace {
   id: number;
+  namespace_id: number | null;
   runtime_id: number | null;
   asset_id: number | null;
   external_session_id: string | null;
@@ -1432,6 +1435,8 @@ export interface ExecutionAction {
 // 证据条目(列表已按 ownership 过滤敏感项,specs/003 FR-002)
 export interface EvidenceItem {
   id: number;
+  namespace_id: number | null;
+  work_trace_id: number | null;
   source_type: EvidenceSourceType;
   source_provider: RuntimeProvider;
   collection_job_id: number | null;
@@ -1466,6 +1471,7 @@ export const controlPlaneApi = {
   getAgentInsight: (jobId: number) => api.get<AgentInsightJob>(`/agent-overview/insights/${jobId}`),
   listRuntimes: (params?: { provider?: RuntimeProvider }) => api.get<RuntimeInstance[]>("/runtimes", { params }),
   createRuntime: (data: {
+    namespace_id: number;
     provider: RuntimeProvider;
     name: string;
     base_url?: string | null;
@@ -1488,6 +1494,7 @@ export const controlPlaneApi = {
   listAssets: (params?: { provider?: RuntimeProvider; status_filter?: AssetStatus }) =>
     api.get<AIAsset[]>("/assets", { params }),
   createAsset: (data: {
+    namespace_id: number;
     asset_type: AssetType;
     name: string;
     description?: string | null;
@@ -1524,10 +1531,10 @@ export const controlPlaneApi = {
     api.get<CollectionJob[]>("/collection-jobs", { params }),
   cleanupDemoData: () => api.delete<DemoDataCleanupResult>("/demo-data"),
   createHandover: (data: {
+    namespace_id: number;
     case_type: HandoverCaseType;
     title: string;
     subject_user_id?: number | null;
-    namespace_id?: number | null;
     receiver_user_id?: number | null;
     due_at?: string | null;
     runtime_ids?: number[];

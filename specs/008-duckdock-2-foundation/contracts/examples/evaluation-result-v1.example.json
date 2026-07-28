@@ -1,0 +1,100 @@
+{
+  "schema_version": "1.0",
+  "result_id": "eval-result-openclaw-research-2.0.0",
+  "evaluation_run_id": "eval-run-20260717-001",
+  "status": "completed",
+  "subject": {
+    "namespace_id": "namespace-research",
+    "agent_asset_id": "agent-openclaw-research",
+    "package_id": "pkg-openclaw-research-agent-2.0.0",
+    "release_id": "release-openclaw-research-2.0.0",
+    "baseline_release_id": "release-openclaw-research-1.9.0"
+  },
+  "dataset": {
+    "dataset_id": "dataset-research-golden",
+    "version_id": "dataset-research-golden-v7",
+    "content_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "item_count": 100
+  },
+  "evaluator": {
+    "evaluator_id": "deepeval-agent-composite",
+    "version": "1.3.0",
+    "type": "composite",
+    "config_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "judge_model": "qwen3.7-max",
+    "judge_prompt_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  },
+  "metrics": [
+    {
+      "name": "task_completion",
+      "score": 0.88,
+      "threshold": 0.8,
+      "comparison": "gte",
+      "passed": true,
+      "sample_count": 98,
+      "error_count": 2,
+      "baseline_score": 0.84,
+      "delta": 0.04,
+      "reason": "The candidate improved task completion without crossing the configured regression boundary."
+    },
+    {
+      "name": "tool_correctness",
+      "score": 0.93,
+      "threshold": 0.9,
+      "comparison": "gte",
+      "passed": true,
+      "sample_count": 98,
+      "error_count": 2,
+      "baseline_score": 0.91,
+      "delta": 0.02
+    },
+    {
+      "name": "critical_security_failures",
+      "score": 0,
+      "threshold": 0,
+      "comparison": "eq",
+      "passed": true,
+      "sample_count": 20,
+      "error_count": 0
+    }
+  ],
+  "summary": {
+    "items_total": 100,
+    "items_evaluated": 98,
+    "items_passed": 86,
+    "items_failed": 12,
+    "items_error": 2,
+    "duration_ms": 436000,
+    "judge_input_tokens": 182000,
+    "judge_output_tokens": 21400,
+    "total_cost": 6.84,
+    "currency": "CNY"
+  },
+  "decision": {
+    "outcome": "pass",
+    "blocking_reasons": [],
+    "warnings": [
+      "Two dataset items could not be evaluated after provider retries."
+    ]
+  },
+  "evidence": [
+    {
+      "provider": "langfuse",
+      "external_run_id": "langfuse-dataset-run-20260717-001",
+      "uri": "https://langfuse.example.internal/project/duckdock-production/datasets/dataset-research-golden/runs/langfuse-dataset-run-20260717-001",
+      "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    {
+      "provider": "duckdock-minio",
+      "external_run_id": "evidence-pack-eval-run-20260717-001",
+      "uri": "s3://duckdock-reports/evaluations/eval-run-20260717-001/evidence.json",
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+    }
+  ],
+  "provenance": {
+    "source_revision": "33b4eec54b6ea9a44f612b886dfd6ce46c5870f6",
+    "runner_id": "duckdock-evaluation-worker-01",
+    "started_at": "2026-07-17T08:10:00Z",
+    "completed_at": "2026-07-17T08:17:16Z"
+  }
+}

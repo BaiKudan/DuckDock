@@ -37,6 +37,7 @@ from app.models.control_plane import (
     HandoverStatus,
     RuntimeProvider,
 )
+from app.models.namespace import Namespace, NamespaceMember, NamespaceRole
 from app.models.user import AuthSource, SystemRole, User
 from app.schemas.control_plane import (
     ApprovalDecision,
@@ -109,8 +110,36 @@ async def seed_handover_closed_loop(
         role=SystemRole.USER,
         reset_password=True,
     )
+    namespace_name = f"e2e-p3-11-{run_id}"
+    namespace = (
+        await db.execute(select(Namespace).where(Namespace.name == namespace_name))
+    ).scalar_one_or_none()
+    if namespace is None:
+        namespace = Namespace(name=namespace_name, owner_id=admin.id)
+        db.add(namespace)
+        await db.flush()
+    receiver_membership = (
+        await db.execute(
+            select(NamespaceMember).where(
+                NamespaceMember.namespace_id == namespace.id,
+                NamespaceMember.user_id == receiver.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if receiver_membership is None:
+        db.add(
+            NamespaceMember(
+                namespace_id=namespace.id,
+                user_id=receiver.id,
+                role=NamespaceRole.DEVELOPER,
+            )
+        )
+    else:
+        receiver_membership.role = NamespaceRole.DEVELOPER
+    await db.flush()
 
     asset = AIAsset(
+        namespace_id=namespace.id,
         asset_type=AssetType.SKILL,
         name=f"E2E P3-11 Low Risk Skill {run_id}",
         description="Low criticality seed asset for the handover closed-loop browser test.",
@@ -125,6 +154,7 @@ async def seed_handover_closed_loop(
 
     case = await create_handover(
         HandoverCaseCreate(
+            namespace_id=namespace.id,
             case_type=HandoverCaseType.EMPLOYEE_OFFBOARDING,
             title=f"E2E P3-11 closed loop {run_id}",
             subject_user_id=subject.id,

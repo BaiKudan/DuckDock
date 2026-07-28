@@ -15,7 +15,6 @@ from app.models.control_plane import (
     AssetOwnership,
     CollectionJob,
     CollectionTriggerType,
-    EvidenceItem,
     JobStatus,
     OwnerType,
     ProviderPrincipal,
@@ -28,12 +27,20 @@ from app.models.control_plane import (
 from app.models.user import User
 from app.services.adapters.contracts import AdapterCollectionResult, NormalizedAsset, NormalizedWorkTrace
 from app.services.adapters.openclaw import normalize_openclaw_payload, parse_openclaw_backup_bytes
+from app.services.tenant_write_service import (
+    TenantWriteError,
+    build_evidence_item,
+    build_work_trace,
+    ensure_resource_namespace,
+    require_active_namespace,
+)
 
 # Push-only(specs/001 Phase 8 T081):外联采集 run_collection_job_now 已退役。
 # 仅保留 backup 上传导入 + 归一化落库(下方),后者由 Push 上报链路共用。
 
 
 async def ingest_openclaw_backup(db, *, runtime: RuntimeInstance, content: bytes, filename: str | None = None) -> CollectionJob:
+    await require_active_namespace(db, runtime.namespace_id)
     payload = parse_openclaw_backup_bytes(content, filename)
     job = CollectionJob(
         runtime_id=runtime.id,
@@ -59,6 +66,8 @@ async def persist_collection_result(
     runtime: RuntimeInstance,
     result: AdapterCollectionResult,
 ) -> dict[str, int]:
+    namespace = await require_active_namespace(db, runtime.namespace_id)
+    ensure_resource_namespace(runtime, namespace.id, relationship="runtime")
     await _persist_capability_snapshot(db, job, runtime, result.adapter_name, result.capabilities.to_json())
     principal_map: dict[str, ProviderPrincipal] = {}
     asset_map: dict[str, AIAsset] = {}
@@ -94,6 +103,7 @@ async def persist_collection_result(
         row = await _get_existing_asset(db, runtime=runtime, asset=asset)
         if row is None:
             row = AIAsset(
+                namespace_id=namespace.id,
                 asset_type=asset.asset_type,
                 name=asset.name,
                 description=asset.description,
@@ -107,6 +117,11 @@ async def persist_collection_result(
             )
             db.add(row)
         else:
+            ensure_resource_namespace(
+                row,
+                namespace.id,
+                relationship="asset",
+            )
             row.asset_type = asset.asset_type
             row.name = asset.name
             row.description = asset.description
@@ -121,11 +136,12 @@ async def persist_collection_result(
         if asset.owner_external_id and asset.owner_external_id in principal_map:
             principal = principal_map[asset.owner_external_id]
             if principal.user_id is not None:
-                await _ensure_asset_owner(db, asset_id=row.id, user_id=principal.user_id)
+                await _ensure_asset_owner(db, asset=row, user_id=principal.user_id)
 
     await db.flush()
 
     seen_trace_hashes: set[str] = set()
+    trace_map: dict[str, WorkTrace] = {}
     for trace in result.work_traces:
         asset_id = asset_map.get(trace.asset_external_id).id if trace.asset_external_id in asset_map else None
         actor = principal_map.get(trace.actor_external_id) if trace.actor_external_id else None
@@ -159,22 +175,32 @@ async def persist_collection_result(
             existing = next((row for row in candidates if _hash_work_trace_row(row) == trace_hash), None)
             seen_trace_hashes.add(trace_hash)
         if existing is None:
-            db.add(
-                WorkTrace(
-                    runtime_id=runtime.id,
-                    asset_id=asset_id,
-                    external_session_id=trace.external_session_id,
-                    actor_user_id=actor_user_id,
-                    title=trace.title,
-                    summary=trace.summary,
-                    trace_type=trace.trace_type,
-                    started_at=trace.started_at,
-                    ended_at=trace.ended_at,
-                    sensitivity=trace.sensitivity,
-                    metadata_json=trace.metadata,
-                )
+            linked_asset = asset_map.get(trace.asset_external_id) if trace.asset_external_id else None
+            existing = build_work_trace(
+                namespace_id=namespace.id,
+                runtime=runtime,
+                asset=linked_asset,
+                external_session_id=trace.external_session_id,
+                actor_user_id=actor_user_id,
+                title=trace.title,
+                summary=trace.summary,
+                trace_type=trace.trace_type,
+                started_at=trace.started_at,
+                ended_at=trace.ended_at,
+                sensitivity=trace.sensitivity,
+                metadata_json=trace.metadata,
             )
+            db.add(existing)
         else:
+            ensure_resource_namespace(
+                existing,
+                namespace.id,
+                relationship="work_trace",
+            )
+            if asset_id is not None:
+                linked_asset = asset_map.get(trace.asset_external_id) if trace.asset_external_id else None
+                if linked_asset is not None:
+                    ensure_resource_namespace(linked_asset, namespace.id, relationship="asset")
             existing.asset_id = asset_id
             existing.actor_user_id = actor_user_id
             existing.title = trace.title
@@ -185,9 +211,23 @@ async def persist_collection_result(
             existing.sensitivity = trace.sensitivity
             existing.metadata_json = trace.metadata
 
+        if trace.external_session_id:
+            trace_map[trace.external_session_id] = existing
+
+    await db.flush()
+
     for evidence in result.evidence:
+        linked_trace = None
+        if evidence.work_trace_external_session_id is not None:
+            linked_trace = trace_map.get(evidence.work_trace_external_session_id)
+            if linked_trace is None:
+                raise TenantWriteError(
+                    "Evidence typed WorkTrace reference was not found in the normalized collection"
+                )
         db.add(
-            EvidenceItem(
+            build_evidence_item(
+                namespace_id=namespace.id,
+                work_trace=linked_trace,
                 source_type=evidence.source_type,
                 source_provider=runtime.provider,
                 collection_job_id=job.id,
@@ -315,11 +355,11 @@ async def _resolve_user_id(db, *, email: str | None, username: str | None) -> in
     return (await db.execute(select(User.id).where(or_(*filters)).limit(1))).scalar_one_or_none()
 
 
-async def _ensure_asset_owner(db, *, asset_id: int, user_id: int):
+async def _ensure_asset_owner(db, *, asset: AIAsset, user_id: int):
     existing = (
         await db.execute(
             select(AssetOwnership).where(
-                AssetOwnership.asset_id == asset_id,
+                AssetOwnership.asset_id == asset.id,
                 AssetOwnership.user_id == user_id,
                 AssetOwnership.owner_type == OwnerType.CREATOR,
             )
@@ -328,12 +368,19 @@ async def _ensure_asset_owner(db, *, asset_id: int, user_id: int):
     if existing is None:
         db.add(
             AssetOwnership(
-                asset_id=asset_id,
+                namespace_id=asset.namespace_id,
+                asset_id=asset.id,
                 owner_type=OwnerType.CREATOR,
                 user_id=user_id,
                 confidence=0.95,
                 is_primary=True,
             )
+        )
+    else:
+        ensure_resource_namespace(
+            existing,
+            asset.namespace_id,
+            relationship="asset_ownership",
         )
 
 

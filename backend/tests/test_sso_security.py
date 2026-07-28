@@ -77,6 +77,38 @@ def _sign_id_token(pem: bytes, kid: str, claims: dict) -> str:
     return jwt.encode(claims, pem, algorithm="RS256", headers={"kid": kid})
 
 
+@pytest.mark.parametrize(
+    "next_path",
+    [
+        None,
+        "",
+        "dashboard",
+        "https://evil.example/phish",
+        "//evil.example/phish",
+        "/\\evil.example/phish",
+        "/%5cevil.example/phish",
+        "/%255cevil.example/phish",
+        "/%2f%2fevil.example/phish",
+        "/\x00evil",
+        "/\nevil",
+    ],
+)
+def test_sso_frontend_redirect_rejects_unsafe_paths(next_path):
+    assert sso_service._frontend_redirect_target(next_path) == "/dashboard"
+
+
+@pytest.mark.parametrize(
+    "next_path",
+    [
+        "/dashboard",
+        "/my-assets",
+        "/namespaces/demo?tab=skills#latest",
+    ],
+)
+def test_sso_frontend_redirect_accepts_internal_paths(next_path):
+    assert sso_service._frontend_redirect_target(next_path) == next_path
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # 1) Secret encryption at rest
 # ──────────────────────────────────────────────────────────────────────────

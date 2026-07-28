@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+from uuid import uuid4
 
 from sqlalchemy import select
 
@@ -180,24 +181,42 @@ async def _make_user(session, *, username, system_role=SystemRole.USER):
     return user
 
 
+async def _make_namespace(session, *, owner: User, prefix: str) -> Namespace:
+    namespace = Namespace(name=f"{prefix}-{uuid4().hex[:8]}", owner_id=owner.id)
+    session.add(namespace)
+    await session.flush()
+    return namespace
+
+
 async def test_analyze_applies_advisor_output_and_audits_mode(async_session, monkeypatch):
     admin = await _make_user(async_session, username="adv-admin", system_role=SystemRole.ADMIN)
     subject = await _make_user(async_session, username="adv-subject")
+    namespace = await _make_namespace(async_session, owner=admin, prefix="adv-apply")
     asset = AIAsset(
         asset_type=AssetType.SKILL,
         name="Critical Pipeline",
         source_provider=RuntimeProvider.OPENCLAW,
         criticality=Criticality.HIGH,
+        namespace_id=namespace.id,
     )
     async_session.add(asset)
     await async_session.flush()
     async_session.add(
-        AssetOwnership(asset_id=asset.id, owner_type=OwnerType.CREATOR, user_id=subject.id, is_primary=True)
+        AssetOwnership(
+            asset_id=asset.id,
+            owner_type=OwnerType.CREATOR,
+            user_id=subject.id,
+            namespace_id=namespace.id,
+            is_primary=True,
+        )
     )
     await async_session.flush()
     case = await create_handover(
         HandoverCaseCreate(
-            case_type=HandoverCaseType.EMPLOYEE_OFFBOARDING, title="交接", subject_user_id=subject.id
+            case_type=HandoverCaseType.EMPLOYEE_OFFBOARDING,
+            title="交接",
+            subject_user_id=subject.id,
+            namespace_id=namespace.id,
         ),
         async_session,
         admin,
@@ -227,16 +246,31 @@ async def test_destructive_recommendation_stays_proposed_advice(async_session, m
     case 不进入执行态——任何处置须经审批闸门。"""
     admin = await _make_user(async_session, username="adv-destruct", system_role=SystemRole.ADMIN)
     subject = await _make_user(async_session, username="adv-destruct-subj")
-    asset = AIAsset(asset_type=AssetType.SKILL, name="Risky", source_provider=RuntimeProvider.OPENCLAW)
+    namespace = await _make_namespace(async_session, owner=admin, prefix="adv-destruct")
+    asset = AIAsset(
+        asset_type=AssetType.SKILL,
+        name="Risky",
+        source_provider=RuntimeProvider.OPENCLAW,
+        namespace_id=namespace.id,
+    )
     async_session.add(asset)
     await async_session.flush()
     async_session.add(
-        AssetOwnership(asset_id=asset.id, owner_type=OwnerType.CREATOR, user_id=subject.id, is_primary=True)
+        AssetOwnership(
+            asset_id=asset.id,
+            owner_type=OwnerType.CREATOR,
+            user_id=subject.id,
+            namespace_id=namespace.id,
+            is_primary=True,
+        )
     )
     await async_session.flush()
     case = await create_handover(
         HandoverCaseCreate(
-            case_type=HandoverCaseType.EMPLOYEE_OFFBOARDING, title="交接", subject_user_id=subject.id
+            case_type=HandoverCaseType.EMPLOYEE_OFFBOARDING,
+            title="交接",
+            subject_user_id=subject.id,
+            namespace_id=namespace.id,
         ),
         async_session,
         admin,
@@ -258,8 +292,18 @@ async def test_analyze_scopes_by_namespace(async_session, monkeypatch):
     ns_out = Namespace(name="adv-out", owner_id=admin.id)
     async_session.add_all([ns_in, ns_out])
     await async_session.flush()
-    in_ns = AIAsset(asset_type=AssetType.SKILL, name="In-NS", source_provider=RuntimeProvider.OPENCLAW)
-    out_ns = AIAsset(asset_type=AssetType.SKILL, name="Out-NS", source_provider=RuntimeProvider.OPENCLAW)
+    in_ns = AIAsset(
+        asset_type=AssetType.SKILL,
+        name="In-NS",
+        source_provider=RuntimeProvider.OPENCLAW,
+        namespace_id=ns_in.id,
+    )
+    out_ns = AIAsset(
+        asset_type=AssetType.SKILL,
+        name="Out-NS",
+        source_provider=RuntimeProvider.OPENCLAW,
+        namespace_id=ns_out.id,
+    )
     async_session.add_all([in_ns, out_ns])
     await async_session.flush()
     async_session.add_all(
@@ -325,21 +369,32 @@ def test_build_ai_assist_llm_silent_fallback_is_degraded():
 async def _seed_case_with_asset(async_session, *, username):
     admin = await _make_user(async_session, username=f"{username}-admin", system_role=SystemRole.ADMIN)
     subject = await _make_user(async_session, username=f"{username}-subj")
+    namespace = await _make_namespace(async_session, owner=admin, prefix=username)
     asset = AIAsset(
         asset_type=AssetType.SKILL,
         name=f"{username}-asset",
         source_provider=RuntimeProvider.OPENCLAW,
         criticality=Criticality.HIGH,
+        namespace_id=namespace.id,
     )
     async_session.add(asset)
     await async_session.flush()
     async_session.add(
-        AssetOwnership(asset_id=asset.id, owner_type=OwnerType.CREATOR, user_id=subject.id, is_primary=True)
+        AssetOwnership(
+            asset_id=asset.id,
+            owner_type=OwnerType.CREATOR,
+            user_id=subject.id,
+            namespace_id=namespace.id,
+            is_primary=True,
+        )
     )
     await async_session.flush()
     case = await create_handover(
         HandoverCaseCreate(
-            case_type=HandoverCaseType.EMPLOYEE_OFFBOARDING, title="交接", subject_user_id=subject.id
+            case_type=HandoverCaseType.EMPLOYEE_OFFBOARDING,
+            title="交接",
+            subject_user_id=subject.id,
+            namespace_id=namespace.id,
         ),
         async_session,
         admin,

@@ -3,7 +3,7 @@ import re
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import unquote, urlencode, urlsplit
 
 import jwt
 from jwt.exceptions import PyJWTError as JWTError
@@ -26,6 +26,7 @@ SSO_HTTP_TIMEOUT = 15.0
 
 USERNAME_RE = re.compile(r"[^a-z0-9_-]+")
 ENTERPRISE_UID_RE = re.compile(r"[^A-Za-z0-9_.@:-]+")
+REDIRECT_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
 DEFAULT_LDAP_SEARCH_FILTER = (
     "(|(uid={username})(mail={username})(sAMAccountName={username})"
     "(userPrincipalName={username})(cn={username}))"
@@ -41,8 +42,30 @@ class SSOAuthenticationError(ValueError):
 
 
 def _frontend_redirect_target(next_path: str | None) -> str:
-    if next_path and next_path.startswith("/"):
-        return next_path
+    if not next_path:
+        return "/dashboard"
+
+    candidate = next_path
+    for _ in range(3):
+        if (
+            not candidate.startswith("/")
+            or candidate.startswith("//")
+            or "\\" in candidate
+            or REDIRECT_CONTROL_CHAR_RE.search(candidate)
+        ):
+            return "/dashboard"
+        try:
+            parsed = urlsplit(candidate)
+        except ValueError:
+            return "/dashboard"
+        if parsed.scheme or parsed.netloc or not parsed.path.startswith("/"):
+            return "/dashboard"
+
+        decoded = unquote(candidate)
+        if decoded == candidate:
+            return next_path
+        candidate = decoded
+
     return "/dashboard"
 
 

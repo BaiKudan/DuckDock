@@ -1,0 +1,64 @@
+{
+  "schema_version": "2.0",
+  "package_id": "pkg-openclaw-research-agent-2.0.0",
+  "package_version": "2.0.0",
+  "namespace_id": "namespace-research",
+  "agent": {
+    "asset_id": "agent-openclaw-research",
+    "name": "OpenClaw Research Agent",
+    "description": "Governed research agent package for the DuckDock quality-loop pilot."
+  },
+  "runtime": {
+    "harness": "openclaw",
+    "entrypoint": "agents/research-agent.yaml",
+    "minimum_harness_version": "1.8.0",
+    "capabilities": [
+      "model_call",
+      "tool_call",
+      "retrieval",
+      "memory"
+    ]
+  },
+  "artifacts": [
+    {
+      "type": "skill",
+      "asset_id": "skill-web-research",
+      "version_id": "skill-web-research-v12",
+      "uri": "s3://duckdock-packages/research-agent/2.0.0/skills/web-research.zip",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "media_type": "application/zip"
+    },
+    {
+      "type": "prompt",
+      "asset_id": "prompt-research-system",
+      "version_id": "prompt-research-system-v8",
+      "uri": "s3://duckdock-packages/research-agent/2.0.0/prompts/system.json",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "media_type": "application/json"
+    }
+  ],
+  "provenance": {
+    "source_repository": "https://github.com/BaiKudan/DuckDock",
+    "source_revision": "33b4eec54b6ea9a44f612b886dfd6ce46c5870f6",
+    "built_at": "2026-07-17T08:00:00Z",
+    "builder_id": "duckdock-ci",
+    "build_id": "build-20260717-001"
+  },
+  "telemetry": {
+    "schema_version": "1.0",
+    "content_policy": "metadata_only",
+    "required_attributes": [
+      "duckdock.namespace_id",
+      "duckdock.agent_asset_id",
+      "duckdock.runtime_instance_id",
+      "duckdock.release_id",
+      "duckdock.skill_version_id",
+      "duckdock.prompt_version_id"
+    ]
+  },
+  "evaluation_policy_id": "quality-policy-agent-default-v1",
+  "annotations": {
+    "owner": "research-platform",
+    "data_classification": "internal"
+  }
+}

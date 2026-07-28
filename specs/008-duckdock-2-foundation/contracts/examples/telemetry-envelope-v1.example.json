@@ -1,0 +1,58 @@
+{
+  "schema_version": "1.0",
+  "event_id": "13be8e0e-a752-4ac8-86dd-b1a9e0f15abe",
+  "emitted_at": "2026-07-17T08:31:05Z",
+  "provider": {
+    "name": "langfuse",
+    "project_id": "duckdock-production",
+    "external_trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+    "deep_link": "https://langfuse.example.internal/project/duckdock-production/traces/4bf92f3577b34da6a3ce929d0e0e4736"
+  },
+  "correlation": {
+    "namespace_id": "namespace-research",
+    "agent_asset_id": "agent-openclaw-research",
+    "runtime_instance_id": "runtime-openclaw-prod-01",
+    "release_id": "release-openclaw-research-2.0.0",
+    "work_trace_id": "work-trace-20260717-1042",
+    "skill_version_id": "skill-web-research-v12",
+    "prompt_version_id": "prompt-research-system-v8",
+    "reporter_id": "reporter-openclaw-prod-01"
+  },
+  "trace": {
+    "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+    "root_span_id": "00f067aa0ba902b7",
+    "session_id": "session-hash-9c837f4c",
+    "started_at": "2026-07-17T08:30:00Z",
+    "ended_at": "2026-07-17T08:31:04Z",
+    "status": "ok",
+    "span_kinds": [
+      "agent",
+      "model",
+      "tool",
+      "retrieval"
+    ]
+  },
+  "summary": {
+    "span_count": 14,
+    "model_call_count": 3,
+    "tool_call_count": 4,
+    "retrieval_count": 2,
+    "retry_count": 1,
+    "error_count": 0,
+    "input_tokens": 8290,
+    "output_tokens": 1840,
+    "total_cost": 0.0187,
+    "currency": "CNY",
+    "duration_ms": 64000
+  },
+  "content_policy": "metadata_only",
+  "attributes": {
+    "deployment.environment": "production",
+    "service.name": "openclaw-research-agent",
+    "gen_ai.operation.name": "invoke_agent",
+    "duckdock.asset_version_ids": [
+      "skill-web-research-v12",
+      "prompt-research-system-v8"
+    ]
+  }
+}

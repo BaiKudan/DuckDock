@@ -1,0 +1,241 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://duckdock.dev/schemas/release-manifest-v1.schema.json",
+  "title": "DuckDock Release Manifest v1",
+  "description": "Signed release evidence binding an agent package, quality decision, target runtimes, approvals, and rollback plan.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "manifest_id",
+    "release_id",
+    "namespace_id",
+    "created_at",
+    "package",
+    "target",
+    "quality_gate",
+    "approvals",
+    "provenance",
+    "rollback",
+    "signature"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "manifest_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "release_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "namespace_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["package_id", "package_version", "uri", "sha256"],
+      "properties": {
+        "package_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "package_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$"
+        },
+        "uri": {
+          "type": "string",
+          "format": "uri"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["environment", "runtime_instance_ids", "strategy"],
+      "properties": {
+        "environment": {
+          "type": "string",
+          "enum": ["development", "test", "staging", "production"]
+        },
+        "runtime_instance_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "strategy": {
+          "type": "string",
+          "enum": ["all_at_once", "canary", "rolling"]
+        }
+      }
+    },
+    "quality_gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy_id", "decision", "evaluated_at", "evaluation_result_ids"],
+      "properties": {
+        "policy_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "decision": {
+          "type": "string",
+          "enum": ["pass", "waived"]
+        },
+        "evaluated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "evaluation_result_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "waiver_reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "waiver_expires_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "decision": {"const": "waived"}
+            },
+            "required": ["decision"]
+          },
+          "then": {
+            "required": ["waiver_reason", "waiver_expires_at"]
+          },
+          "else": {
+            "allOf": [
+              {"not": {"required": ["waiver_reason"]}},
+              {"not": {"required": ["waiver_expires_at"]}}
+            ]
+          }
+        }
+      ]
+    },
+    "approvals": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/approval"
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_revision", "build_id", "created_by"],
+      "properties": {
+        "source_revision": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{7,64}$"
+        },
+        "build_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "created_by": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "rollback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reversible", "strategy", "previous_release_id"],
+      "properties": {
+        "reversible": {
+          "type": "boolean"
+        },
+        "strategy": {
+          "type": "string",
+          "enum": ["redeploy_previous", "manual"]
+        },
+        "previous_release_id": {
+          "type": ["string", "null"],
+          "minLength": 1
+        }
+      }
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "key_id", "value"],
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "enum": ["ed25519", "rsa-pss-sha256", "ecdsa-p256-sha256"]
+        },
+        "key_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "value": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9+/=_-]+$"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["approval_id", "role", "approver_id", "decision", "decided_at"],
+      "properties": {
+        "approval_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "role": {
+          "type": "string",
+          "enum": ["owner", "reviewer", "security", "operations", "release_manager"]
+        },
+        "approver_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "decision": {
+          "const": "approved"
+        },
+        "decided_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 4000
+        }
+      }
+    }
+  }
+}

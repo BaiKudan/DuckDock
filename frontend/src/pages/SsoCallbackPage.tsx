@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { AlertTriangle, Hexagon, Loader2 } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { authApi, iamApi } from "../api/client";
-import { defaultRouteForUser } from "../authRoutes";
+import { defaultRouteForUser, safeInternalRoute } from "../authRoutes";
 import { IconTile } from "../components/ui";
 import { useI18n } from "../i18n";
 import { useAuthStore } from "../store/auth";
@@ -30,7 +30,7 @@ export default function SsoCallbackPage() {
         const permissions = await iamApi.getMyPermissions();
         setPermissions(permissions.data.permission_keys);
         const fallback = defaultRouteForUser(me.data, permissions.data.permission_keys);
-        navigate(next.startsWith("/") && next !== "/dashboard" ? next : fallback, { replace: true });
+        navigate(next === "/dashboard" ? fallback : safeInternalRoute(next, fallback), { replace: true });
       } catch (err: any) {
         logout();
         setError(
