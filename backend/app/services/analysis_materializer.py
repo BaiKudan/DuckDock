@@ -29,6 +29,12 @@ from app.models.control_plane import (
 )
 from app.models.user import User
 from app.services.artifact_service import ArtifactStorageError, artifact_service
+from app.services.tenant_write_service import (
+    build_runtime_binding,
+    build_work_trace,
+    ensure_resource_namespace,
+    require_active_namespace,
+)
 
 
 MATERIALIZED_COUNT_KEYS = (
@@ -61,6 +67,8 @@ async def materialize_analysis_result(
     runtime: RuntimeInstance,
     artifacts: list[AnalysisResultArtifact],
 ) -> dict[str, Any]:
+    namespace = await require_active_namespace(db, runtime.namespace_id)
+    ensure_resource_namespace(runtime, namespace.id, relationship="runtime")
     counts = _empty_materialization_counts()
     asset_map: dict[str, AIAsset] = {}
     for artifact in artifacts:
@@ -192,6 +200,7 @@ async def _materialize_asset_cards(
         ).scalar_one_or_none()
         if row is None:
             row = AIAsset(
+                namespace_id=runtime.namespace_id,
                 asset_type=_asset_type(card),
                 name=name,
                 source_provider=runtime.provider,
@@ -201,6 +210,11 @@ async def _materialize_asset_cards(
             db.add(row)
             counts["inserted_counts"]["asset_cards"] += 1
         else:
+            ensure_resource_namespace(
+                row,
+                runtime.namespace_id,
+                relationship="asset",
+            )
             counts["updated_counts"]["asset_cards"] += 1
         row.asset_type = _asset_type(card)
         row.name = name
@@ -220,7 +234,7 @@ async def _materialize_asset_cards(
         if user_id is not None:
             owner_result = await _ensure_asset_owner(
                 db,
-                asset_id=row.id,
+                asset=row,
                 user_id=user_id,
                 owner_type=_owner_type(card),
                 confidence=_float(card.get("ownership_confidence"), default=0.9),
@@ -252,9 +266,10 @@ async def _ensure_runtime_binding(db, *, runtime: RuntimeInstance, asset: AIAsse
     ).scalar_one_or_none()
     if existing is None:
         db.add(
-            RuntimeBinding(
-                asset_id=asset.id,
-                runtime_id=runtime.id,
+            build_runtime_binding(
+                namespace_id=runtime.namespace_id,
+                asset=asset,
+                runtime=runtime,
                 external_ref=external_ref,
                 environment="analysis",
                 usage_status="active",
@@ -262,6 +277,12 @@ async def _ensure_runtime_binding(db, *, runtime: RuntimeInstance, asset: AIAsse
             )
         )
         return "inserted"
+    ensure_resource_namespace(
+        existing,
+        runtime.namespace_id,
+        relationship="runtime_binding",
+    )
+    ensure_resource_namespace(asset, runtime.namespace_id, relationship="asset")
     existing.usage_status = "active"
     existing.last_used_at = _now()
     return "updated"
@@ -302,8 +323,9 @@ async def _materialize_worktrace_summary(
         actor_user_id = await _resolve_runtime_enrollment_user_id(db, runtime)
     if existing is None:
         db.add(
-            WorkTrace(
-                runtime_id=runtime.id,
+            build_work_trace(
+                namespace_id=runtime.namespace_id,
+                runtime=runtime,
                 external_session_id=external_session_id,
                 actor_user_id=actor_user_id,
                 title=title,
@@ -323,6 +345,11 @@ async def _materialize_worktrace_summary(
         counts["inserted_counts"]["worktrace_summaries"] += 1
         counts["worktrace_summaries"] = counts["inserted_counts"]["worktrace_summaries"]
         return counts
+    ensure_resource_namespace(
+        existing,
+        runtime.namespace_id,
+        relationship="work_trace",
+    )
     existing.title = title
     existing.summary = _truncate(summary, 8000)
     existing.actor_user_id = actor_user_id
@@ -342,7 +369,7 @@ async def _materialize_worktrace_summary(
 async def _ensure_asset_owner(
     db,
     *,
-    asset_id: int,
+    asset: AIAsset,
     user_id: int,
     owner_type: OwnerType,
     confidence: float,
@@ -350,26 +377,32 @@ async def _ensure_asset_owner(
     existing = (
         await db.execute(
             select(AssetOwnership).where(
-                AssetOwnership.asset_id == asset_id,
+                AssetOwnership.asset_id == asset.id,
                 AssetOwnership.user_id == user_id,
                 AssetOwnership.owner_type == owner_type,
             )
         )
     ).scalar_one_or_none()
     if existing is not None:
+        ensure_resource_namespace(
+            existing,
+            asset.namespace_id,
+            relationship="asset_ownership",
+        )
         existing.confidence = max(existing.confidence, confidence)
         return "updated"
     has_primary = (
         await db.execute(
             select(AssetOwnership.id).where(
-                AssetOwnership.asset_id == asset_id,
+                AssetOwnership.asset_id == asset.id,
                 AssetOwnership.is_primary.is_(True),
             )
         )
     ).scalar_one_or_none()
     db.add(
         AssetOwnership(
-            asset_id=asset_id,
+            namespace_id=asset.namespace_id,
+            asset_id=asset.id,
             user_id=user_id,
             owner_type=owner_type,
             confidence=confidence,

@@ -293,6 +293,11 @@ def _evidence_from_item(item: dict[str, Any], *, default_object_uri: str) -> Nor
     return NormalizedEvidence(
         summary=_string_or_none(item.get("summary") or item.get("message") or item.get("title")) or "DuckDock report evidence",
         source_type=_enum_value(EvidenceSourceType, item.get("source_type"), EvidenceSourceType.BACKUP_PACKAGE),
+        work_trace_external_session_id=_string_or_none(
+            item.get("work_trace_external_session_id")
+            or item.get("trace_external_session_id")
+            or item.get("external_session_id")
+        ),
         object_uri=_string_or_none(item.get("object_uri") or item.get("uri") or item.get("url")) or default_object_uri,
         sha256=_string_or_none(item.get("sha256") or item.get("content_hash")),
         confidence=float(item.get("confidence", 1.0)),

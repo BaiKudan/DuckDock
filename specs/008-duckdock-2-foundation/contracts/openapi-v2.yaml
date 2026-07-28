@@ -1,0 +1,949 @@
+openapi: 3.1.0
+jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
+info:
+  title: DuckDock Agent Execution API
+  version: 2.0.0-draft
+  summary: Reporter ingestion and governed AgentRun read contracts for DuckDock 2.0.
+  description: |
+    Foundation contract for metadata-only Agent Harness execution reporting.
+    Reporter writes are authenticated with scoped Reporter bearer tokens and are
+    idempotent. Namespace and Runtime identity are derived from the credential;
+    they are never accepted from the Reporter request body. Raw prompts,
+    completions, tool arguments, tool results, retrieved content, and hidden
+    chain-of-thought are outside this API contract.
+servers:
+  - url: /
+tags:
+  - name: Reporter Sessions
+    description: Reporter-authenticated Agent session lifecycle ingestion.
+  - name: Reporter Runs
+    description: Reporter-authenticated Agent run lifecycle ingestion.
+  - name: Agent Runs
+    description: User-authenticated governed AgentRun queries.
+paths:
+  /api/v2/reporter/sessions:
+    post:
+      tags:
+        - Reporter Sessions
+      summary: Start an Agent session
+      description: |
+        Creates or replays a metadata-only session start. Reusing an
+        Idempotency-Key with the same canonical request returns the original
+        result; reusing it with a different request returns 409.
+      operationId: startReporterSession
+      security:
+        - ReporterBearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionStartRequest'
+      responses:
+        '201':
+          description: Session created or idempotently replayed.
+          headers:
+            Location:
+              description: Canonical URL of the session resource.
+              schema:
+                type: string
+                format: uri-reference
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReporterSession'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /api/v2/reporter/sessions/{session_public_id}/complete:
+    post:
+      tags:
+        - Reporter Sessions
+      summary: Complete an Agent session
+      operationId: completeReporterSession
+      security:
+        - ReporterBearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SessionPublicId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionCompleteRequest'
+      responses:
+        '200':
+          description: Session completion recorded or idempotently replayed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReporterSession'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /api/v2/reporter/runs:
+    post:
+      tags:
+        - Reporter Runs
+      summary: Start an Agent run
+      description: |
+        Starts one trace-correlated run inside an existing Reporter session.
+        The Reporter token determines the Runtime and Namespace. Any optional
+        Session or Deployment reference must resolve inside that same scope.
+      operationId: startReporterRun
+      security:
+        - ReporterBearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunStartRequest'
+      responses:
+        '201':
+          description: Run created or idempotently replayed.
+          headers:
+            Location:
+              description: Canonical URL of the AgentRun resource.
+              schema:
+                type: string
+                format: uri-reference
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunStartResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /api/v2/reporter/runs/{run_public_id}/complete:
+    post:
+      tags:
+        - Reporter Runs
+      summary: Complete an Agent run with metadata-only lifecycle aggregates
+      operationId: completeReporterRun
+      security:
+        - ReporterBearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RunPublicId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunCompleteRequest'
+      responses:
+        '200':
+          description: Run completion recorded or idempotently replayed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentRun'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /api/v2/agent-runs:
+    get:
+      tags:
+        - Agent Runs
+      summary: List governed Agent runs
+      operationId: listAgentRuns
+      security:
+        - UserBearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/NamespaceId'
+        - $ref: '#/components/parameters/RuntimeInstanceFilter'
+        - $ref: '#/components/parameters/DeploymentPublicIdFilter'
+        - $ref: '#/components/parameters/RunStatusFilter'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: A page of AgentRun summaries visible to the caller.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentRunList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /api/v2/agent-runs/{run_public_id}:
+    get:
+      tags:
+        - Agent Runs
+      summary: Get one governed Agent run
+      operationId: getAgentRun
+      security:
+        - UserBearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RunPublicId'
+      responses:
+        '200':
+          description: AgentRun detail with metadata-only telemetry and evidence links.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentRun'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+components:
+  securitySchemes:
+    ReporterBearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: DuckDock Reporter Token
+      description: |
+        Scoped, rotatable Reporter credential bound to a Namespace and Runtime.
+        It cannot be used as a user JWT or to read arbitrary AgentRuns.
+    UserBearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: |
+        Caller-generated key retained with a canonical request hash. The same
+        key and body replay the original response; a different body returns 409.
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 200
+        pattern: '^[A-Za-z0-9._:-]+$'
+    SessionPublicId:
+      name: session_public_id
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 200
+    RunPublicId:
+      name: run_public_id
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 200
+    NamespaceId:
+      name: namespace_id
+      in: query
+      required: true
+      schema:
+        type: string
+        minLength: 1
+    RuntimeInstanceFilter:
+      name: runtime_instance_id
+      in: query
+      required: false
+      schema:
+        type: string
+        minLength: 1
+    DeploymentPublicIdFilter:
+      name: deployment_public_id
+      in: query
+      required: false
+      schema:
+        type: string
+        minLength: 1
+    RunStatusFilter:
+      name: status
+      in: query
+      required: false
+      schema:
+        $ref: '#/components/schemas/RunStatus'
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 2000
+
+  responses:
+    Unauthorized:
+      description: Missing, invalid, expired, or incorrectly scoped bearer token.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    NotFound:
+      description: Resource does not exist or is not visible in the caller scope.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Conflict:
+      description: Invalid lifecycle transition or Idempotency-Key payload conflict.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    ValidationError:
+      description: Request violates the v2 lifecycle, correlation, or metadata-only contract.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+
+  schemas:
+    AgentPackageV2:
+      $ref: ./agent-package-v2.schema.json
+    TelemetryEnvelopeV1:
+      $ref: ./telemetry-envelope-v1.schema.json
+    EvaluationResultV1:
+      $ref: ./evaluation-result-v1.schema.json
+    ReleaseManifestV1:
+      $ref: ./release-manifest-v1.schema.json
+
+    MetadataOnlyContentPolicy:
+      type: string
+      const: metadata_only
+      description: |
+        Only identifiers, timing, counts, status, model/tool names, token/cost
+        summaries, and governed asset correlations may be submitted.
+
+    MetadataOnlyCaptureMode:
+      type: string
+      const: metadata_only
+      description: |
+        The Reporter control envelope carries only allowlisted identifiers,
+        lifecycle timestamps, counters, classified errors, and trace references.
+
+    MetadataOnlyTelemetryEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/TelemetryEnvelopeV1'
+        - type: object
+          required:
+            - content_policy
+          properties:
+            content_policy:
+              $ref: '#/components/schemas/MetadataOnlyContentPolicy'
+
+    SessionStatus:
+      type: string
+      enum:
+        - OPEN
+        - ENDED
+        - ABANDONED
+
+    RunStatus:
+      type: string
+      enum:
+        - STARTED
+        - SUCCEEDED
+        - FAILED
+        - CANCELLED
+        - TIMED_OUT
+
+    TrustLevel:
+      type: string
+      enum:
+        - CHANNEL_AUTHENTICATED
+        - PRODUCER_ATTESTED
+        - UNVERIFIED
+
+    TrustSource:
+      type: string
+      enum:
+        - REPORTER
+        - COLLECTOR
+        - IMPORT
+        - ADMIN
+
+    TraceId:
+      type: string
+      pattern: '^[0-9a-f]{32}$'
+
+    SpanId:
+      type: string
+      pattern: '^[0-9a-f]{16}$'
+
+    MetadataAttributes:
+      type: object
+      maxProperties: 32
+      propertyNames:
+        type: string
+        enum:
+          - deployment.environment
+          - deployment.region
+          - harness.name
+          - harness.version
+          - service.name
+          - service.version
+          - operation.name
+          - error.category
+          - agent.mode
+      additionalProperties:
+        oneOf:
+          - type: string
+            maxLength: 2000
+          - type: number
+          - type: boolean
+          - type: array
+            maxItems: 100
+            items:
+              oneOf:
+                - type: string
+                  maxLength: 500
+                - type: number
+                - type: boolean
+
+    SessionStartRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - external_session_id
+        - started_at
+        - content_capture_mode
+      properties:
+        external_session_id:
+          type: string
+          minLength: 1
+          maxLength: 256
+        deployment_public_id:
+          type: string
+          minLength: 1
+        work_trace_id:
+          type: string
+          minLength: 1
+        started_at:
+          type: string
+          format: date-time
+        sensitivity:
+          type: string
+          enum:
+            - RESTRICTED
+            - CONFIDENTIAL
+            - INTERNAL
+        content_capture_mode:
+          $ref: '#/components/schemas/MetadataOnlyCaptureMode'
+        metadata:
+          $ref: '#/components/schemas/MetadataAttributes'
+
+    SessionCompleteRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - ended_at
+        - status
+      properties:
+        ended_at:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum:
+            - ENDED
+            - ABANDONED
+        run_count:
+          type: integer
+          minimum: 0
+        error_count:
+          type: integer
+          minimum: 0
+
+    ReporterSession:
+      type: object
+      additionalProperties: false
+      required:
+        - session_public_id
+        - external_session_id
+        - namespace_id
+        - runtime_instance_id
+        - status
+        - started_at
+        - content_capture_mode
+      properties:
+        session_public_id:
+          type: string
+          minLength: 1
+        external_session_id:
+          type: string
+          minLength: 1
+        namespace_id:
+          type: string
+          minLength: 1
+        agent_asset_id:
+          type: string
+          minLength: 1
+        runtime_instance_id:
+          type: string
+          minLength: 1
+        deployment_public_id:
+          type: string
+          minLength: 1
+        status:
+          $ref: '#/components/schemas/SessionStatus'
+        started_at:
+          type: string
+          format: date-time
+        ended_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        content_capture_mode:
+          $ref: '#/components/schemas/MetadataOnlyCaptureMode'
+
+    RunStartRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - external_run_id
+        - started_at
+        - source_schema
+        - source_schema_version
+        - content_capture_mode
+      properties:
+        external_run_id:
+          type: string
+          minLength: 1
+          maxLength: 256
+        session_public_id:
+          type: string
+          minLength: 1
+        deployment_public_id:
+          type: string
+          minLength: 1
+        otel_trace_id:
+          $ref: '#/components/schemas/TraceId'
+        root_span_id:
+          $ref: '#/components/schemas/SpanId'
+        attempt:
+          type: integer
+          minimum: 1
+          default: 1
+        source_schema:
+          type: string
+          minLength: 1
+          maxLength: 100
+        source_schema_version:
+          type: string
+          minLength: 1
+          maxLength: 50
+        started_at:
+          type: string
+          format: date-time
+        content_capture_mode:
+          $ref: '#/components/schemas/MetadataOnlyCaptureMode'
+        metadata:
+          $ref: '#/components/schemas/MetadataAttributes'
+
+    RunStartResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - run_public_id
+        - external_run_id
+        - namespace_id
+        - runtime_instance_id
+        - status
+        - trust_level
+        - trust_source
+        - source_schema
+        - source_schema_version
+        - started_at
+        - content_capture_mode
+      properties:
+        run_public_id:
+          type: string
+          minLength: 1
+        external_run_id:
+          type: string
+          minLength: 1
+        namespace_id:
+          type: string
+          minLength: 1
+        runtime_instance_id:
+          type: string
+          minLength: 1
+        session_public_id:
+          type: string
+          minLength: 1
+        deployment_public_id:
+          type: string
+          minLength: 1
+        status:
+          type: string
+          const: STARTED
+        trust_level:
+          $ref: '#/components/schemas/TrustLevel'
+        trust_source:
+          $ref: '#/components/schemas/TrustSource'
+        source_schema:
+          type: string
+          minLength: 1
+        source_schema_version:
+          type: string
+          minLength: 1
+        otel_trace_id:
+          $ref: '#/components/schemas/TraceId'
+        started_at:
+          type: string
+          format: date-time
+        content_capture_mode:
+          $ref: '#/components/schemas/MetadataOnlyCaptureMode'
+
+    RunCompleteRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - ended_at
+        - status
+      properties:
+        ended_at:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum:
+            - SUCCEEDED
+            - FAILED
+            - CANCELLED
+            - TIMED_OUT
+        otel_trace_id:
+          $ref: '#/components/schemas/TraceId'
+        root_span_id:
+          $ref: '#/components/schemas/SpanId'
+        duration_ms:
+          type: integer
+          minimum: 0
+        step_count:
+          type: integer
+          minimum: 0
+        model_call_count:
+          type: integer
+          minimum: 0
+        tool_call_count:
+          type: integer
+          minimum: 0
+        input_token_count:
+          type: integer
+          minimum: 0
+        output_token_count:
+          type: integer
+          minimum: 0
+        error_type:
+          type: string
+          minLength: 1
+          maxLength: 100
+        metadata:
+          $ref: '#/components/schemas/MetadataAttributes'
+
+    AgentRunSummary:
+      type: object
+      additionalProperties: false
+      required:
+        - run_public_id
+        - namespace_id
+        - runtime_instance_id
+        - external_run_id
+        - status
+        - trust_level
+        - trust_source
+        - source_schema
+        - source_schema_version
+        - started_at
+        - content_capture_mode
+      properties:
+        run_public_id:
+          type: string
+          minLength: 1
+        external_run_id:
+          type: string
+          minLength: 1
+        namespace_id:
+          type: string
+          minLength: 1
+        runtime_instance_id:
+          type: string
+          minLength: 1
+        session_public_id:
+          type: string
+          minLength: 1
+        deployment_public_id:
+          type: string
+          minLength: 1
+        work_trace_id:
+          type: string
+          minLength: 1
+        status:
+          $ref: '#/components/schemas/RunStatus'
+        trust_level:
+          $ref: '#/components/schemas/TrustLevel'
+        trust_source:
+          $ref: '#/components/schemas/TrustSource'
+        source_schema:
+          type: string
+          minLength: 1
+        source_schema_version:
+          type: string
+          minLength: 1
+        normalizer_version:
+          type: string
+          minLength: 1
+        otel_trace_id:
+          $ref: '#/components/schemas/TraceId'
+        root_span_id:
+          $ref: '#/components/schemas/SpanId'
+        started_at:
+          type: string
+          format: date-time
+        ended_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        duration_ms:
+          type: integer
+          minimum: 0
+        error_count:
+          type: integer
+          minimum: 0
+        step_count:
+          type: integer
+          minimum: 0
+        model_call_count:
+          type: integer
+          minimum: 0
+        tool_call_count:
+          type: integer
+          minimum: 0
+        input_token_count:
+          type: integer
+          minimum: 0
+        output_token_count:
+          type: integer
+          minimum: 0
+        error_type:
+          type: string
+          minLength: 1
+          maxLength: 100
+        content_capture_mode:
+          $ref: '#/components/schemas/MetadataOnlyCaptureMode'
+
+    AgentRun:
+      type: object
+      additionalProperties: false
+      required:
+        - run_public_id
+        - namespace_id
+        - runtime_instance_id
+        - external_run_id
+        - status
+        - trust_level
+        - trust_source
+        - source_schema
+        - source_schema_version
+        - started_at
+        - content_capture_mode
+      properties:
+        run_public_id:
+          type: string
+          minLength: 1
+        external_run_id:
+          type: string
+          minLength: 1
+        namespace_id:
+          type: string
+          minLength: 1
+        runtime_instance_id:
+          type: string
+          minLength: 1
+        session_public_id:
+          type: string
+          minLength: 1
+        deployment_public_id:
+          type: string
+          minLength: 1
+        work_trace_id:
+          type: string
+          minLength: 1
+        status:
+          $ref: '#/components/schemas/RunStatus'
+        trust_level:
+          $ref: '#/components/schemas/TrustLevel'
+        trust_source:
+          $ref: '#/components/schemas/TrustSource'
+        source_schema:
+          type: string
+          minLength: 1
+        source_schema_version:
+          type: string
+          minLength: 1
+        normalizer_version:
+          type: string
+          minLength: 1
+        otel_trace_id:
+          $ref: '#/components/schemas/TraceId'
+        root_span_id:
+          $ref: '#/components/schemas/SpanId'
+        started_at:
+          type: string
+          format: date-time
+        ended_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        duration_ms:
+          type: integer
+          minimum: 0
+        step_count:
+          type: integer
+          minimum: 0
+        model_call_count:
+          type: integer
+          minimum: 0
+        tool_call_count:
+          type: integer
+          minimum: 0
+        input_token_count:
+          type: integer
+          minimum: 0
+        output_token_count:
+          type: integer
+          minimum: 0
+        error_type:
+          type: string
+          minLength: 1
+          maxLength: 100
+        content_capture_mode:
+          $ref: '#/components/schemas/MetadataOnlyCaptureMode'
+        telemetry_summary:
+          $ref: '#/components/schemas/MetadataOnlyTelemetryEnvelope'
+
+    AgentRunList:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentRunSummary'
+        next_cursor:
+          type:
+            - string
+            - 'null'
+
+    Problem:
+      type: object
+      additionalProperties: false
+      required:
+        - status
+        - code
+        - detail
+        - request_id
+        - retryable
+      properties:
+        type:
+          type: string
+          format: uri-reference
+          default: about:blank
+        title:
+          type: string
+          maxLength: 200
+        status:
+          type: integer
+          minimum: 400
+          maximum: 599
+        code:
+          type: string
+          minLength: 1
+          maxLength: 100
+        detail:
+          type: string
+          minLength: 1
+          maxLength: 4000
+        request_id:
+          type: string
+          minLength: 1
+        retryable:
+          type: boolean
+        details:
+          type: object
+          maxProperties: 6
+          propertyNames:
+            type: string
+            enum:
+              - operation
+              - field
+              - limit
+              - retry_after_seconds
+              - dependency
+              - conflict_type
+          additionalProperties:
+            oneOf:
+              - type: string
+                maxLength: 500
+              - type: number
+              - type: boolean
+        errors:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required:
+              - location
+              - message
+            properties:
+              location:
+                type: string
+                minLength: 1
+              message:
+                type: string
+                minLength: 1

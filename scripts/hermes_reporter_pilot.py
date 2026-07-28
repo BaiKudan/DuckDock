@@ -408,6 +408,8 @@ def enroll(args: argparse.Namespace) -> dict[str, Any]:
     password = args.password or os.environ.get("DUCKDOCK_PASSWORD")
     if not username or not password:
         raise PilotError("DuckDock username/password are required for enroll")
+    if args.namespace_id is None:
+        raise PilotError("DuckDock namespace id is required for enroll")
     token_response = request_json(
         "POST",
         f"{api_base}/auth/login",
@@ -416,6 +418,7 @@ def enroll(args: argparse.Namespace) -> dict[str, Any]:
     access_token = token_response["access_token"]
     hermes_metadata = hermes_public_metadata(args.hermes_base)
     body = {
+        "namespace_id": args.namespace_id,
         "provider": "custom",
         "runtime_name": args.runtime_name,
         "device_id": args.device_id,
@@ -440,6 +443,7 @@ def enroll(args: argparse.Namespace) -> dict[str, Any]:
         "api_base": api_base,
         "hermes_base": args.hermes_base,
         "runtime_id": runtime["id"],
+        "namespace_id": runtime["namespace_id"],
         "runtime_name": runtime["name"],
         "credential_id": credential["id"],
         "token_prefix": credential["token_prefix"],
@@ -717,6 +721,12 @@ def build_parser() -> argparse.ArgumentParser:
     enroll_parser.add_argument("--username", default=os.environ.get("DUCKDOCK_USERNAME"))
     enroll_parser.add_argument("--password", default=os.environ.get("DUCKDOCK_PASSWORD"))
     enroll_parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    enroll_parser.add_argument(
+        "--namespace-id",
+        type=int,
+        default=os.environ.get("DUCKDOCK_NAMESPACE_ID"),
+        help="Required target Namespace id (or DUCKDOCK_NAMESPACE_ID)",
+    )
     enroll_parser.add_argument("--runtime-name", default="Hermes Reporter")
     enroll_parser.add_argument("--device-id", default="hermes-reporter")
     enroll_parser.add_argument("--schedule", default=DEFAULT_SCHEDULE)

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
@@ -47,6 +48,7 @@ from app.models.control_plane import (
     TraceType,
     WorkTrace,
 )
+from app.models.namespace import Namespace, NamespaceMember, NamespaceRole
 from app.models.user import SystemRole, User
 from app.schemas.control_plane import (
     ApprovalDecision,
@@ -83,6 +85,13 @@ async def _make_user(session, *, username, system_role=SystemRole.USER):
     return user
 
 
+async def _make_namespace(session, owner: User) -> Namespace:
+    namespace = Namespace(name=f"receipt-{uuid4().hex[:16]}", owner_id=owner.id)
+    session.add(namespace)
+    await session.flush()
+    return namespace
+
+
 async def _approved_case_with_action(
     session,
     admin,
@@ -96,8 +105,19 @@ async def _approved_case_with_action(
 ):
     """造一条已审批、已 execute 的交接链,返回 (case, action)。"""
     approver = await _make_user(session, username=f"approver-{suffix}")
+    namespace = await _make_namespace(session, admin)
+    if receiver_user_id is not None:
+        session.add(
+            NamespaceMember(
+                namespace_id=namespace.id,
+                user_id=receiver_user_id,
+                role=NamespaceRole.DEVELOPER,
+            )
+        )
+        await session.flush()
     case = await create_handover(
         HandoverCaseCreate(
+            namespace_id=namespace.id,
             case_type=HandoverCaseType.EMPLOYEE_OFFBOARDING,
             title=f"交接-{suffix}",
             receiver_user_id=receiver_user_id,
@@ -106,6 +126,7 @@ async def _approved_case_with_action(
         admin,
     )
     asset = AIAsset(
+        namespace_id=namespace.id,
         asset_type=AssetType.SKILL,
         name=f"asset-{suffix}",
         source_provider=RuntimeProvider.OPENCLAW,
@@ -116,6 +137,7 @@ async def _approved_case_with_action(
     if trace_sensitivity is not None:
         session.add(
             WorkTrace(
+                namespace_id=namespace.id,
                 asset_id=asset.id,
                 title=f"trace-{suffix}",
                 trace_type=TraceType.SESSION,
@@ -126,6 +148,7 @@ async def _approved_case_with_action(
     evidence_id = None
     if with_item_evidence:
         evidence = EvidenceItem(
+            namespace_id=namespace.id,
             source_type=EvidenceSourceType.API,
             source_provider=RuntimeProvider.OPENCLAW,
             summary=f"case evidence {suffix}",
@@ -293,10 +316,12 @@ async def test_upload_execution_evidence_allows_sensitive_done_receipt(async_ses
 
 async def test_upload_execution_evidence_requires_executing_case(async_session, monkeypatch):
     admin = await _make_user(async_session, username="admin-er-upload-state", system_role=SystemRole.ADMIN)
+    namespace = await _make_namespace(async_session, admin)
     store = _FakeEvidenceStore()
     monkeypatch.setattr(artifact_service, "put_object", store.put_object, raising=False)
     case = await create_handover(
         HandoverCaseCreate(
+            namespace_id=namespace.id,
             case_type=HandoverCaseType.EMPLOYEE_OFFBOARDING,
             title="draft evidence upload",
         ),
@@ -557,15 +582,22 @@ async def test_invalid_receipt_result_rejected(async_session):
 async def test_execute_with_auto_mode_returns_501_without_creating_actions(async_session):
     admin = await _make_user(async_session, username="admin-er5", system_role=SystemRole.ADMIN)
     approver = await _make_user(async_session, username="approver-er5")
+    namespace = await _make_namespace(async_session, admin)
     case = await create_handover(
         HandoverCaseCreate(
+            namespace_id=namespace.id,
             case_type=HandoverCaseType.EMPLOYEE_OFFBOARDING,
             title="handover-er5",
         ),
         async_session,
         admin,
     )
-    asset = AIAsset(asset_type=AssetType.SKILL, name="asset-er5", source_provider=RuntimeProvider.OPENCLAW)
+    asset = AIAsset(
+        namespace_id=namespace.id,
+        asset_type=AssetType.SKILL,
+        name="asset-er5",
+        source_provider=RuntimeProvider.OPENCLAW,
+    )
     async_session.add(asset)
     await async_session.flush()
     await create_handover_item(

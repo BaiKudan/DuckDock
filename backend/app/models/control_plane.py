@@ -306,6 +306,11 @@ class RuntimeInstance(Base):
     __tablename__ = "runtime_instances"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    namespace_id: Mapped[int | None] = mapped_column(
+        ForeignKey("namespaces.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
     provider: Mapped[RuntimeProvider] = mapped_column(Enum(RuntimeProvider), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     base_url: Mapped[str | None] = mapped_column(String(512))
@@ -593,6 +598,11 @@ class AIAsset(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    namespace_id: Mapped[int | None] = mapped_column(
+        ForeignKey("namespaces.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
     asset_type: Mapped[AssetType] = mapped_column(Enum(AssetType), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     description: Mapped[str | None] = mapped_column(Text)
@@ -741,6 +751,11 @@ class RuntimeBinding(Base):
     __tablename__ = "runtime_bindings"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    namespace_id: Mapped[int | None] = mapped_column(
+        ForeignKey("namespaces.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
     asset_id: Mapped[int] = mapped_column(ForeignKey("ai_assets.id", ondelete="CASCADE"), nullable=False, index=True)
     runtime_id: Mapped[int] = mapped_column(ForeignKey("runtime_instances.id", ondelete="CASCADE"), nullable=False, index=True)
     external_ref: Mapped[str | None] = mapped_column(String(255))
@@ -755,6 +770,11 @@ class WorkTrace(Base):
     __tablename__ = "work_traces"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    namespace_id: Mapped[int | None] = mapped_column(
+        ForeignKey("namespaces.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
     runtime_id: Mapped[int | None] = mapped_column(ForeignKey("runtime_instances.id", ondelete="SET NULL"), index=True)
     asset_id: Mapped[int | None] = mapped_column(ForeignKey("ai_assets.id", ondelete="SET NULL"), index=True)
     external_session_id: Mapped[str | None] = mapped_column(String(255), index=True)
@@ -788,6 +808,16 @@ class EvidenceItem(Base):
     __tablename__ = "evidence_items"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    namespace_id: Mapped[int | None] = mapped_column(
+        ForeignKey("namespaces.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    work_trace_id: Mapped[int | None] = mapped_column(
+        ForeignKey("work_traces.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     source_type: Mapped[EvidenceSourceType] = mapped_column(Enum(EvidenceSourceType), nullable=False, index=True)
     source_provider: Mapped[RuntimeProvider] = mapped_column(Enum(RuntimeProvider), nullable=False, index=True)
     collection_job_id: Mapped[int | None] = mapped_column(ForeignKey("collection_jobs.id", ondelete="SET NULL"), index=True)

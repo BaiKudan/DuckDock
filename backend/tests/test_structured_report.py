@@ -22,6 +22,7 @@ from app.models.control_plane import (
     RuntimeProvider,
     WorkTrace,
 )
+from app.models.namespace import Namespace, NamespaceMember, NamespaceRole
 from app.models.user import SystemRole, User
 from app.schemas.control_plane import (
     ReporterEnrollmentCreate,
@@ -48,8 +49,20 @@ async def _user(session) -> User:
 
 async def _enrolled_reporter(session):
     user = await _user(session)
+    namespace = Namespace(name="structured-report", owner_id=user.id)
+    session.add(namespace)
+    await session.flush()
+    session.add(
+        NamespaceMember(
+            namespace_id=namespace.id,
+            user_id=user.id,
+            role=NamespaceRole.ADMIN,
+        )
+    )
+    await session.flush()
     enrolled = await enroll_reporter_endpoint(
         ReporterEnrollmentCreate(
+            namespace_id=namespace.id,
             runtime_name="Employee Hermes",
             device_id="test-workstation",
             agent_kind="hermes",

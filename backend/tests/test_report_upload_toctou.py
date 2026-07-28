@@ -13,6 +13,7 @@ import io
 import json
 import zipfile
 from datetime import datetime, timezone
+from uuid import uuid4
 
 import pytest
 
@@ -24,6 +25,8 @@ from app.models.control_plane import (
     RuntimeInstance,
     RuntimeProvider,
 )
+from app.models.namespace import Namespace
+from app.models.user import SystemRole, User
 
 _AWARE = datetime(2030, 1, 1, tzinfo=timezone.utc)
 
@@ -57,7 +60,24 @@ def _mock_minio(monkeypatch):
 
 
 async def _runtime(session) -> RuntimeInstance:
-    rt = RuntimeInstance(provider=RuntimeProvider.OPENCLAW, name="rt", deploy_type=RuntimeDeployType.SAAS)
+    suffix = uuid4().hex[:8]
+    owner = User(
+        username=f"report-toctou-{suffix}",
+        email=f"report-toctou-{suffix}@example.test",
+        hashed_password="unused",
+        system_role=SystemRole.USER,
+    )
+    session.add(owner)
+    await session.flush()
+    namespace = Namespace(name=f"report-toctou-{suffix}", owner_id=owner.id)
+    session.add(namespace)
+    await session.flush()
+    rt = RuntimeInstance(
+        namespace_id=namespace.id,
+        provider=RuntimeProvider.OPENCLAW,
+        name="rt",
+        deploy_type=RuntimeDeployType.SAAS,
+    )
     session.add(rt)
     await session.flush()
     return rt

@@ -26,6 +26,8 @@ from app.models.control_plane import (
     TraceType,
     WorkTrace,
 )
+from app.models.namespace import Namespace
+from app.models.user import User
 from app.services.adapter_collection_service import persist_collection_result
 from app.services.adapters.contracts import (
     AdapterCapabilities,
@@ -43,7 +45,18 @@ def _make_runtime() -> RuntimeInstance:
 
 
 async def _seed_runtime_job(session) -> tuple[RuntimeInstance, CollectionJob]:
+    owner = User(
+        username="adapter-dedup-owner",
+        email="adapter-dedup@example.test",
+        hashed_password="unused",
+    )
+    session.add(owner)
+    await session.flush()
+    namespace = Namespace(name="adapter-dedup", owner_id=owner.id)
+    session.add(namespace)
+    await session.flush()
     runtime = _make_runtime()
+    runtime.namespace_id = namespace.id
     session.add(runtime)
     await session.flush()
     job = CollectionJob(

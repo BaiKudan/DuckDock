@@ -7,6 +7,8 @@ import { actionRequiresEvidence } from "../utils/handoverEvidence";
 
 const evidenceBase: EvidenceItem = {
   id: 7,
+  namespace_id: 1,
+  work_trace_id: null,
   source_type: "user_confirm",
   source_provider: "custom",
   collection_job_id: null,
@@ -52,6 +54,7 @@ const itemBase: HandoverItem = {
 
 const assetBase: AIAsset = {
   id: 5,
+  namespace_id: 1,
   asset_type: "skill",
   name: "Customer skill",
   description: null,

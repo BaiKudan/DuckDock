@@ -1,0 +1,213 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://duckdock.dev/schemas/agent-package-v2.schema.json",
+  "title": "DuckDock Agent Package v2",
+  "description": "Immutable, deployable package metadata for an agent and its governed assets.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "package_id",
+    "package_version",
+    "namespace_id",
+    "agent",
+    "runtime",
+    "artifacts",
+    "provenance",
+    "telemetry",
+    "evaluation_policy_id"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "2.0"
+    },
+    "package_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "package_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$"
+    },
+    "namespace_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["asset_id", "name"],
+      "properties": {
+        "asset_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 2000
+        }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["harness", "entrypoint", "minimum_harness_version", "capabilities"],
+      "properties": {
+        "harness": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "entrypoint": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "minimum_harness_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "capabilities": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/artifact"
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_repository", "source_revision", "built_at", "builder_id", "build_id"],
+      "properties": {
+        "source_repository": {
+          "type": "string",
+          "format": "uri"
+        },
+        "source_revision": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{7,64}$"
+        },
+        "built_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "builder_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "build_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "telemetry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "content_policy", "required_attributes"],
+      "properties": {
+        "schema_version": {
+          "const": "1.0"
+        },
+        "content_policy": {
+          "$ref": "#/$defs/contentPolicy"
+        },
+        "required_attributes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "duckdock.namespace_id",
+              "duckdock.agent_asset_id",
+              "duckdock.runtime_instance_id",
+              "duckdock.release_id",
+              "duckdock.skill_version_id",
+              "duckdock.prompt_version_id",
+              "duckdock.deployment_revision",
+              "duckdock.component_digests"
+            ]
+          }
+        }
+      }
+    },
+    "evaluation_policy_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "annotations": {
+      "type": "object",
+      "maxProperties": 6,
+      "propertyNames": {
+        "enum": [
+          "owner",
+          "data_classification",
+          "risk_tier",
+          "cost_center",
+          "repository",
+          "documentation_url"
+        ]
+      },
+      "additionalProperties": {
+        "type": "string",
+        "maxLength": 1000
+      }
+    }
+  },
+  "$defs": {
+    "contentPolicy": {
+      "type": "string",
+      "enum": ["disabled", "metadata_only", "sampled_content", "full_content"]
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "asset_id", "version_id", "uri", "sha256", "media_type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["skill", "prompt", "tool", "config", "memory_schema", "runtime_bundle"]
+        },
+        "asset_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "uri": {
+          "type": "string",
+          "format": "uri"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "media_type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      }
+    }
+  }
+}

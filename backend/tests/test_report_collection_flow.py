@@ -30,6 +30,8 @@ from app.models.control_plane import (
     RuntimeProvider,
     WorkTrace,
 )
+from app.models.namespace import Namespace
+from app.models.user import User
 from app.services.adapter_collection_service import persist_collection_result
 from app.services.report_pack_service import ReportPackError, normalize_duckdock_report_pack
 
@@ -91,7 +93,16 @@ def _sample_pack(report_id: str = "rpt_test") -> bytes:
         )
         zf.writestr(
             "inventory/artifacts.json",
-            json.dumps([{"id": "ev-1", "summary": "redaction log", "sha256": "a" * 64}]),
+            json.dumps(
+                [
+                    {
+                        "id": "ev-1",
+                        "summary": "redaction log",
+                        "sha256": "a" * 64,
+                        "work_trace_external_session_id": "session-1",
+                    }
+                ]
+            ),
         )
         zf.writestr(
             "summaries/weekly.md",
@@ -109,7 +120,18 @@ def _make_runtime() -> RuntimeInstance:
 
 
 async def _seed_runtime_job(session) -> tuple[RuntimeInstance, CollectionJob]:
+    owner = User(
+        username="report-collection-owner",
+        email="report-collection@example.test",
+        hashed_password="unused",
+    )
+    session.add(owner)
+    await session.flush()
+    namespace = Namespace(name="report-collection", owner_id=owner.id)
+    session.add(namespace)
+    await session.flush()
     runtime = _make_runtime()
+    runtime.namespace_id = namespace.id
     session.add(runtime)
     await session.flush()
     job = CollectionJob(
@@ -142,6 +164,7 @@ async def test_normalize_parses_pack_into_collection_result():
     assert [t.external_session_id for t in result.work_traces] == ["session-1"]
     # 证据 = artifacts.json 行 + summaries/*.md
     assert len(result.evidence) >= 2
+    assert result.evidence[0].work_trace_external_session_id == "session-1"
     # 工作历程关联回资产与主体的 external_id(落库时解析成内部 id)
     trace = result.work_traces[0]
     assert trace.asset_external_id == "skill/upload-check"
@@ -169,6 +192,13 @@ async def test_persist_collection_result_writes_rows_and_counts(async_session):
     trace = (await async_session.execute(select(WorkTrace))).scalar_one()
     assert trace.asset_id == assets[0].id
     assert trace.external_session_id == "session-1"
+    linked_evidence = (
+        await async_session.execute(
+            select(EvidenceItem).where(EvidenceItem.work_trace_id == trace.id)
+        )
+    ).scalars().all()
+    assert len(linked_evidence) == 1
+    assert linked_evidence[0].namespace_id == runtime.namespace_id
 
     # job.summary_json 记录归一化计数(可追溯,原则 IV)
     assert job.summary_json["counts"]["assets"] == 1

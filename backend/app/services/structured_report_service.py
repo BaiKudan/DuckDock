@@ -35,6 +35,12 @@ from app.schemas.control_plane import (
     WorkTraceOut,
 )
 from app.services.report_upload_service import ReporterAuthContext
+from app.services.tenant_write_service import (
+    build_runtime_binding,
+    build_work_trace,
+    ensure_resource_namespace,
+    require_active_namespace,
+)
 
 
 STRUCTURED_REPORT_SCOPE = "report.structured"
@@ -49,6 +55,8 @@ async def ingest_structured_report(
     if body.runtime_id != reporter.runtime.id:
         raise HTTPException(status_code=403, detail="Reporter credential cannot submit for this runtime")
     _require_structured_scope(reporter)
+    namespace = await require_active_namespace(db, reporter.runtime.namespace_id)
+    ensure_resource_namespace(reporter.runtime, namespace.id, relationship="runtime")
 
     actor_user_id = await _reporter_user_id(db, reporter)
     external_session_id = _external_session_id(runtime=reporter.runtime, body=body)
@@ -61,6 +69,7 @@ async def ingest_structured_report(
         )
     ).scalar_one_or_none()
     if existing is not None:
+        ensure_resource_namespace(existing, namespace.id, relationship="work_trace")
         return await _deduped_response(db, existing)
 
     report_id = f"srpt_{datetime.now(timezone.utc):%Y%m%d%H%M%S}_{uuid4().hex[:12]}"
@@ -97,9 +106,11 @@ async def ingest_structured_report(
         asset = await _upsert_asset(db, runtime=reporter.runtime, actor_user_id=actor_user_id, job=job, item=item)
         assets.append(asset)
 
-    trace = WorkTrace(
-        runtime_id=reporter.runtime.id,
-        asset_id=assets[0].id if len(assets) == 1 else None,
+    linked_asset = assets[0] if len(assets) == 1 else None
+    trace = build_work_trace(
+        namespace_id=namespace.id,
+        runtime=reporter.runtime,
+        asset=linked_asset,
         external_session_id=external_session_id,
         actor_user_id=actor_user_id,
         title=body.title,
@@ -273,6 +284,7 @@ async def _upsert_asset(
     now = datetime.now(timezone.utc)
     if row is None:
         row = AIAsset(
+            namespace_id=runtime.namespace_id,
             asset_type=item.asset_type,
             name=item.name,
             source_provider=runtime.provider,
@@ -281,6 +293,12 @@ async def _upsert_asset(
             first_seen_at=now,
         )
         db.add(row)
+    else:
+        ensure_resource_namespace(
+            row,
+            runtime.namespace_id,
+            relationship="asset",
+        )
     row.asset_type = item.asset_type
     row.name = item.name
     row.description = item.description
@@ -312,9 +330,10 @@ async def _ensure_runtime_binding(db, *, runtime: RuntimeInstance, asset: AIAsse
     ).scalar_one_or_none()
     if existing is None:
         db.add(
-            RuntimeBinding(
-                runtime_id=runtime.id,
-                asset_id=asset.id,
+            build_runtime_binding(
+                namespace_id=runtime.namespace_id,
+                runtime=runtime,
+                asset=asset,
                 external_ref=external_ref,
                 environment="structured_report",
                 usage_status="active",
@@ -322,6 +341,12 @@ async def _ensure_runtime_binding(db, *, runtime: RuntimeInstance, asset: AIAsse
             )
         )
     else:
+        ensure_resource_namespace(
+            existing,
+            runtime.namespace_id,
+            relationship="runtime_binding",
+        )
+        ensure_resource_namespace(asset, runtime.namespace_id, relationship="asset")
         existing.usage_status = "active"
         existing.last_used_at = datetime.now(timezone.utc)
 
@@ -338,6 +363,7 @@ async def _ensure_asset_ownership(db, *, asset: AIAsset, user_id: int) -> None:
     if existing is None:
         db.add(
             AssetOwnership(
+                namespace_id=asset.namespace_id,
                 asset_id=asset.id,
                 user_id=user_id,
                 owner_type=OwnerType.CREATOR,
@@ -346,6 +372,11 @@ async def _ensure_asset_ownership(db, *, asset: AIAsset, user_id: int) -> None:
             )
         )
     else:
+        ensure_resource_namespace(
+            existing,
+            asset.namespace_id,
+            relationship="asset_ownership",
+        )
         existing.confidence = max(float(existing.confidence or 0), 0.8)
 
 

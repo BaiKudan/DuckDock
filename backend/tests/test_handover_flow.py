@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
@@ -55,6 +56,7 @@ from app.schemas.control_plane import (
     HandoverVerifyRequest,
 )
 from app.models.control_plane import ApprovalType
+from app.models.namespace import Namespace
 
 
 async def _make_user(session, *, username, system_role=SystemRole.USER):
@@ -70,15 +72,28 @@ async def _make_user(session, *, username, system_role=SystemRole.USER):
 
 
 async def _seed_asset(session, *, name="Reporter Skill"):
-    asset = AIAsset(asset_type=AssetType.SKILL, name=name, source_provider=RuntimeProvider.OPENCLAW)
+    asset = AIAsset(
+        namespace_id=session.info["handover_namespace_id"],
+        asset_type=AssetType.SKILL,
+        name=name,
+        source_provider=RuntimeProvider.OPENCLAW,
+    )
     session.add(asset)
     await session.flush()
     return asset
 
 
 async def _make_case(session, admin, *, subject_user_id=None, receiver_user_id=None):
+    namespace = Namespace(
+        name=f"handover-{uuid4().hex[:16]}",
+        owner_id=admin.id,
+    )
+    session.add(namespace)
+    await session.flush()
+    session.info["handover_namespace_id"] = namespace.id
     return await create_handover(
         HandoverCaseCreate(
+            namespace_id=namespace.id,
             case_type=HandoverCaseType.EMPLOYEE_OFFBOARDING,
             title="张三离职交接",
             subject_user_id=subject_user_id,
@@ -345,7 +360,6 @@ async def test_submit_rejects_case_with_no_items(async_session):
 async def test_execute_rejects_selected_item_ids_from_other_case(async_session):
     admin = await _make_user(async_session, username="admin-h-other", system_role=SystemRole.ADMIN)
     approver = await _make_user(async_session, username="approver-h-other")
-    asset = await _seed_asset(async_session, name="owned-by-other-case")
 
     case = await _make_case(async_session, admin)
     own_asset = await _seed_asset(async_session, name="owned-by-target-case")
@@ -366,6 +380,7 @@ async def test_execute_rejects_selected_item_ids_from_other_case(async_session):
     )
 
     other_case = await _make_case(async_session, admin)
+    asset = await _seed_asset(async_session, name="owned-by-other-case")
     other_item = await create_handover_item(
         other_case.id,
         HandoverItemCreate(asset_id=asset.id, recommended_action=HandoverAction.TRANSFER_OWNER),
@@ -420,8 +435,8 @@ async def test_rejection_moves_case_to_rejected_and_blocks_execution(async_sessi
 async def test_rejected_case_cannot_be_decided_again(async_session):
     admin = await _make_user(async_session, username="admin-h-redecide", system_role=SystemRole.ADMIN)
     approver = await _make_user(async_session, username="approver-h-redecide")
-    asset = await _seed_asset(async_session, name="asset-h-redecide")
     case = await _make_case(async_session, admin)
+    asset = await _seed_asset(async_session, name="asset-h-redecide")
     await create_handover_item(
         case.id,
         HandoverItemCreate(asset_id=asset.id, recommended_action=HandoverAction.TRANSFER_OWNER),
@@ -460,8 +475,8 @@ async def test_decided_approval_task_cannot_be_decided_again(async_session):
     admin = await _make_user(async_session, username="admin-h-redo-task", system_role=SystemRole.ADMIN)
     approver = await _make_user(async_session, username="approver-h-redo-task")
     security = await _make_user(async_session, username="security-h-redo-task")
-    asset = await _seed_asset(async_session, name="asset-h-redo-task")
     case = await _make_case(async_session, admin)
+    asset = await _seed_asset(async_session, name="asset-h-redo-task")
     await create_handover_item(
         case.id,
         HandoverItemCreate(asset_id=asset.id, recommended_action=HandoverAction.TRANSFER_OWNER),
@@ -550,13 +565,12 @@ async def test_invalid_decision_value_is_rejected(async_session):
 async def test_analyze_generates_items_for_subject_assets(async_session):
     admin = await _make_user(async_session, username="admin-h6", system_role=SystemRole.ADMIN)
     subject = await _make_user(async_session, username="subject-h6")
+    case = await _make_case(async_session, admin, subject_user_id=subject.id)
     asset = await _seed_asset(async_session, name="Subject-owned Workflow")
     async_session.add(
         AssetOwnership(asset_id=asset.id, owner_type=OwnerType.CREATOR, user_id=subject.id, is_primary=True)
     )
     await async_session.flush()
-    case = await _make_case(async_session, admin, subject_user_id=subject.id)
-
     items = await analyze_handover(case.id, async_session, admin)
 
     assert case.status == HandoverStatus.PENDING_APPROVAL
@@ -678,12 +692,12 @@ async def test_analyze_rejects_illegal_source_status(async_session):
     """HANDOVER-04:case 已 APPROVED 时再 analyze → 409,不被拉回 ANALYZING/PENDING_APPROVAL。"""
     admin = await _make_user(async_session, username="admin-fsm-analyze", system_role=SystemRole.ADMIN)
     subject = await _make_user(async_session, username="subject-fsm-analyze")
+    case = await _make_case(async_session, admin, subject_user_id=subject.id)
     asset = await _seed_asset(async_session, name="fsm-analyze-asset")
     async_session.add(
         AssetOwnership(asset_id=asset.id, owner_type=OwnerType.CREATOR, user_id=subject.id, is_primary=True)
     )
     await async_session.flush()
-    case = await _make_case(async_session, admin, subject_user_id=subject.id)
     case.status = HandoverStatus.APPROVED
     await async_session.flush()
 
@@ -697,13 +711,12 @@ async def test_analyze_allows_draft_source_status(async_session):
     """HANDOVER-04 正常路径:DRAFT → analyze 仍生成建议并进入 PENDING_APPROVAL。"""
     admin = await _make_user(async_session, username="admin-fsm-analyze-ok", system_role=SystemRole.ADMIN)
     subject = await _make_user(async_session, username="subject-fsm-analyze-ok")
+    case = await _make_case(async_session, admin, subject_user_id=subject.id)
     asset = await _seed_asset(async_session, name="fsm-analyze-ok-asset")
     async_session.add(
         AssetOwnership(asset_id=asset.id, owner_type=OwnerType.CREATOR, user_id=subject.id, is_primary=True)
     )
     await async_session.flush()
-    case = await _make_case(async_session, admin, subject_user_id=subject.id)
-
     items = await analyze_handover(case.id, async_session, admin)
     assert len(items) == 1
     assert case.status == HandoverStatus.PENDING_APPROVAL
@@ -713,8 +726,8 @@ async def test_submit_rejects_illegal_source_status(async_session):
     """HANDOVER-04:case 已 APPROVED 时再 submit → 409,不被重新拉回 PENDING_APPROVAL。"""
     admin = await _make_user(async_session, username="admin-fsm-submit", system_role=SystemRole.ADMIN)
     approver = await _make_user(async_session, username="approver-fsm-submit")
-    asset = await _seed_asset(async_session, name="fsm-submit-asset")
     case = await _make_case(async_session, admin)
+    asset = await _seed_asset(async_session, name="fsm-submit-asset")
     await create_handover_item(
         case.id,
         HandoverItemCreate(asset_id=asset.id, recommended_action=HandoverAction.TRANSFER_OWNER),
@@ -739,8 +752,8 @@ async def test_submit_allows_draft_source_status(async_session):
     """HANDOVER-04 正常路径:DRAFT + 有 item → submit 仍落 PENDING_APPROVAL。"""
     admin = await _make_user(async_session, username="admin-fsm-submit-ok", system_role=SystemRole.ADMIN)
     approver = await _make_user(async_session, username="approver-fsm-submit-ok")
-    asset = await _seed_asset(async_session, name="fsm-submit-ok-asset")
     case = await _make_case(async_session, admin)
+    asset = await _seed_asset(async_session, name="fsm-submit-ok-asset")
     await create_handover_item(
         case.id,
         HandoverItemCreate(asset_id=asset.id, recommended_action=HandoverAction.TRANSFER_OWNER),
@@ -851,13 +864,12 @@ async def test_analyze_links_generated_items_to_evidence(async_session):
     且指向一条真实存在的 EvidenceItem(分析阶段溯源证据)。"""
     admin = await _make_user(async_session, username="admin-fr009", system_role=SystemRole.ADMIN)
     subject = await _make_user(async_session, username="subject-fr009")
+    case = await _make_case(async_session, admin, subject_user_id=subject.id)
     asset = await _seed_asset(async_session, name="FR009 Workflow")
     async_session.add(
         AssetOwnership(asset_id=asset.id, owner_type=OwnerType.CREATOR, user_id=subject.id, is_primary=True)
     )
     await async_session.flush()
-    case = await _make_case(async_session, admin, subject_user_id=subject.id)
-
     items = await analyze_handover(case.id, async_session, admin)
 
     assert len(items) == 1

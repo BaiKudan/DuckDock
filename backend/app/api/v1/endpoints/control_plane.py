@@ -25,6 +25,7 @@ from app.core.deps import (
     RuntimeManagerUser,
     RuntimeReaderUser,
     WorktraceReaderUser,
+    require_namespace_writer,
 )
 from app.services.iam_service import ensure_builtin_rbac, has_permission
 from app.services.credential_service import DB_REF_PREFIX, make_db_ref, store_credential
@@ -148,13 +149,30 @@ from app.services.report_upload_service import (
     create_report_upload_session,
     finalize_report_upload_session,
     generate_runtime_report_token,
+    get_report_upload_session,
     ingest_report_upload_session,
 )
 from app.services.structured_report_service import ingest_structured_report
+from app.services.tenant_write_service import (
+    InactiveNamespaceError,
+    MissingNamespaceError,
+    TenantMismatchError,
+    build_evidence_item,
+    ensure_resource_namespace,
+    require_active_namespace,
+)
 
 
 router = APIRouter(tags=["control-plane"])
 reporter_bearer = HTTPBearer()
+
+
+def _tenant_write_http_exception(exc: Exception) -> HTTPException:
+    if isinstance(exc, TenantMismatchError):
+        return HTTPException(status_code=409, detail=str(exc))
+    if isinstance(exc, (MissingNamespaceError, InactiveNamespaceError)):
+        return HTTPException(status_code=422, detail=str(exc))
+    return HTTPException(status_code=422, detail="Tenant-scoped write rejected")
 
 
 def _capability(provider: RuntimeProvider) -> AdapterCapabilityOut:
@@ -357,7 +375,12 @@ async def _annotate_execution_actions(db: DB, actions: Sequence[ExecutionAction]
         )
 
 
-async def _case_evidence_ids(db: DB, case_id: int, requested_ids: list[int]) -> set[int]:
+async def _case_evidence_ids(
+    db: DB,
+    case_id: int,
+    namespace_id: int,
+    requested_ids: list[int],
+) -> set[int]:
     if not requested_ids:
         return set()
     item_evidence_ids = (
@@ -366,6 +389,9 @@ async def _case_evidence_ids(db: DB, case_id: int, requested_ids: list[int]) -> 
                 select(HandoverItem.evidence_id).where(
                     HandoverItem.handover_case_id == case_id,
                     HandoverItem.evidence_id.in_(requested_ids),
+                    HandoverItem.evidence_id.in_(
+                        select(EvidenceItem.id).where(EvidenceItem.namespace_id == namespace_id)
+                    ),
                 )
             )
         )
@@ -393,6 +419,7 @@ async def _case_evidence_ids(db: DB, case_id: int, requested_ids: list[int]) -> 
             await db.execute(
                 select(EvidenceItem.id).where(
                     EvidenceItem.id.in_(requested_ids),
+                    EvidenceItem.namespace_id == namespace_id,
                     EvidenceItem.object_uri.like(f"{package_prefix}%"),
                 )
             )
@@ -400,19 +427,86 @@ async def _case_evidence_ids(db: DB, case_id: int, requested_ids: list[int]) -> 
         .scalars()
         .all()
     )
-    return case_evidence_ids
+    if not case_evidence_ids:
+        return set()
+    return set(
+        (
+            await db.execute(
+                select(EvidenceItem.id).where(
+                    EvidenceItem.id.in_(case_evidence_ids),
+                    EvidenceItem.namespace_id == namespace_id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
 
 
-async def _assert_case_evidence_ids(db: DB, *, case_id: int, evidence_ids: list[int]) -> None:
+async def _assert_case_evidence_ids(
+    db: DB,
+    *,
+    case_id: int,
+    namespace_id: int,
+    evidence_ids: list[int],
+) -> None:
     if not evidence_ids:
         return
-    allowed_ids = await _case_evidence_ids(db, case_id, evidence_ids)
+    allowed_ids = await _case_evidence_ids(db, case_id, namespace_id, evidence_ids)
     missing = sorted(set(evidence_ids) - allowed_ids)
     if missing:
         raise HTTPException(
             status_code=422,
             detail=f"Evidence items must exist and belong to this handover case: {missing}",
         )
+
+
+async def _assert_handover_item_namespaces(
+    db: DB,
+    *,
+    namespace_id: int,
+    items: Sequence[HandoverItem],
+) -> None:
+    try:
+        for item in items:
+            asset = await db.get(AIAsset, item.asset_id)
+            if asset is None:
+                raise HTTPException(status_code=422, detail="Handover item asset was not found")
+            ensure_resource_namespace(asset, namespace_id, relationship="asset")
+            if item.evidence_id is not None:
+                evidence = await db.get(EvidenceItem, item.evidence_id)
+                if evidence is None:
+                    raise HTTPException(status_code=422, detail="Handover item evidence was not found")
+                ensure_resource_namespace(evidence, namespace_id, relationship="evidence")
+    except (MissingNamespaceError, TenantMismatchError) as exc:
+        raise _tenant_write_http_exception(exc) from exc
+
+
+async def _assert_handover_runtime_namespaces(
+    db: DB,
+    *,
+    case: HandoverCase,
+    namespace_id: int,
+) -> None:
+    raw_runtime_ids = (case.summary_json or {}).get("runtime_ids", [])
+    if not isinstance(raw_runtime_ids, list) or any(
+        not isinstance(runtime_id, int) or isinstance(runtime_id, bool)
+        for runtime_id in raw_runtime_ids
+    ):
+        raise HTTPException(status_code=422, detail="Handover runtime_ids are invalid")
+    runtime_ids = set(raw_runtime_ids)
+    if not runtime_ids:
+        return
+    runtimes = (
+        await db.execute(select(RuntimeInstance).where(RuntimeInstance.id.in_(runtime_ids)))
+    ).scalars().all()
+    if {runtime.id for runtime in runtimes} != runtime_ids:
+        raise HTTPException(status_code=422, detail="One or more handover runtimes were not found")
+    try:
+        for runtime in runtimes:
+            ensure_resource_namespace(runtime, namespace_id, relationship="runtime")
+    except (MissingNamespaceError, TenantMismatchError) as exc:
+        raise _tenant_write_http_exception(exc) from exc
 
 
 async def _existing_execution_actions_for_idempotency(
@@ -452,6 +546,29 @@ async def _get_reporter_context(
     credentials: HTTPAuthorizationCredentials = Depends(reporter_bearer),
 ) -> ReporterAuthContext:
     return await authenticate_runtime_report_token(db, credentials.credentials)
+
+
+async def _require_handover_namespace_write(db: DB, current_user, case: HandoverCase) -> int:
+    namespace_id = await _active_handover_namespace_id(db, case)
+    await require_namespace_writer(current_user, namespace_id, db)
+    return namespace_id
+
+
+async def _active_handover_namespace_id(db: DB, case: HandoverCase) -> int:
+    try:
+        namespace = await require_active_namespace(db, case.namespace_id)
+    except (MissingNamespaceError, InactiveNamespaceError) as exc:
+        raise _tenant_write_http_exception(exc) from exc
+    return namespace.id
+
+
+async def _require_runtime_namespace_write(db: DB, current_user, runtime: RuntimeInstance) -> int:
+    try:
+        namespace = await require_active_namespace(db, runtime.namespace_id)
+    except (MissingNamespaceError, InactiveNamespaceError) as exc:
+        raise _tenant_write_http_exception(exc) from exc
+    await require_namespace_writer(current_user, namespace.id, db)
+    return namespace.id
 
 
 def _report_session_out(
@@ -787,6 +904,11 @@ async def list_runtimes(db: DB, current_user: RuntimeReaderUser, provider: Runti
 
 @router.post("/runtimes", response_model=RuntimeInstanceOut, status_code=status.HTTP_201_CREATED)
 async def create_runtime(body: RuntimeInstanceCreate, db: DB, current_user: RuntimeManagerUser):
+    try:
+        namespace = await require_active_namespace(db, body.namespace_id)
+    except (MissingNamespaceError, InactiveNamespaceError) as exc:
+        raise _tenant_write_http_exception(exc) from exc
+    await require_namespace_writer(current_user, namespace.id, db)
     credential_ref = body.credential_ref
     if body.credential:
         record = await store_credential(
@@ -797,6 +919,7 @@ async def create_runtime(body: RuntimeInstanceCreate, db: DB, current_user: Runt
         )
         credential_ref = make_db_ref(record)
     runtime = RuntimeInstance(
+        namespace_id=namespace.id,
         provider=body.provider,
         name=body.name,
         base_url=body.base_url,
@@ -826,6 +949,11 @@ async def get_runtime(runtime_id: int, db: DB, current_user: RuntimeReaderUser):
 @router.patch("/runtimes/{runtime_id}", response_model=RuntimeInstanceOut)
 async def update_runtime(runtime_id: int, body: RuntimeInstanceUpdate, db: DB, current_user: RuntimeManagerUser):
     runtime = await _get_runtime(db, runtime_id)
+    try:
+        namespace = await require_active_namespace(db, runtime.namespace_id)
+    except (MissingNamespaceError, InactiveNamespaceError) as exc:
+        raise _tenant_write_http_exception(exc) from exc
+    await require_namespace_writer(current_user, namespace.id, db)
     data = body.model_dump(exclude_unset=True)
     plaintext_credential = data.pop("credential", None)
     for key, value in data.items():
@@ -913,10 +1041,16 @@ async def enroll_reporter_endpoint(body: ReporterEnrollmentCreate, db: DB, curre
     presigned URLs obtained later through /reports/upload-sessions.
     """
 
+    try:
+        namespace = await require_active_namespace(db, body.namespace_id)
+    except (MissingNamespaceError, InactiveNamespaceError) as exc:
+        raise _tenant_write_http_exception(exc) from exc
+    await require_namespace_writer(current_user, namespace.id, db)
     now = datetime.now(timezone.utc)
     agent_label = body.agent_kind or body.provider.value
     runtime_name = body.runtime_name or f"{current_user.username} {agent_label} reporter ({body.device_id})"
     runtime = RuntimeInstance(
+        namespace_id=namespace.id,
         provider=body.provider,
         name=runtime_name,
         deploy_type=RuntimeDeployType.PRIVATE,
@@ -968,6 +1102,16 @@ async def reporter_heartbeat_endpoint(
     reporter: ReporterAuthContext = Depends(_get_reporter_context),
 ):
     """Lightweight liveness update for long-running agent-side Reporters."""
+
+    try:
+        namespace = await require_active_namespace(db, reporter.runtime.namespace_id)
+        ensure_resource_namespace(
+            reporter.runtime,
+            namespace.id,
+            relationship="runtime",
+        )
+    except (MissingNamespaceError, InactiveNamespaceError, TenantMismatchError) as exc:
+        raise _tenant_write_http_exception(exc) from exc
 
     now = datetime.now(timezone.utc)
     metadata = dict(reporter.runtime.metadata_json or {})
@@ -1152,6 +1296,7 @@ async def create_runtime_report_token(
     current_user: RuntimeManagerUser,
 ):
     runtime = await _get_runtime(db, runtime_id)
+    await _require_runtime_namespace_write(db, current_user, runtime)
     prefix, secret, token = generate_runtime_report_token()
     row = RuntimeReportToken(
         runtime_id=runtime.id,
@@ -1182,6 +1327,8 @@ async def revoke_runtime_report_token(token_id: int, db: DB, current_user: Runti
     ).scalar_one_or_none()
     if row is None:
         raise HTTPException(status_code=404, detail="Runtime report token not found")
+    runtime = await _get_runtime(db, row.runtime_id)
+    await _require_runtime_namespace_write(db, current_user, runtime)
     row.is_active = False
     await audit(
         db,
@@ -1327,6 +1474,9 @@ async def finalize_report_upload_session_endpoint(
 
 @router.post("/reports/{report_id}/ingest", response_model=ReportUploadSessionOut)
 async def ingest_report_upload_session_endpoint(report_id: str, db: DB, current_user: RuntimeManagerUser):
+    candidate = await get_report_upload_session(db, report_id=report_id)
+    runtime = await _get_runtime(db, candidate.runtime_id)
+    await _require_runtime_namespace_write(db, current_user, runtime)
     session = await ingest_report_upload_session(db, report_id=report_id)
     await audit(
         db,
@@ -1679,6 +1829,11 @@ async def import_openclaw_backup(
     file: UploadFile = File(...),
 ):
     runtime = await _get_runtime(db, runtime_id)
+    try:
+        namespace = await require_active_namespace(db, runtime.namespace_id)
+    except (MissingNamespaceError, InactiveNamespaceError) as exc:
+        raise _tenant_write_http_exception(exc) from exc
+    await require_namespace_writer(current_user, namespace.id, db)
     if runtime.provider != RuntimeProvider.OPENCLAW:
         raise HTTPException(status_code=422, detail="OpenClaw backup import requires an openclaw runtime")
     content = await file.read()
@@ -1800,6 +1955,17 @@ async def list_assets(
 
 @router.post("/assets", response_model=AIAssetOut, status_code=status.HTTP_201_CREATED)
 async def create_asset(body: AIAssetCreate, db: DB, current_user: AssetManagerUser):
+    try:
+        namespace = await require_active_namespace(db, body.namespace_id)
+    except (MissingNamespaceError, InactiveNamespaceError) as exc:
+        raise _tenant_write_http_exception(exc) from exc
+    await require_namespace_writer(current_user, namespace.id, db)
+    if body.source_runtime_id is not None:
+        runtime = await _get_runtime(db, body.source_runtime_id)
+        try:
+            ensure_resource_namespace(runtime, namespace.id, relationship="source_runtime")
+        except (MissingNamespaceError, TenantMismatchError) as exc:
+            raise _tenant_write_http_exception(exc) from exc
     asset = AIAsset(**body.model_dump())
     db.add(asset)
     await db.flush()
@@ -1822,6 +1988,11 @@ async def get_asset(asset_id: int, db: DB, current_user: AssetReaderUser):
 @router.patch("/assets/{asset_id}", response_model=AIAssetOut)
 async def update_asset(asset_id: int, body: AIAssetUpdate, db: DB, current_user: AssetManagerUser):
     asset = await _get_asset(db, asset_id)
+    try:
+        namespace = await require_active_namespace(db, asset.namespace_id)
+    except (MissingNamespaceError, InactiveNamespaceError) as exc:
+        raise _tenant_write_http_exception(exc) from exc
+    await require_namespace_writer(current_user, namespace.id, db)
     for key, value in body.model_dump(exclude_unset=True).items():
         setattr(asset, key, value)
     await audit(
@@ -1838,12 +2009,18 @@ async def update_asset(asset_id: int, body: AIAssetUpdate, db: DB, current_user:
 @router.post("/assets/{asset_id}/feedback", response_model=AIAssetOut)
 async def submit_asset_feedback(asset_id: int, body: AIAssetFeedbackCreate, db: DB, current_user: CurrentUser):
     asset = await _get_asset(db, asset_id)
+    try:
+        namespace = await require_active_namespace(db, asset.namespace_id)
+        ensure_resource_namespace(asset, namespace.id, relationship="asset")
+    except (MissingNamespaceError, InactiveNamespaceError, TenantMismatchError) as exc:
+        raise _tenant_write_http_exception(exc) from exc
     if current_user.system_role != SystemRole.ADMIN:
         ownership = (
             await db.execute(
                 select(AssetOwnership.id).where(
                     AssetOwnership.asset_id == asset.id,
                     AssetOwnership.user_id == current_user.id,
+                    AssetOwnership.namespace_id == namespace.id,
                 )
             )
         ).scalar_one_or_none()
@@ -1852,6 +2029,7 @@ async def submit_asset_feedback(asset_id: int, body: AIAssetFeedbackCreate, db: 
                 select(WorkTrace.id).where(
                     WorkTrace.asset_id == asset.id,
                     WorkTrace.actor_user_id == current_user.id,
+                    WorkTrace.namespace_id == namespace.id,
                 )
             )
         ).scalar_one_or_none()
@@ -1882,7 +2060,22 @@ async def submit_asset_feedback(asset_id: int, body: AIAssetFeedbackCreate, db: 
 
 @router.post("/assets/{asset_id}/ownership", response_model=AssetOwnershipOut, status_code=status.HTTP_201_CREATED)
 async def create_asset_ownership(asset_id: int, body: AssetOwnershipCreate, db: DB, current_user: AssetManagerUser):
-    await _get_asset(db, asset_id)
+    asset = await _get_asset(db, asset_id)
+    try:
+        namespace = await require_active_namespace(db, asset.namespace_id)
+        if body.namespace_id is not None and body.namespace_id != namespace.id:
+            raise TenantMismatchError(
+                f"asset ownership namespace_id={body.namespace_id} does not match "
+                f"asset namespace_id={namespace.id}"
+            )
+        if body.evidence_id is not None:
+            evidence = await db.get(EvidenceItem, body.evidence_id)
+            if evidence is None:
+                raise HTTPException(status_code=404, detail="Evidence item not found")
+            ensure_resource_namespace(evidence, namespace.id, relationship="evidence")
+    except (MissingNamespaceError, InactiveNamespaceError, TenantMismatchError) as exc:
+        raise _tenant_write_http_exception(exc) from exc
+    await require_namespace_writer(current_user, namespace.id, db)
     if body.is_primary:
         rows = (
             await db.execute(
@@ -1895,7 +2088,9 @@ async def create_asset_ownership(asset_id: int, body: AssetOwnershipCreate, db: 
         ).scalars().all()
         for row in rows:
             row.is_primary = False
-    ownership = AssetOwnership(asset_id=asset_id, **body.model_dump())
+    ownership_values = body.model_dump()
+    ownership_values["namespace_id"] = namespace.id
+    ownership = AssetOwnership(asset_id=asset_id, **ownership_values)
     db.add(ownership)
     await db.flush()
     await audit(
@@ -2137,17 +2332,32 @@ async def list_handovers(db: DB, current_user: HandoverReaderUser, status_filter
 
 @router.post("/handovers", response_model=HandoverCaseOut, status_code=status.HTTP_201_CREATED)
 async def create_handover(body: HandoverCaseCreate, db: DB, current_user: HandoverManagerUser):
-    summary = {
+    try:
+        namespace = await require_active_namespace(db, body.namespace_id)
+    except (MissingNamespaceError, InactiveNamespaceError) as exc:
+        raise _tenant_write_http_exception(exc) from exc
+    await require_namespace_writer(current_user, namespace.id, db)
+    if body.runtime_ids:
+        runtimes = (
+            await db.execute(select(RuntimeInstance).where(RuntimeInstance.id.in_(body.runtime_ids)))
+        ).scalars().all()
+        if len({runtime.id for runtime in runtimes}) != len(set(body.runtime_ids)):
+            raise HTTPException(status_code=422, detail="One or more handover runtimes were not found")
+        try:
+            for runtime in runtimes:
+                ensure_resource_namespace(runtime, namespace.id, relationship="runtime")
+        except (MissingNamespaceError, TenantMismatchError) as exc:
+            raise _tenant_write_http_exception(exc) from exc
+    summary = dict(body.metadata_json or {})
+    summary.update({
         "runtime_ids": body.runtime_ids,
         "collection_scope": body.collection_scope.model_dump(mode="json"),
-    }
-    if body.metadata_json:
-        summary.update(body.metadata_json)
+    })
     case = HandoverCase(
         case_type=body.case_type,
         title=body.title,
         subject_user_id=body.subject_user_id,
-        namespace_id=body.namespace_id,
+        namespace_id=namespace.id,
         receiver_user_id=body.receiver_user_id,
         due_at=body.due_at,
         created_by=current_user.id,
@@ -2174,6 +2384,7 @@ async def get_handover(case_id: int, db: DB, current_user: HandoverReaderUser):
 @router.patch("/handovers/{case_id}", response_model=HandoverCaseOut)
 async def update_handover(case_id: int, body: HandoverCaseUpdate, db: DB, current_user: HandoverManagerUser):
     case = await _get_handover(db, case_id, for_update=True)
+    await _require_handover_namespace_write(db, current_user, case)
     if case.status in {HandoverStatus.COMPLETED, HandoverStatus.REJECTED, HandoverStatus.CANCELLED}:
         raise HTTPException(status_code=409, detail="Terminal handover cases cannot be updated")
     changed: dict[str, object | None] = {}
@@ -2218,6 +2429,7 @@ async def upload_handover_evidence(
     execution receipt validation.
     """
     case = await _get_handover(db, case_id)
+    namespace_id = await _require_handover_namespace_write(db, current_user, case)
     _assert_transition(case, {HandoverStatus.EXECUTING})
     body = await file.read()
     if not body:
@@ -2242,7 +2454,8 @@ async def upload_handover_evidence(
     except ArtifactStorageError as exc:
         raise HTTPException(status_code=502, detail="Evidence storage is temporarily unavailable") from exc
 
-    evidence = EvidenceItem(
+    evidence = build_evidence_item(
+        namespace_id=namespace_id,
         source_type=EvidenceSourceType.USER_CONFIRM,
         source_provider=RuntimeProvider.CUSTOM,
         object_uri=f"s3://{artifact_service.bucket}/{object_key}",
@@ -2272,6 +2485,12 @@ async def upload_handover_evidence(
 @router.post("/handovers/{case_id}/collect", response_model=CollectionJobOut, status_code=status.HTTP_202_ACCEPTED)
 async def collect_handover(case_id: int, db: DB, current_user: HandoverManagerUser):
     case = await _get_handover(db, case_id)
+    namespace_id = await _require_handover_namespace_write(db, current_user, case)
+    await _assert_handover_runtime_namespaces(
+        db,
+        case=case,
+        namespace_id=namespace_id,
+    )
     _assert_transition(case, {HandoverStatus.DRAFT, HandoverStatus.COLLECTING})
     case.status = HandoverStatus.COLLECTING
     job = CollectionJob(
@@ -2298,7 +2517,17 @@ async def collect_handover(case_id: int, db: DB, current_user: HandoverManagerUs
 @router.post("/handovers/{case_id}/items", response_model=HandoverItemOut, status_code=status.HTTP_201_CREATED)
 async def create_handover_item(case_id: int, body: HandoverItemCreate, db: DB, current_user: HandoverManagerUser):
     case = await _get_handover(db, case_id)
-    await _get_asset(db, body.asset_id)
+    namespace_id = await _require_handover_namespace_write(db, current_user, case)
+    asset = await _get_asset(db, body.asset_id)
+    try:
+        ensure_resource_namespace(asset, namespace_id, relationship="asset")
+        if body.evidence_id is not None:
+            evidence = await db.get(EvidenceItem, body.evidence_id)
+            if evidence is None:
+                raise HTTPException(status_code=422, detail="Evidence item not found")
+            ensure_resource_namespace(evidence, namespace_id, relationship="evidence")
+    except (MissingNamespaceError, TenantMismatchError) as exc:
+        raise _tenant_write_http_exception(exc) from exc
     item = HandoverItem(
         handover_case_id=case.id,
         asset_id=body.asset_id,
@@ -2351,6 +2580,7 @@ async def analyze_handover(
 ):
     # 进程内直调(测试/内部)可省 response;HTTP 走 FastAPI 时会注入每请求独立的 Response 以写头。
     case = await _get_handover(db, case_id)
+    namespace_id = await _require_handover_namespace_write(db, current_user, case)
     _assert_transition(
         case,
         {HandoverStatus.DRAFT, HandoverStatus.COLLECTING, HandoverStatus.ANALYZING},
@@ -2361,8 +2591,7 @@ async def analyze_handover(
         stmt = stmt.join(AssetOwnership, AssetOwnership.asset_id == AIAsset.id).where(
             AssetOwnership.user_id == case.subject_user_id
         )
-    if case.namespace_id is not None:
-        stmt = stmt.where(AIAsset.id.in_(select(AssetOwnership.asset_id).where(AssetOwnership.namespace_id == case.namespace_id)))
+    stmt = stmt.where(AIAsset.namespace_id == namespace_id)
     assets = (await db.execute(stmt.limit(200))).scalars().all()
 
     created: list[HandoverItem] = []
@@ -2394,7 +2623,8 @@ async def analyze_handover(
         recommended_action = rec.recommended_action if rec else HandoverAction.MANUAL_REVIEW
         confidence = rec.confidence if rec else 0.0
         # FR-009:每条生成的 HandoverItem 关联一条溯源证据(顾问/分析阶段产物),供审批人核对建议来源。
-        evidence = EvidenceItem(
+        evidence = build_evidence_item(
+            namespace_id=namespace_id,
             source_type=EvidenceSourceType.LLM_ANALYSIS,
             source_provider=asset.source_provider,
             summary=(
@@ -2447,19 +2677,24 @@ async def analyze_handover(
 @router.post("/handovers/{case_id}/submit", response_model=list[ApprovalTaskOut])
 async def submit_handover(case_id: int, body: list[ApprovalTaskCreate], db: DB, current_user: HandoverManagerUser):
     case = await _get_handover(db, case_id)
+    namespace_id = await _require_handover_namespace_write(db, current_user, case)
     _assert_transition(
         case,
         {HandoverStatus.DRAFT, HandoverStatus.ANALYZING, HandoverStatus.PENDING_APPROVAL},
     )
-    has_item = (
+    items = (
         await db.execute(
-            select(HandoverItem.id)
+            select(HandoverItem)
             .where(HandoverItem.handover_case_id == case.id)
-            .limit(1)
         )
-    ).scalar_one_or_none()
-    if has_item is None:
+    ).scalars().all()
+    if not items:
         raise HTTPException(status_code=422, detail="No handover items available for approval")
+    await _assert_handover_item_namespaces(
+        db,
+        namespace_id=namespace_id,
+        items=items,
+    )
     case.status = HandoverStatus.PENDING_APPROVAL
     tasks: list[ApprovalTask] = []
     for approval in body:
@@ -2503,6 +2738,7 @@ async def decide_approval(
     current_user: CurrentUser,
 ):
     case = await _get_handover(db, case_id)
+    namespace_id = await _active_handover_namespace_id(db, case)
     if case.status != HandoverStatus.PENDING_APPROVAL:
         raise HTTPException(status_code=409, detail="Handover case is not pending approval")
     task = (
@@ -2517,14 +2753,18 @@ async def decide_approval(
         raise HTTPException(status_code=404, detail="Approval task not found")
     if task.status != ApprovalStatus.PENDING:
         raise HTTPException(status_code=409, detail="Approval task has already been decided")
-    # US-005:指派的审批人本人可决;否则需要 handover.manage(系统 admin 自动放行)
-    if current_user.system_role != SystemRole.ADMIN and task.approver_user_id != current_user.id:
+    # US-005: 指派审批任务本身是一个 case-scoped 写授权，保留既有“受派人可决”
+    # 语义；其他 handover manager 仍必须同时拥有该 Namespace 的写权限。
+    is_assigned_approver = task.approver_user_id == current_user.id
+    if current_user.system_role != SystemRole.ADMIN and not is_assigned_approver:
         await ensure_builtin_rbac(db)
         if not await has_permission(db, user=current_user, permission_key="handover.manage"):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only the assigned approver or handover managers may decide this approval",
             )
+    if not is_assigned_approver:
+        await require_namespace_writer(current_user, namespace_id, db)
     if body.decision not in {ApprovalStatus.APPROVED, ApprovalStatus.REJECTED}:
         raise HTTPException(status_code=422, detail="Decision must be approved or rejected")
     task.status = body.decision
@@ -2552,6 +2792,7 @@ async def decide_approval(
 @router.post("/handovers/{case_id}/execute", response_model=list[ExecutionActionOut], status_code=status.HTTP_202_ACCEPTED)
 async def execute_handover(case_id: int, body: ExecuteHandoverRequest, db: DB, current_user: HandoverManagerUser):
     case = await _get_handover(db, case_id, for_update=True)
+    namespace_id = await _require_handover_namespace_write(db, current_user, case)
     existing_actions = await _existing_execution_actions_for_idempotency(
         db,
         case_id=case.id,
@@ -2585,6 +2826,11 @@ async def execute_handover(case_id: int, body: ExecuteHandoverRequest, db: DB, c
     items = (await db.execute(stmt)).scalars().all()
     if not items:
         raise HTTPException(status_code=422, detail="No executable handover items")
+    await _assert_handover_item_namespaces(
+        db,
+        namespace_id=namespace_id,
+        items=items,
+    )
     case.status = HandoverStatus.EXECUTING
     actions: list[ExecutionAction] = []
     for index, item in enumerate(items):
@@ -2698,7 +2944,13 @@ async def complete_execution_action(
             status_code=422,
             detail="Evidence is required to mark a sensitive or high-criticality handover action done",
         )
-    await _assert_case_evidence_ids(db, case_id=case.id, evidence_ids=evidence_ids)
+    namespace_id = await _require_handover_namespace_write(db, current_user, case)
+    await _assert_case_evidence_ids(
+        db,
+        case_id=case.id,
+        namespace_id=namespace_id,
+        evidence_ids=evidence_ids,
+    )
 
     action.status = body.result
     action.result_json = {
@@ -2721,7 +2973,8 @@ async def complete_execution_action(
             if body.result == ExecutionStatus.SUCCEEDED
             else HandoverItemStatus.FAILED
         )
-    receipt_evidence = EvidenceItem(
+    receipt_evidence = build_evidence_item(
+        namespace_id=namespace_id,
         source_type=EvidenceSourceType.USER_CONFIRM,
         source_provider=action.provider,
         summary=f"人工执行回执({body.result.value}):{body.note}",
@@ -2770,6 +3023,7 @@ async def complete_execution_action(
 async def verify_handover(case_id: int, body: HandoverVerifyRequest, db: DB, current_user: CurrentUser):
     """US-006 验收归档:接收人或 handover.manage 确认验收 → COMPLETED + 证据 + 审计。"""
     case = await _get_handover(db, case_id)
+    namespace_id = await _require_handover_namespace_write(db, current_user, case)
     if current_user.system_role != SystemRole.ADMIN and case.receiver_user_id != current_user.id:
         await ensure_builtin_rbac(db)
         if not await has_permission(db, user=current_user, permission_key="handover.manage"):
@@ -2833,7 +3087,8 @@ async def verify_handover(case_id: int, body: HandoverVerifyRequest, db: DB, cur
 
     case.status = HandoverStatus.COMPLETED
     db.add(
-        EvidenceItem(
+        build_evidence_item(
+            namespace_id=namespace_id,
             source_type=EvidenceSourceType.USER_CONFIRM,
             source_provider=RuntimeProvider.CUSTOM,
             summary=f"交接验收确认:{body.note or '已确认'}",
@@ -2883,6 +3138,7 @@ async def create_handover_package(case_id: int, db: DB, current_user: HandoverMa
     敏感工作历史只放遮蔽摘要(见 handover_package_service)。
     """
     case = await _get_handover(db, case_id)
+    await _require_handover_namespace_write(db, current_user, case)
     _assert_transition(case, _PACKAGE_ALLOWED_STATES)
     try:
         evidence = await handover_package_service.build_package(db, case, created_by=current_user.id)

@@ -46,6 +46,11 @@ from app.models.control_plane import (
     WorkTrace,
 )
 from app.services.artifact_service import artifact_service
+from app.services.tenant_write_service import (
+    build_evidence_item,
+    ensure_resource_namespace,
+    require_active_namespace,
+)
 
 SCHEMA_VERSION = "duckdock-handover-pack-v1"
 
@@ -139,7 +144,12 @@ def _evidence_ref(evidence: EvidenceItem) -> dict[str, Any]:
     }
 
 
-async def _build_item_entries(db: AsyncSession, case: HandoverCase) -> list[dict[str, Any]]:
+async def _build_item_entries(
+    db: AsyncSession,
+    case: HandoverCase,
+    *,
+    namespace_id: int,
+) -> list[dict[str, Any]]:
     items = (
         await db.execute(
             select(HandoverItem)
@@ -151,11 +161,14 @@ async def _build_item_entries(db: AsyncSession, case: HandoverCase) -> list[dict
     entries: list[dict[str, Any]] = []
     for item in items:
         asset = await db.get(AIAsset, item.asset_id)
+        if asset is not None:
+            ensure_resource_namespace(asset, namespace_id, relationship="asset")
 
         evidence_refs: list[dict[str, Any]] = []
         if item.evidence_id is not None:
             evidence = await db.get(EvidenceItem, item.evidence_id)
             if evidence is not None:
+                ensure_resource_namespace(evidence, namespace_id, relationship="evidence")
                 evidence_refs.append(_evidence_ref(evidence))
 
         action = (
@@ -183,6 +196,8 @@ async def _build_item_entries(db: AsyncSession, case: HandoverCase) -> list[dict
                 .limit(20)
             )
         ).scalars().all()
+        for trace in traces:
+            ensure_resource_namespace(trace, namespace_id, relationship="work_trace")
 
         entries.append(
             {
@@ -233,8 +248,9 @@ async def build_package(
     对象 key: ``handovers/case-{id}/pack-{ts}.zip``;EvidenceItem.object_uri =
     ``s3://{bucket}/{key}``(与 evidence 下载链路一致,供 build_download_link 签名)。
     """
+    namespace = await require_active_namespace(db, case.namespace_id)
     generated_at = datetime.now(timezone.utc)
-    entries = await _build_item_entries(db, case)
+    entries = await _build_item_entries(db, case, namespace_id=namespace.id)
     manifest: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "generated_at": generated_at.isoformat(),
@@ -263,7 +279,8 @@ async def build_package(
         metadata={"handover_case_id": str(case.id), "sha256": sha256},
     )
 
-    evidence = EvidenceItem(
+    evidence = build_evidence_item(
+        namespace_id=namespace.id,
         source_type=EvidenceSourceType.BACKUP_PACKAGE,
         source_provider=RuntimeProvider.CUSTOM,
         object_uri=f"s3://{artifact_service.bucket}/{object_key}",

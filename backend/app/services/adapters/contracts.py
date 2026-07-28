@@ -109,6 +109,7 @@ class NormalizedWorkTrace:
 class NormalizedEvidence:
     summary: str
     source_type: EvidenceSourceType = EvidenceSourceType.API
+    work_trace_external_session_id: str | None = None
     object_uri: str | None = None
     sha256: str | None = None
     confidence: float = 1.0

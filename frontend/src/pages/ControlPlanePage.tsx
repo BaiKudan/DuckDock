@@ -19,6 +19,7 @@ import {
 import { useNavigate } from "react-router-dom";
 import {
   controlPlaneApi,
+  namespacesApi,
   type AIAsset,
   type AiAssist,
   type AssetStatus,
@@ -100,6 +101,7 @@ const SELECT_CLASS =
   "w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition-colors focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100";
 
 const runtimeFormDefaults = {
+  namespace_id: "" as number | "",
   provider: "openclaw" as RuntimeProvider,
   name: "",
   base_url: "",
@@ -108,6 +110,7 @@ const runtimeFormDefaults = {
 };
 
 const assetFormDefaults = {
+  namespace_id: "" as number | "",
   asset_type: "skill" as AssetType,
   name: "",
   description: "",
@@ -120,6 +123,7 @@ const assetFormDefaults = {
 };
 
 const handoverFormDefaults = {
+  namespace_id: "" as number | "",
   case_type: "employee_offboarding" as HandoverCaseType,
   title: "",
   subject_user_id: "",
@@ -152,6 +156,10 @@ export default function ControlPlanePage() {
     queryKey: ["control-plane", "runtimes"],
     queryFn: async () => (await controlPlaneApi.listRuntimes()).data,
   });
+  const namespaces = useQuery({
+    queryKey: ["namespaces"],
+    queryFn: async () => (await namespacesApi.list()).data,
+  });
   const assets = useQuery({
     queryKey: ["control-plane", "assets"],
     queryFn: async () => (await controlPlaneApi.listAssets()).data,
@@ -166,6 +174,7 @@ export default function ControlPlanePage() {
   });
 
   const runtimeRows = runtimes.data ?? [];
+  const namespaceRows = namespaces.data ?? [];
   const assetRows = assets.data ?? [];
   const handoverRows = handovers.data ?? [];
   const jobRows = collectionJobs.data ?? [];
@@ -183,7 +192,13 @@ export default function ControlPlanePage() {
   );
 
   async function refreshAll() {
-    await Promise.all([runtimes.refetch(), assets.refetch(), handovers.refetch(), collectionJobs.refetch()]);
+    await Promise.all([
+      namespaces.refetch(),
+      runtimes.refetch(),
+      assets.refetch(),
+      handovers.refetch(),
+      collectionJobs.refetch(),
+    ]);
   }
 
   async function runAction(action: () => Promise<unknown>, success: string) {
@@ -207,13 +222,14 @@ export default function ControlPlanePage() {
   }
 
   async function submitRuntime() {
-    if (!runtimeForm.name.trim()) {
-      message.error("请输入运行时名称");
+    if (!runtimeForm.namespace_id || !runtimeForm.name.trim()) {
+      message.error("请选择 Namespace 并输入运行时名称");
       return;
     }
     setSubmitting(true);
     try {
       await controlPlaneApi.createRuntime({
+        namespace_id: runtimeForm.namespace_id,
         provider: runtimeForm.provider,
         name: runtimeForm.name,
         base_url: runtimeForm.base_url.trim() || null,
@@ -232,14 +248,15 @@ export default function ControlPlanePage() {
   }
 
   async function submitAsset() {
-    if (!assetForm.name.trim()) {
-      message.error("请输入资产名称");
+    if (!assetForm.namespace_id || !assetForm.name.trim()) {
+      message.error("请选择 Namespace 并输入资产名称");
       return;
     }
     setSubmitting(true);
     try {
       const runtime = runtimeRows.find((item) => item.id === assetForm.source_runtime_id);
       const asset = await controlPlaneApi.createAsset({
+        namespace_id: assetForm.namespace_id,
         asset_type: assetForm.asset_type,
         name: assetForm.name,
         description: assetForm.description.trim() || null,
@@ -253,6 +270,7 @@ export default function ControlPlanePage() {
         await controlPlaneApi.createAssetOwnership(asset.data.id, {
           owner_type: "creator",
           user_id: currentUser.id,
+          namespace_id: assetForm.namespace_id,
           confidence: 0.9,
           is_primary: true,
         });
@@ -269,18 +287,21 @@ export default function ControlPlanePage() {
   }
 
   async function submitHandover() {
-    if (!handoverForm.title.trim()) {
-      message.error("请输入交接标题");
+    if (!handoverForm.namespace_id || !handoverForm.title.trim()) {
+      message.error("请选择 Namespace 并输入交接标题");
       return;
     }
     setSubmitting(true);
     try {
       await controlPlaneApi.createHandover({
+        namespace_id: handoverForm.namespace_id,
         case_type: handoverForm.case_type,
         title: handoverForm.title,
         subject_user_id: handoverForm.subject_user_id ? Number(handoverForm.subject_user_id) : currentUser?.id ?? null,
         receiver_user_id: handoverForm.receiver_user_id ? Number(handoverForm.receiver_user_id) : currentUser?.id ?? null,
-        runtime_ids: runtimeRows.map((item) => item.id),
+        runtime_ids: runtimeRows
+          .filter((item) => item.namespace_id === handoverForm.namespace_id)
+          .map((item) => item.id),
         collection_scope: {
           users: handoverForm.subject_user_id
             ? [Number(handoverForm.subject_user_id)]
@@ -308,10 +329,16 @@ export default function ControlPlanePage() {
       message.warning("请先重新登录，确保当前用户信息已加载");
       return;
     }
+    const namespace = namespaceRows[0];
+    if (!namespace) {
+      message.warning("请先创建一个可写 Namespace，再生成演示数据");
+      return;
+    }
     setSubmitting(true);
     try {
       const suffix = new Date().toLocaleTimeString("zh-CN", { hour12: false });
       const runtime = await controlPlaneApi.createRuntime({
+        namespace_id: namespace.id,
         provider: "openclaw",
         name: `演示 OpenClaw 私有运行时 ${suffix}`,
         base_url: "https://openclaw.example.internal",
@@ -320,6 +347,7 @@ export default function ControlPlanePage() {
         metadata_json: { demo: true },
       });
       const asset = await controlPlaneApi.createAsset({
+        namespace_id: namespace.id,
         asset_type: "skill",
         name: `客户工单总结 Skill ${suffix}`,
         description: "演示资产：员工创建并被运行时调用的私有化 Skill。",
@@ -333,10 +361,12 @@ export default function ControlPlanePage() {
       await controlPlaneApi.createAssetOwnership(asset.data.id, {
         owner_type: "creator",
         user_id: currentUser.id,
+        namespace_id: namespace.id,
         confidence: 0.95,
         is_primary: true,
       });
       const handover = await controlPlaneApi.createHandover({
+        namespace_id: namespace.id,
         case_type: "employee_offboarding",
         title: `演示：${currentUser.username} 的 AI Agent 资产交接 ${suffix}`,
         subject_user_id: currentUser.id,
@@ -557,6 +587,20 @@ export default function ControlPlanePage() {
       <DataTable title="采集任务" columns={jobColumns} rows={jobRows} loading={collectionJobs.isLoading} emptyText="还没有采集任务。对运行时自检或对交接单点击采集会创建任务。" />
 
       <Overlay open={runtimeOpen} title="新建运行时" onClose={() => setRuntimeOpen(false)}>
+        <Field label="Namespace">
+          <select
+            className={SELECT_CLASS}
+            value={runtimeForm.namespace_id}
+            onChange={(e) =>
+              setRuntimeForm({ ...runtimeForm, namespace_id: e.target.value === "" ? "" : Number(e.target.value) })
+            }
+          >
+            <option value="">选择可写 Namespace</option>
+            {namespaceRows.map((item) => (
+              <option key={item.id} value={item.id}>{item.name}</option>
+            ))}
+          </select>
+        </Field>
         <Field label="平台">
           <select
             className={SELECT_CLASS}
@@ -604,6 +648,24 @@ export default function ControlPlanePage() {
       </Overlay>
 
       <Overlay open={assetOpen} title="登记 AI 资产" onClose={() => setAssetOpen(false)}>
+        <Field label="Namespace">
+          <select
+            className={SELECT_CLASS}
+            value={assetForm.namespace_id}
+            onChange={(e) =>
+              setAssetForm({
+                ...assetForm,
+                namespace_id: e.target.value === "" ? "" : Number(e.target.value),
+                source_runtime_id: "",
+              })
+            }
+          >
+            <option value="">选择可写 Namespace</option>
+            {namespaceRows.map((item) => (
+              <option key={item.id} value={item.id}>{item.name}</option>
+            ))}
+          </select>
+        </Field>
         <Field label="资产类型">
           <select
             className={SELECT_CLASS}
@@ -640,7 +702,7 @@ export default function ControlPlanePage() {
             }
           >
             <option value="">选择已接入的运行时</option>
-            {runtimeRows.map((item) => (
+            {runtimeRows.filter((item) => item.namespace_id === assetForm.namespace_id).map((item) => (
               <option key={item.id} value={item.id}>
                 {item.name} ({item.provider})
               </option>
@@ -700,6 +762,23 @@ export default function ControlPlanePage() {
       </Overlay>
 
       <Overlay open={handoverOpen} title="创建交接单" onClose={() => setHandoverOpen(false)}>
+        <Field label="Namespace">
+          <select
+            className={SELECT_CLASS}
+            value={handoverForm.namespace_id}
+            onChange={(e) =>
+              setHandoverForm({
+                ...handoverForm,
+                namespace_id: e.target.value === "" ? "" : Number(e.target.value),
+              })
+            }
+          >
+            <option value="">选择可写 Namespace</option>
+            {namespaceRows.map((item) => (
+              <option key={item.id} value={item.id}>{item.name}</option>
+            ))}
+          </select>
+        </Field>
         <Field label="交接类型">
           <select
             className={SELECT_CLASS}

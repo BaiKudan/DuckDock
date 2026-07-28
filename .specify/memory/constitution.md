@@ -1,86 +1,140 @@
 # DuckDock Constitution
 
-> DuckDock 企业 AI Agent 资产与交接控制平面 · 不可绕过的工程原则
+> DuckDock 2.0 企业 Agent 运行证据、评测、发布与交接控制面不可绕过的工程原则。
 >
-> 本宪法是项目的最高约束,优先级高于任何零散文档(README、handoff、roadmap)。
-> 当代码、文档、规格三者冲突时,以本宪法 + `specs/` 下的规格为事实之源,并通过
-> `/speckit-analyze` 持续校验一致性。
+> 本宪法优先于零散设计文档和实现习惯。代码、规格与文档冲突时，以本宪法和当前已批准的 specs 为准。
 
 ## Core Principles
 
-### I. MySQL 单一主库 (MySQL-Only Primary Store)
+### I. 治理事实与遥测数据分离
 
-- 业务主库**只用 MySQL 8.x**,异步驱动统一为 `aiomysql`;`DATABASE_URL` 形如
-  `mysql+aiomysql://…@mysql:3306/duckdock?charset=utf8mb4`。
-- **禁止** PostgreSQL 专属 SQL 进入业务路径:`jsonb` → `json`、
-  `pg_advisory_xact_lock` → `GET_LOCK()`、`pgvector` → 外部向量服务(OpenSearch/Qdrant)。
-- PostgreSQL 16 与 ClickHouse **只允许**出现在 `observability` compose profile 下,
-  专供自托管 Langfuse,**不得**承载 DuckDock 业务数据。
-- 验收红线:空 MySQL 实例必须能 `alembic upgrade head` 成功建表。
+- MySQL 8.x 是 DuckDock 唯一业务事实主库，保存身份、资产、版本、部署、责任、策略、审批、评测摘要、发布决策、审计与交接状态。
+- 原始 Trace、Span、Prompt/Response、Tool I/O 和高吞吐 Token/Cost 数据不得复制到 MySQL 业务表。
+- Langfuse/ClickHouse 是可替换的执行级遥测数据面，不是资产、身份、审批或最终发布决策的事实源。
+- MinIO/S3 保存不可变制品、ATIF 轨迹、评测输入快照、详细结果和证据包。
+- PostgreSQL 与 ClickHouse 只允许作为可选 observability profile 的依赖，不得承载 DuckDock 业务事实。
 
-### II. 串行 + 幂等的写入 (Serialized & Idempotent Mutations)
+### II. 版本、部署与证据必须可复现
 
-- 同一 skill 的并发发布必须用 per-skill advisory lock 串行化;
-  tag 唯一性校验、git push、MinIO 上传、`SkillVersion` 落库**全部在锁内**完成。
-- 所有采集与执行动作(Push 上报落库、交接执行)必须**幂等且可重试**;
-  部分失败降级为 `partial-failed` 等显式状态,**绝不**静默丢数据。
-  *(2026-06-12:采集为 Push-only——现场 Reporter 上报,服务端不外联;见 specs/001 Clarifications。)*
+- 每次生产执行必须能够关联到确切的 AgentPackageVersion、Deployment revision 和组件 digest。
+- AgentPackageVersion 必须锁定 Skill、Prompt、Tool/MCP、模型配置、Knowledge 引用、权限、策略和评测套件。
+- DatasetVersion、EvaluatorVersion、Release Manifest 和 Gate Policy 一经用于正式决策即不可变。
+- ReleaseGate 只能消费绑定当前候选版本的固定证据，不得使用“最新一次评测”替代准确关联。
+- 所有正式证据必须记录 schema version、内容 hash、来源、生成器版本和敏感级别。
 
-### III. 测试先行 · 不可妥协 (Test-First, NON-NEGOTIABLE)
+### III. 串行、幂等与可靠异步写入
 
-- Service 单元测试、状态机测试、Adapter mock-server 测试、权限越权测试
-  **先于实现**编写,并在 CI 的真实 MySQL 上运行。
-- 关键前端流程(创建交接单、审批)必须有 E2E;无权限按钮的隐藏/禁用必须可测。
-- 合规进展(2026-07-11):后端 **55 测试文件 / ~495 个测试函数**(595 passed / 4 skipped;鉴权 / RBAC / 发布门禁 /
-  交接状态机 / 凭证加密 / worktrace reveal / 上报会话 FSM / Reporter / 执行回执 + 证据上传 / 幂等 / SSRF / 验收),
-  前端 **Vitest 5 文件 + Playwright 2 条 spec**。剩余缺口:后端 service 长尾覆盖率、mypy 收紧、目标环境恢复演练。
+- 同一资产或版本的并发发布必须串行化。
+- Reporter、Run 控制信封、Artifact、Evaluation、Gate 和执行回执必须使用幂等键。
+- 同一幂等键对应不同 payload hash 时必须显式冲突，禁止静默覆盖。
+- 业务状态和待发布领域事件必须在同一 MySQL 事务中写入 Transactional Outbox。
+- Celery 消费者必须按 event_id 幂等；部分失败必须进入明确状态或死信队列。
+- 所有外部副作用必须具有 receipt、重试边界和人工可见的失败原因。
 
-### IV. 审计与证据不可绕过 (Auditability & Evidence are Non-Bypassable)
+### IV. 测试先行，不可妥协
 
-- 每一次写操作和投递事件都进审计日志;审计日志**不可**由普通管理员删除。
-- 每条交接建议、每个执行动作都必须可追溯到采集到的证据(`evidence_item`)。
-- 执行动作可回放(目标:可回放率 100%、审批审计覆盖率 100%)。
+- 所有行为变更必须先添加失败回归测试，再实现修复或功能。
+- Service、状态机、权限、租户隔离、幂等、迁移和 Provider Contract 必须进入自动化测试。
+- 关键链路必须在真实 MySQL 8.x 上运行集成测试。
+- OTel、ATIF、DuckDock JSON Schema 和 OpenAPI 必须有 Golden Contract 测试。
+- 新 DuckDock 2.0 模块从第一天启用严格类型检查；不得继承 Legacy mypy 债务。
+- Release、Gate、凭据、跨 Namespace 和敏感内容路径的覆盖率不得低于 90%。
 
-### V. 最小暴露 · 凭证安全 · LLM 仅建议 (Least Exposure, Credential Safety, LLM-as-Advice)
+### V. Collector 是遥测信任边界
 
-- 敏感内容默认不展示;查看完整内容必须有**权限 + 原因 + 审批 + 审计**四件套。
-- 凭证加密存储,**绝不**明文返回前端;对外签名 URL 必须设过期时间。
-- LLM 产出的是**建议**而非最终处置;任何接管/转移/禁用动作都需人工审批后执行。
-- 不做桌面监控、不采个人私域数据、不绕过厂商权限模型(见 PRD §8 非目标)。
+- Runtime 不得自行决定可信 Namespace、Runtime、Credential 或 Deployment 身份。
+- Collector 必须删除客户端提交的同名治理属性，并根据 mTLS、短期 JWT 或受控 API Key 注入可信值。
+- 实时轨迹使用 OTLP；完整可移植轨迹使用 ATIF。两者互补，不互相替代。
+- OTel GenAI/OpenInference 字段必须经过版本化 Normalizer，不得直接固化为长期数据库 Schema。
+- 遥测故障不得阻断 Agent 主业务；正式发布缺少强制证据时必须 Fail-closed。
 
-## 技术栈与端口约束 (Tech Stack & Port Constraints)
+### VI. 最小暴露与内容默认关闭
 
-- 后端 FastAPI(:8801)· 前端 React + Ant Design + TanStack Query(:5174)·
-  Celery worker · Redis · MinIO · Git bare repo(skill 版本存储)。
-- 仓库提供稳定的默认开发端口；发生冲突时只调整 host 侧映射，container 端口与服务内部 URL 保持不变。
-- `analysis-worker` 与 `observability` 属于**可选 profile**,默认 `docker compose up` 不得启用。
+- 默认 Content Policy 为 metadata_only。
+- Prompt、Response、Tool 参数、检索文档和文件内容只能在 Namespace 明确授权后采集。
+- 隐藏 Chain-of-Thought、凭据、Secret 和个人私域数据不得采集。
+- 脱敏必须在进入 Langfuse、对象存储或业务服务之前完成。
+- 敏感内容访问必须具备权限、理由、审批和审计。
+- 保留期删除必须覆盖 MySQL 引用、遥测后端和对象存储，并保留删除回执。
 
-## 质量门禁 (Quality Gates)
+### VII. LLM 只能提供建议，人类保留最终权限
 
-CI(`.github/workflows/ci.yml`)必须保持绿色,且不得削弱以下闸门:
+- LLM Judge 必须记录模型、Prompt、参数、版本、Token、成本和校准结果。
+- 未经人工 Golden Set 校准的 Judge 不得成为生产强制 Gate 的唯一依据。
+- 自动优化只能产生候选版本，不能直接修改或发布生产 Agent。
+- 高风险发布、权限扩大、凭据轮换、资产转移和交接必须保留人工审批或显式紧急豁免。
+- 豁免必须记录原因、审批人、影响范围和到期时间。
 
-1. `python -m compileall app alembic` — 后端可编译。
-2. `python -m pytest` — 在真实 MySQL 8.x service 上跑测试。
-3. `from app.main import app` — FastAPI 应用可导入。
-4. `alembic upgrade head` — 迁移可在空 MySQL 落地。
-5. `npm run build` — 前端可构建。
-6. compose profile 校验 — 默认栈包含 mysql/redis/minio/backend/worker/beat/frontend；`analysis-worker`、
-   `postgres`/`clickhouse`/`langfuse-*` 不得默认开启。
+### VIII. Provider 可替换，领域边界稳定
 
-**门禁现状(2026-06-12)**:已加 `ruff`(阻塞)、`mypy` baseline ratchet(错误数只降不升,见 `backend/.mypy-baseline`)、
-`tsc`(前端 build 内)、**核心安全模块覆盖率 ≥ 65%**(deps/iam/release_gate/credential,`--cov-fail-under`)。
-**仍待补**:更多 service 的覆盖率抬升、mypy 错误逐步清零至 strict、生产恢复演练。
+- DuckDock 核心领域不得依赖 Langfuse、DeepEval、AgentLoop 或其他 Provider 的 ORM 与内部表。
+- Telemetry、Evaluation、Trajectory、Attestation 和 Gate Evidence 必须通过 Port/Adapter 接口接入。
+- WorkTrace 是企业工作聚合；AgentRun 是单次执行事实，两者只能关联，不得混为同一实体。
+- Clinic 评价静态资产质量；Runtime Evaluation 评价真实执行质量，二者语义必须分离。
+- 继续采用模块化单体，除非容量、故障隔离或团队边界提供了可量化的拆服务收益。
+
+### IX. 分批放行与可回滚演进
+
+- P0 是硬门禁，未完成契约、可信采集、隔离、幂等和迁移验收前不得进入 P1 强制 Gate。
+- 数据迁移采用 Expand → Backfill → Dual Read/Write → Reconcile → Cutover → Contract。
+- API v1 与 v2 至少并存两个正式版本；删除前必须有使用量和迁移证据。
+- 数据库迁移不得在发布事务中执行不可控全表回填。
+- 应用回滚不得依赖破坏性数据库 downgrade；新表和兼容字段应允许旧应用安全运行。
+- 所有高风险能力使用 off → observe → warn → enforce 灰度。
+
+## Product Boundaries
+
+DuckDock 2.0 负责：
+
+- Agent Package、组件版本、部署和企业责任关系。
+- Runtime 身份、运行证据索引与可信程度。
+- Dataset 治理、评测配置、结果摘要与证据。
+- ReleaseGate、审批、Canary、回滚和豁免。
+- IAM、审计、风险、证据与人员/项目交接。
+
+DuckDock 2.0 不负责：
+
+- 通用 Agent IDE 或可视化编排器。
+- 自研通用 Agent Runtime 或模型网关。
+- 复制 Langfuse 的 Trace 存储与完整 UI。
+- 默认桌面监控、eBPF 全量监控或个人私域数据采集。
+- 未经审批的自治生产变更。
+
+## Mandatory Quality Gates
+
+每个 Pull Request 必须满足：
+
+1. Ruff、mypy ratchet 和编译通过。
+2. 后端单元、真实 MySQL 集成和迁移测试通过。
+3. 前端 lint、测试和构建通过。
+4. 新增契约通过 Schema/Golden 示例校验。
+5. 行为变更具有先红后绿的回归测试。
+6. 新外部依赖完成许可证、安全和版本固定检查。
+
+每个 Release Candidate 额外满足：
+
+1. 从上一正式版本升级成功。
+2. 完整 Agent → Trace → Dataset → Eval → Gate → Approval E2E 通过。
+3. Feature Flag 关闭和回滚演练通过。
+4. SBOM、镜像扫描、签名和 Evidence Pack 完成。
+5. Staging 运行、备份恢复和 SLO 验证完成。
 
 ## Governance
 
-- 本宪法优先于一切零散文档。新需求一律先进 `specs/<NNN>-<slug>/`(spec → plan → tasks),
-  代码从规格派生,而非反过来事后补文档。
-- README 与 `specs/` 必须与实现保持一致;每个里程碑前跑一次 `/speckit-analyze`,
-  漂移(如数据库引擎、迁移数量与文档不符)视为必须修复的缺陷。
-- 修订宪法需:版本号 + 日期 + 修订理由;对原则的合理偏离记录在对应 `plan.md` 的
-  **Complexity Tracking** 表中,并说明为何更简单的方案不可行。
-- 所有 PR / review 必须核对与本宪法的合规性。
-- **修订记录**:v1.1.0(2026-06-12)—— 原则 II 同步 Push-only 采集决策;原则 III 刷新测试合规进展(3→13 文件);
-  质量门禁补齐 mypy baseline ratchet + 核心模块覆盖率 65% 门槛。
+- 新能力必须先进入 specs/<NNN>-<slug>/，至少包含 spec、plan、tasks、data-model、contracts 和 quickstart。
+- 影响跨领域边界的决定必须记录 ADR。
+- 每个里程碑结束前必须更新 DuckDock 2.0 总进度台账，并执行规格、代码、迁移和文档一致性检查。
+- 修改本宪法必须包含新版本号、日期、原因和迁移影响。
+- 合理偏离必须写入对应 plan.md 的 Complexity Tracking，并说明更简单方案为何不可行。
 
-**Version**: 1.1.0 | **Ratified**: 2026-06-08 | **Last Amended**: 2026-06-12
+## Amendment Record
+
+- v1.0.0，2026-06-08：建立 MySQL、幂等、测试、审计和最小暴露原则。
+- v1.1.0，2026-06-12：明确 Push-only Reporter 与现有质量门禁。
+- v2.0.0，2026-07-17：建立 DuckDock 2.0 运行证据、评测、发布保障、Provider 边界、可信采集和分批迁移原则。
+
+**Version**: 2.0.0
+
+**Ratified**: 2026-06-08
+
+**Last Amended**: 2026-07-17

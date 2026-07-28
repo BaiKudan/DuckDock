@@ -36,6 +36,7 @@ from app.models.control_plane import (
     RuntimeStatus,
     WorkTrace,
 )
+from app.models.namespace import Namespace
 from app.models.user import SystemRole, User
 import app.services.analysis_materializer as analysis_materializer
 import app.services.analysis_service as analysis_service
@@ -1488,7 +1489,18 @@ async def seed_analysis_job(
 ) -> tuple[ReportAnalysisJob, ReportUploadSession, CollectionJob]:
     now = datetime.now(timezone.utc)
     suffix = uuid4().hex
+    owner = User(
+        username=f"analysis-owner-{suffix}",
+        email=f"analysis-owner-{suffix}@example.test",
+        hashed_password="unused",
+    )
+    db.add(owner)
+    await db.flush()
+    namespace = Namespace(name=f"analysis-{suffix}", owner_id=owner.id)
+    db.add(namespace)
+    await db.flush()
     runtime = RuntimeInstance(
+        namespace_id=namespace.id,
         provider=RuntimeProvider.OPENCLAW,
         name=f"runtime-{suffix}",
         deploy_type=RuntimeDeployType.PRIVATE,

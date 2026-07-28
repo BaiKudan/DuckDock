@@ -57,7 +57,7 @@ function runtimeGuides(apiBase: string): RuntimeGuide[] {
   const commonScope =
     "只采集 DuckDock 需要的资产目录、Skills、Agents、Prompts、Workflow、记忆索引、会话摘要、任务产物索引和证据摘要；默认不要上传完整私密会话原文。";
   const commonSchedule =
-    "请创建 DuckDock Reporter 定时任务：每周五 16:00 执行一次。首次运行时先登录 DuckDock 并调用 /reporters/enroll 自助登记 runtime endpoint，保存一次性返回的 dkr_report_* Reporter Credential；之后生成 duckdock-pack-v1.zip，使用 DuckDock 上传会话直传对象存储，并在上传后 finalize。";
+    "请创建 DuckDock Reporter 定时任务：每周五 16:00 执行一次。首次运行时先登录 DuckDock，选择一个有写权限的 Namespace ID 并调用 /reporters/enroll 自助登记 runtime endpoint，保存一次性返回的 dkr_report_* Reporter Credential；之后生成 duckdock-pack-v1.zip，使用 DuckDock 上传会话直传对象存储，并在上传后 finalize。";
   const commonCheck =
     "请立刻执行一次 DuckDock Reporter dry-run 上传检查：生成最小测试包，创建上传会话，上传到 DuckDock，finalize 后返回 report_id、pack_sha256、status 和错误信息。";
 
@@ -134,7 +134,7 @@ export default function ReporterSetupPage() {
 }`;
   const mcpBootPrompt = `帮我把这台 WorkBuddy 接入 DuckDock。
 DuckDock API: ${apiBase}
-如果本机还没有 DuckDock runtime，请先登录并调用 /reporters/enroll 自助登记。
+如果本机还没有 DuckDock runtime，请先登录，选择有写权限的 Namespace ID，并在 /reporters/enroll 请求中显式传 namespace_id 完成自助登记。
 Reporter Credential: <enroll 后一次性返回的 dkr_report_*>
 请安装 DuckDock Reporter，做一次 dry-run 上传检查，并创建每周五 16:00 的周期上报任务。`;
 

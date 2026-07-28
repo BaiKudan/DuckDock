@@ -41,6 +41,7 @@ from app.models.iam import EmploymentStatus
 
 
 class RuntimeInstanceCreate(BaseModel):
+    namespace_id: int
     provider: RuntimeProvider
     name: str = Field(min_length=1, max_length=128)
     base_url: str | None = None
@@ -70,6 +71,7 @@ class RuntimeInstanceOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    namespace_id: int | None
     provider: RuntimeProvider
     name: str
     base_url: str | None
@@ -162,6 +164,7 @@ class ReporterCredentialRevoke(BaseModel):
 
 
 class ReporterEnrollmentCreate(BaseModel):
+    namespace_id: int
     provider: RuntimeProvider = RuntimeProvider.CUSTOM
     runtime_name: str | None = Field(default=None, min_length=1, max_length=128)
     device_id: str = Field(default="default", min_length=1, max_length=128)
@@ -657,6 +660,7 @@ class RuntimeCapabilitySnapshotOut(BaseModel):
 
 
 class AIAssetCreate(BaseModel):
+    namespace_id: int
     asset_type: AssetType
     name: str = Field(min_length=1, max_length=255)
     description: str | None = None
@@ -681,6 +685,7 @@ class AIAssetOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    namespace_id: int | None
     asset_type: AssetType
     name: str
     description: str | None
@@ -726,6 +731,7 @@ class WorkTraceOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    namespace_id: int | None
     runtime_id: int | None
     asset_id: int | None
     external_session_id: str | None
@@ -772,6 +778,8 @@ class EvidenceItemOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    namespace_id: int | None
+    work_trace_id: int | None
     source_type: EvidenceSourceType
     source_provider: RuntimeProvider
     collection_job_id: int | None
@@ -814,7 +822,7 @@ class HandoverCaseCreate(BaseModel):
     case_type: HandoverCaseType
     title: str = Field(min_length=1, max_length=255)
     subject_user_id: int | None = None
-    namespace_id: int | None = None
+    namespace_id: int
     receiver_user_id: int | None = None
     due_at: datetime | None = None
     runtime_ids: list[int] = Field(default_factory=list)
