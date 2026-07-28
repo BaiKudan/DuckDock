@@ -174,6 +174,11 @@ publication authorization for existing work, not retrospective evidence of a
 2026-07-20 implementation approval and not an authorization to expand the
 implemented scope.
 
+The publication vehicle is
+[GitHub PR #6](https://github.com/BaiKudan/DuckDock/pull/6), whose description
+records the ten accepted Foundation decisions and their enforcing or explicitly
+deferred tests for FND-006.
+
 The publication batch contains these already implemented items:
 
 1. FND-012 tests for mandatory authorized Namespace on new writes.

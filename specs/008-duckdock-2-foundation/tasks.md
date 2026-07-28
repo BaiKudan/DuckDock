@@ -37,7 +37,7 @@ FND-010..019 tenant expand/backfill/contract
 - [x] **FND-003 [TEST]** Add cross-tenant repository characterization tests for Runtime, Asset, Binding, WorkTrace and Evidence current read/write paths. Evidence: `backend/tests/foundation/test_tenant_path_compatibility.py`.
 - [x] **FND-004 [TEST]** Add an architecture test that fails if models named Span/Prompt/ToolEvent or raw content columns are introduced into the MySQL domain package. Evidence: `backend/tests/foundation/test_architecture_boundaries.py`.
 - [x] **FND-005 [TEST]** Add an import-boundary test that core services import and start with Langfuse, DeepEval and Harbor/ATIF packages absent. Evidence: `backend/tests/foundation/test_architecture_boundaries.py`.
-- [ ] **FND-006 [DOC]** Record the ten accepted foundation decisions from `plan.md` in the implementation PR description and link each decision to its enforcing test.
+- [x] **FND-006 [DOC]** Record the ten accepted foundation decisions from `plan.md` in the implementation PR description and link each decision to its enforcing test. Evidence: GitHub PR #6 contains the ten-row FND-ADR-001 through FND-ADR-010 decision/test matrix and explicitly marks enforcement deferred beyond this batch.
 
 **Exit gate**: FND-001 through FND-005 pass on the unchanged behavior baseline.
 

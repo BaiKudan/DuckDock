@@ -10,7 +10,7 @@
 >
 > 升级起点发布基线：`v0.1.0` / `33b4eec54b6ea9a44f612b886dfd6ce46c5870f6`
 >
-> 当前发布候选：`codex/agentloop-foundation-s1`（G0 + S1-B + 现有 S1-C 实现；经受保护 PR 合并）
+> 当前发布候选：`codex/agentloop-foundation-s1` / [PR #6](https://github.com/BaiKudan/DuckDock/pull/6)（G0 + S1-B + 现有 S1-C 实现；经受保护 `main` 合并）
 >
 > 2.0 已验收加权进度：`10.4%`（E00=`100%`；E01=`30%`，已完成兼容基线、nullable Namespace expand 与确定性 Tenant Resolver 三个验收切片；S1 进行中）
 
@@ -359,7 +359,7 @@ Sprint 0 退出条件：所有 P0 契约有版本号、Owner、兼容策略、�
 | D-013 | 2026-07-19 | 批准 S1-B，仅放行 FND-011/016/017 | 在 non-null contract 前先建立确定性、可审计、可重复的历史租户归属处理能力 | Resolver 与 backfill/audit 可实施；FND-012/013/014/018/019 继续禁止提前执行 | Product/Architecture Owner | 已批准 | Owner 明确回复“批准 S1-B”；G0 Review §9 |
 | D-014 | 2026-07-19 | S1-B 定位为 NULL tenant 回填与 blocker inventory，不是最终全表租户一致性审计 | 同时满足 direct rerun 优先级与跨关系 invariant 的分阶段迁移边界；当前 Evidence 又无 typed WorkTrace FK | 非空 direct 值在本批不覆盖；FND-013/019 必须复核全表关系；Evidence 缺口保持 fail-closed；apply 必须确认关系写静默窗口 | Backend/Data Architecture | 已实施 | 17 项 resolver、14 项 backfill/CLI、5 项 S1-B MySQL fixtures、tenant backfill runbook |
 | D-015 | 2026-07-20 | 形成 S1-C 实现候选：FND-012/013/018 与可空 Evidence→WorkTrace typed link；FND-014/019 后置 | 先关闭新增脏数据和跨租户关系入口，再为历史 Evidence 提供确定性 lineage；避免提前 contract 锁死未修复数据 | 新写必须指向 active/authorized Namespace；typed link expand-only；历史无 link 继续 unresolved，contract/non-null 不变 | Backend/Data Architecture | 已实施；发布授权见 D-016 | ADR-0211；revision 0028；tenant write tests |
-| D-016 | 2026-07-28 | 将当前已完成的 G0、S1-B 与 S1-C 实现候选通过功能分支、PR 和受保护 `main` 完整发布并同步本地 | Owner 要求把现有成果形成完整远程 GitHub 合并提交并保持本地远端最新 | 这是现有成果的发布授权，不是对 2026-07-20 实施的追溯批准，也不放行 FND-014/019 或其他延期范围 | Product/Architecture Owner | 已批准发布 | Owner 2026-07-28 发布指令；G0 Review §11 |
+| D-016 | 2026-07-28 | 将当前已完成的 G0、S1-B 与 S1-C 实现候选通过功能分支、PR 和受保护 `main` 完整发布并同步本地 | Owner 要求把现有成果形成完整远程 GitHub 合并提交并保持本地远端最新 | 这是现有成果的发布授权，不是对 2026-07-20 实施的追溯批准，也不放行 FND-014/019 或其他延期范围 | Product/Architecture Owner | 已批准发布 | Owner 2026-07-28 发布指令；G0 Review §11；PR #6 |
 
 ### 10.2 决策模板
 
@@ -396,7 +396,7 @@ Sprint 0 退出条件：所有 P0 契约有版本号、Owner、兼容策略、�
 | 2026-07-19 | 0.6 | Product/Architecture Owner 批准 S1-B；启动 FND-011/016/017，继续保持 contract/non-null 与强制新写边界关闭 | Codex | Owner 回复“批准 S1-B” + G0 Review §9 |
 | 2026-07-19 | 0.7 | 完成 S1-B：确定性 NULL tenant resolver、批量 backfill/audit、安全 CLI 与 runbook；登记 Evidence typed-link blocker，保持 EF-04 与 contract 边界未完成 | Codex | 675 backend passed、10 skipped；10 MySQL passed；31 focused tests；Ruff/compile clean；mypy 80≤82 |
 | 2026-07-20 | 0.8 | 形成 S1-C 实现候选：强制 Namespace 新写、拒绝跨租户 typed 关系；采用 ADR-0211 并增加 Evidence→WorkTrace expand-only typed link；FND-014/019 继续后置 | Codex | backend 685 passed；MySQL lane 10 skipped（未配置 TEST_MYSQL_URL）；frontend 21 passed + production build；Ruff/compile clean；mypy 80≤82；Alembic head=0028 |
-| 2026-07-28 | 0.9 | 修正 S1-C 授权记录并完成发布加固：历史 NULL 资源 live path fail-closed；补齐 Handover、report token、heartbeat、feedback 与兼容 ingest 的 Namespace 写门禁；形成受保护 PR 发布候选 | Codex | backend 701 passed、10 skipped，覆盖率 76.90%；MySQL 10 passed；Foundation/contracts 104 passed；frontend 21 passed + build；Ruff/compile/import clean；mypy 80≤82；Alembic 0028/check clean；Owner 发布授权 |
+| 2026-07-28 | 0.9 | 修正 S1-C 授权记录并完成发布加固：历史 NULL 资源 live path fail-closed；补齐 Handover、report token、heartbeat、feedback 与兼容 ingest 的 Namespace 写门禁；形成受保护 PR 发布候选 | Codex | PR #6；backend 701 passed、10 skipped，覆盖率 76.90%；MySQL 10 passed；Foundation/contracts 104 passed；frontend 21 passed + build；Ruff/compile/import clean；mypy 80≤82；Alembic 0028/check clean；Owner 发布授权 |
 
 ## 12. Sprint 更新模板
 
