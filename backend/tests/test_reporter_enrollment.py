@@ -15,6 +15,11 @@ from app.api.v1.endpoints.control_plane import (
     rotate_reporter_credential,
     test_runtime as runtime_self_check,
 )
+from app.core.api_token_security import (
+    REPORTER_TOKEN_HASH_PREFIX,
+    hash_reporter_token_secret,
+    verify_reporter_token_secret,
+)
 from app.core.security import hash_password
 from app.models.audit import AuditLog
 from app.models.control_plane import (
@@ -91,8 +96,14 @@ async def test_self_service_reporter_enrollment_issues_long_lived_reporter_crede
     ).scalar_one()
     assert credential_row.is_active is True
     assert credential_row.token_hash != out.credential.token
+    assert credential_row.token_hash.startswith(REPORTER_TOKEN_HASH_PREFIX)
     assert credential_row.device_id == "test-workstation"
-    assert credential_row.scopes == ["report.upload", "report.structured", "report.heartbeat"]
+    assert credential_row.scopes == [
+        "report.upload",
+        "report.structured",
+        "report.heartbeat",
+        "execution.write",
+    ]
 
     auth = await authenticate_runtime_report_token(async_session, out.credential.token)
     assert auth.runtime.id == out.runtime.id
@@ -122,6 +133,26 @@ async def test_legacy_runtime_report_token_still_authenticates(async_session):
     assert auth.runtime.id == runtime.id
     assert auth.token.id == legacy.id
     assert auth.source == "runtime_report_token"
+
+
+def test_reporter_token_hash_is_fast_keyed_and_legacy_compatible() -> None:
+    token_hash = hash_reporter_token_secret("random-machine-secret")
+
+    assert token_hash.startswith(REPORTER_TOKEN_HASH_PREFIX)
+    assert "random-machine-secret" not in token_hash
+    assert verify_reporter_token_secret(
+        "random-machine-secret",
+        token_hash,
+    )
+    assert not verify_reporter_token_secret("wrong-secret", token_hash)
+    assert verify_reporter_token_secret(
+        "legacy-secret",
+        hash_password("legacy-secret"),
+    )
+    assert not verify_reporter_token_secret(
+        "legacy-secret",
+        "not-a-supported-hash",
+    )
 
 
 async def test_reporter_heartbeat_updates_runtime_liveness_without_admin_jwt(async_session):

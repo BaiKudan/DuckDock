@@ -58,8 +58,34 @@ def test_prod_compose_has_backend_and_frontend_healthchecks():
 
     assert "http://127.0.0.1:8801/readyz" in compose
     assert "start_period: 30s" in compose
-    assert "wget -qO- http://127.0.0.1/health" in compose
+    assert "wget -qO- http://127.0.0.1:8080/health" in compose
     assert "backend:\n        condition: service_healthy" in compose
+
+
+def test_prod_compose_deploys_the_prometheus_readiness_dependency():
+    compose = _read("docker-compose.prod.yml")
+    env_example = _read(".env.prod.example")
+    prometheus_config = _read("ops/prometheus/prometheus.yml")
+
+    assert "  prometheus:" in compose
+    assert "prom/prometheus:v3.5.0" in compose
+    assert "./ops/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro" in compose
+    assert "prometheus_data:/prometheus" in compose
+    assert '127.0.0.1:${DUCKDOCK_PROMETHEUS_HOST_PORT:-9090}:9090' in compose
+    assert "PROMETHEUS_BASE_URL=http://prometheus:9090" in env_example
+    assert 'targets: ["backend:8801"]' in prometheus_config
+    assert "environment: local-dev" not in prometheus_config
+
+
+def test_prod_frontend_does_not_hardcode_a_loopback_prometheus_link():
+    page = _read("frontend/src/pages/OperationsPage.tsx")
+    dockerfile = _read("frontend/Dockerfile.prod")
+    compose = _read("docker-compose.prod.yml")
+
+    assert "import.meta.env.VITE_PROMETHEUS_URL" in page
+    assert 'href="http://127.0.0.1:9090"' not in page
+    assert 'ARG VITE_PROMETHEUS_URL=""' in dockerfile
+    assert "VITE_PROMETHEUS_URL: ${VITE_PROMETHEUS_URL:-}" in compose
 
 
 def test_prod_compose_allows_graceful_shutdown_window_for_app_services():
@@ -79,6 +105,43 @@ def test_backend_requires_celery_soft_shutdown_version():
     requirements = _read("backend/requirements.txt")
 
     assert "celery>=5.5.0" in requirements
+
+
+def test_production_image_context_excludes_test_and_local_validation_artifacts():
+    backend_ignore = _read("backend/.dockerignore")
+    frontend_ignore = _read("frontend/.dockerignore")
+
+    for entry in (
+        "**/__pycache__/",
+        "**/*.py[cod]",
+        "tests/",
+        ".pytest_cache/",
+        ".mypy_cache/",
+        ".venv/",
+        "scripts/seed_handover_e2e.py",
+        "scripts/verify_*_dev.py",
+        "app/clinic_assets/fixtures/",
+    ):
+        assert entry in backend_ignore
+    for entry in ("node_modules/", "dist/", "e2e/", "src/test/"):
+        assert entry in frontend_ignore
+
+
+def test_production_frontend_runtime_image_contains_only_built_assets():
+    dockerfile = _read("frontend/Dockerfile.prod")
+    runtime_stage = dockerfile.split("FROM nginx:", maxsplit=1)[1]
+
+    assert "COPY --from=build /app/dist /usr/share/nginx/html" in runtime_stage
+    assert "COPY . ." not in runtime_stage
+    assert "npm ci" not in runtime_stage
+
+
+def test_e2e_seed_has_no_production_override():
+    seed_script = _read("backend/scripts/seed_handover_e2e.py")
+
+    assert "if not settings.DEBUG:" in seed_script
+    assert "--allow-non-debug" not in seed_script
+    assert "E2E_ALLOW_SEED" not in seed_script
 
 
 def test_backend_exposes_readyz_route():

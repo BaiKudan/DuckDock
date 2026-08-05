@@ -11,7 +11,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 
 from app.core.config import settings
-from app.core.security import verify_password
+from app.core.api_token_security import verify_reporter_token_secret
 from app.models.control_plane import (
     AdapterError,
     AdapterRunStep,
@@ -52,7 +52,12 @@ def _reporter_auth_error() -> HTTPException:
     )
 
 
-async def authenticate_runtime_report_token(db, token: str) -> ReporterAuthContext:
+async def authenticate_runtime_report_token(
+    db,
+    token: str,
+    *,
+    touch_usage: bool = True,
+) -> ReporterAuthContext:
     parts = token.split("_", 3)
     if len(parts) != 4 or parts[0] != "dkr" or parts[1] != "report":
         raise _reporter_auth_error()
@@ -67,7 +72,7 @@ async def authenticate_runtime_report_token(db, token: str) -> ReporterAuthConte
         )
     ).scalar_one_or_none()
     if credential is not None:
-        if not verify_password(secret, credential.token_hash):
+        if not verify_reporter_token_secret(secret, credential.token_hash):
             raise _reporter_auth_error()
         now = _now()
         if credential.expires_at is not None and _as_aware(credential.expires_at) < now:
@@ -81,7 +86,8 @@ async def authenticate_runtime_report_token(db, token: str) -> ReporterAuthConte
         ).scalar_one_or_none()
         if runtime is None:
             raise HTTPException(status_code=404, detail="Runtime not found")
-        credential.last_used_at = now
+        if touch_usage:
+            credential.last_used_at = now
         return ReporterAuthContext(runtime=runtime, token=credential, source="reporter_credential")
 
     legacy_token = (
@@ -92,7 +98,10 @@ async def authenticate_runtime_report_token(db, token: str) -> ReporterAuthConte
             )
         )
     ).scalar_one_or_none()
-    if legacy_token is None or not verify_password(secret, legacy_token.token_hash):
+    if legacy_token is None or not verify_reporter_token_secret(
+        secret,
+        legacy_token.token_hash,
+    ):
         raise _reporter_auth_error()
     now = _now()
     if legacy_token.expires_at is not None and _as_aware(legacy_token.expires_at) < now:
@@ -106,7 +115,8 @@ async def authenticate_runtime_report_token(db, token: str) -> ReporterAuthConte
     ).scalar_one_or_none()
     if runtime is None:
         raise HTTPException(status_code=404, detail="Runtime not found")
-    legacy_token.last_used_at = now
+    if touch_usage:
+        legacy_token.last_used_at = now
     return ReporterAuthContext(runtime=runtime, token=legacy_token, source="runtime_report_token")
 
 

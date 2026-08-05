@@ -13,7 +13,7 @@ import {
   Sparkles,
   Wand2,
 } from "lucide-react";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "../router";
 
 import {
   controlPlaneApi,

@@ -1,4 +1,4 @@
-"""离职交接建议顾问(specs/001 T042 · 宪法原则 V:LLM 产出为建议,非最终处置)。
+"""生成离职交接建议；LLM 输出不是最终处置决定。
 
 可插拔:
   · `RuleBasedHandoverAdvisor`(默认)—— 零外部依赖、确定性:一律 MANUAL_REVIEW、置信度 0,

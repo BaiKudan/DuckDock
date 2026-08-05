@@ -127,5 +127,5 @@
 
 建议接入方式：
 
-- 以 `backend/app/clinic_assets/fixtures/*.jsonl` 为基础生成 Promptfoo dataset
+- 以 `backend/tests/fixtures/*.jsonl` 为基础生成 Promptfoo dataset
 - 将 Judge Prompt 模板纳入 Promptfoo 的 prompt 管理

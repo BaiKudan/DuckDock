@@ -4,9 +4,8 @@ Design goals:
 - **No-op unless ``settings.RATE_LIMIT_ENABLED`` is True.** The default is False, so dev /
   test runtimes (and ``from app.main import app``) are completely unaffected and never need a
   real Redis. The limiter dependency short-circuits before touching any backend.
-- **Injectable backend** via the :class:`RateLimitBackend` protocol so tests can swap in an
-  in-memory fake (:class:`InMemoryRateLimitBackend`) without a live Redis server. Production
-  uses :class:`RedisRateLimitBackend` over ``redis.asyncio`` (already a dependency via celery).
+- **Injectable backend** via the :class:`RateLimitBackend` protocol. Production uses
+  :class:`RedisRateLimitBackend` over ``redis.asyncio`` (already a dependency via celery).
 
 The limiter is a **true failure-lockout** keyed by ``ip + username``: callers run
 :meth:`RateLimiter.precheck` *before* attempting auth (it only raises HTTP 429 while a lockout is
@@ -19,7 +18,6 @@ their own success.
 from __future__ import annotations
 
 import ipaddress
-import time
 from typing import Any, Protocol, runtime_checkable
 
 from fastapi import HTTPException, Request, status
@@ -33,8 +31,7 @@ _KEY_PREFIX = "duckdock:ratelimit"
 class RateLimitBackend(Protocol):
     """Minimal async key/value backend the limiter needs.
 
-    Implemented by both :class:`RedisRateLimitBackend` (production) and
-    :class:`InMemoryRateLimitBackend` (tests).
+    The production implementation is :class:`RedisRateLimitBackend`.
     """
 
     async def incr_with_ttl(self, key: str, window_seconds: int) -> int:
@@ -48,41 +45,6 @@ class RateLimitBackend(Protocol):
     async def is_locked(self, key: str) -> bool:
         """Return True while a lockout flag for ``key`` is still active."""
         ...
-
-
-class InMemoryRateLimitBackend:
-    """Process-local backend for tests. Not for multi-process production use."""
-
-    def __init__(self) -> None:
-        # key -> (count, expires_at_monotonic)
-        self._counters: dict[str, tuple[int, float]] = {}
-        # key -> lockout_expires_at_monotonic
-        self._lockouts: dict[str, float] = {}
-
-    def _now(self) -> float:
-        return time.monotonic()
-
-    async def incr_with_ttl(self, key: str, window_seconds: int) -> int:
-        now = self._now()
-        count, expires_at = self._counters.get(key, (0, 0.0))
-        if expires_at <= now:
-            count = 0
-            expires_at = now + window_seconds
-        count += 1
-        self._counters[key] = (count, expires_at)
-        return count
-
-    async def set_lockout(self, key: str, lockout_seconds: int) -> None:
-        self._lockouts[key] = self._now() + lockout_seconds
-
-    async def is_locked(self, key: str) -> bool:
-        expires_at = self._lockouts.get(key)
-        if expires_at is None:
-            return False
-        if expires_at <= self._now():
-            del self._lockouts[key]
-            return False
-        return True
 
 
 class RedisRateLimitBackend:

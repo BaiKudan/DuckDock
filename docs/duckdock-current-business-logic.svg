@@ -86,7 +86,7 @@
     <text x="87" y="592" text-anchor="middle" fill="#ea580c" font-size="15" font-weight="700">SOP</text>
     <text x="118" y="576" class="node-title">接入引导 / MCP</text>
     <text x="118" y="596" class="node-sub">私有 Registry 地址</text>
-    <text x="118" y="613" class="node-sub">安装 Reporter、dry-run、定时任务</text>
+    <text x="118" y="613" class="node-sub">安装 Reporter、校验上报、定时任务</text>
   </g>
 
   <!-- FastAPI nodes -->

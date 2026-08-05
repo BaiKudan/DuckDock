@@ -1,4 +1,5 @@
 import asyncio
+import time
 import uuid
 from contextlib import asynccontextmanager
 
@@ -6,12 +7,15 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, PlainTextResponse
 
 from app.core.config import assert_production_security, settings
 from app.core.database import AsyncSessionLocal, engine
 from app.core.logging import configure_logging, set_request_id
+from app.core.metrics import http_metrics
 from app.api.v1.router import api_router
+from app.api.v2.router import api_router as api_v2_router
+from app.version import DUCKDOCK_VERSION
 
 # SEC-02: refuse to boot a production runtime with an insecure secret/credential key.
 assert_production_security(settings)
@@ -45,7 +49,7 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(
     title=settings.APP_NAME,
     description="Private Skills Registry + Quality Gate Platform",
-    version="0.1.0",
+    version=DUCKDOCK_VERSION,
     lifespan=lifespan,
     # SEC-02: close the interactive docs UI outside development.
     docs_url="/docs" if settings.DEBUG else None,
@@ -77,6 +81,54 @@ def request_id_var_reset(token) -> None:
 
 app.add_middleware(RequestIdMiddleware)
 
+
+class HttpMetricsMiddleware(BaseHTTPMiddleware):
+    """Record bounded, content-free request metrics by FastAPI route template."""
+
+    async def dispatch(self, request: Request, call_next):
+        started = time.perf_counter()
+        status_code = 500
+        try:
+            response = await call_next(request)
+            status_code = response.status_code
+            return response
+        finally:
+            if request.url.path not in {"/metrics", "/health", "/readyz"}:
+                route = request.scope.get("route")
+                route_template = getattr(route, "path", None) or "unmatched"
+                http_metrics.observe(
+                    method=request.method,
+                    route=route_template,
+                    status_code=status_code,
+                    duration=time.perf_counter() - started,
+                )
+
+
+app.add_middleware(HttpMetricsMiddleware)
+
+
+class ApiCompatibilityMiddleware(BaseHTTPMiddleware):
+    """Advertise the maintained v1 lane and its versioned successor.
+
+    No Sunset date is emitted: v1 stays supported through the DuckDock 2.x
+    series, while endpoint-by-endpoint migration is documented separately.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        if request.url.path == settings.API_V1_PREFIX or request.url.path.startswith(
+            f"{settings.API_V1_PREFIX}/"
+        ):
+            response.headers["Deprecation"] = "true"
+            response.headers["X-DuckDock-API-Compatibility"] = "v1-supported-through-2.x"
+            response.headers["Link"] = (
+                f'<{settings.API_V2_PREFIX}>; rel="successor-version"'
+            )
+        return response
+
+
+app.add_middleware(ApiCompatibilityMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
@@ -86,11 +138,20 @@ app.add_middleware(
 )
 
 app.include_router(api_router, prefix=settings.API_V1_PREFIX)
+app.include_router(api_v2_router, prefix=settings.API_V2_PREFIX)
 
 
 @app.get("/health")
 async def health():
     return {"status": "ok", "app": settings.APP_NAME}
+
+
+@app.get("/metrics", include_in_schema=False)
+async def metrics():
+    return PlainTextResponse(
+        http_metrics.render_prometheus(),
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )
 
 
 async def _check_mysql() -> None:

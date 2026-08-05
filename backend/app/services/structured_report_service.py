@@ -35,6 +35,10 @@ from app.schemas.control_plane import (
     WorkTraceOut,
 )
 from app.services.report_upload_service import ReporterAuthContext
+from app.services.outbox_event_service import (
+    build_structured_report_recorded,
+    enqueue_domain_event,
+)
 from app.services.tenant_write_service import (
     build_runtime_binding,
     build_work_trace,
@@ -70,6 +74,11 @@ async def ingest_structured_report(
     ).scalar_one_or_none()
     if existing is not None:
         ensure_resource_namespace(existing, namespace.id, relationship="work_trace")
+        # The original WorkTrace and its Outbox event are committed
+        # atomically. A request replay must not rebuild the event from a
+        # MySQL-reloaded timestamp: DATETIME precision may differ from the
+        # original in-memory value and turn a valid API replay into a false
+        # Outbox payload conflict.
         return await _deduped_response(db, existing)
 
     report_id = f"srpt_{datetime.now(timezone.utc):%Y%m%d%H%M%S}_{uuid4().hex[:12]}"
@@ -169,6 +178,10 @@ async def ingest_structured_report(
         )
 
     reporter.runtime.last_sync_at = datetime.now(timezone.utc)
+    await enqueue_domain_event(
+        db,
+        build_structured_report_recorded(trace),
+    )
     await db.flush()
     return StructuredReportOut(
         report_id=report_id,

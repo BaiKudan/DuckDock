@@ -153,6 +153,58 @@
       "type": "string",
       "minLength": 1
     },
+    "component_graph": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "edges"
+      ],
+      "properties": {
+        "edges": {
+          "type": "array",
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/componentEdge"
+          }
+        }
+      }
+    },
+    "sbom": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "spec_version",
+        "document_sha256",
+        "media_type"
+      ],
+      "properties": {
+        "format": {
+          "type": "string",
+          "enum": [
+            "cyclonedx-json",
+            "spdx-json"
+          ]
+        },
+        "spec_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "document_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "media_type": {
+          "type": "string",
+          "enum": [
+            "application/vnd.cyclonedx+json",
+            "application/spdx+json"
+          ]
+        }
+      }
+    },
     "annotations": {
       "type": "object",
       "maxProperties": 6,
@@ -206,6 +258,35 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 200
+        }
+      }
+    },
+    "componentEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "from_component",
+        "to_component",
+        "relationship"
+      ],
+      "properties": {
+        "from_component": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 600
+        },
+        "to_component": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 600
+        },
+        "relationship": {
+          "type": "string",
+          "enum": [
+            "depends_on",
+            "uses",
+            "contains"
+          ]
         }
       }
     }

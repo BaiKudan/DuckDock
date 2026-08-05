@@ -23,6 +23,7 @@ from app.models.control_plane import (
     WorkTrace,
 )
 from app.models.namespace import Namespace, NamespaceMember, NamespaceRole
+from app.models.outbox import OutboxEvent
 from app.models.user import SystemRole, User
 from app.schemas.control_plane import (
     ReporterEnrollmentCreate,
@@ -202,4 +203,10 @@ async def test_structured_report_idempotency_reuses_existing_trace(async_session
     assert second.status == "deduped"
     assert second.work_trace.id == first.work_trace.id
     trace_count = (await async_session.execute(select(func.count()).select_from(WorkTrace))).scalar_one()
+    outbox_count = (
+        await async_session.execute(
+            select(func.count()).select_from(OutboxEvent)
+        )
+    ).scalar_one()
     assert trace_count == 1
+    assert outbox_count == 1

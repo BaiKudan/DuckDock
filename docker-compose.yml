@@ -9,6 +9,7 @@
 #    MinIO S3 API        host  9000   → container 9000
 #    MinIO Console       host  9001   → container 9001
 #    Langfuse Web        host  3200   → container 3000   (observability profile)
+#    Prometheus          host  9090   → container 9090   (operations profile)
 #    ClickHouse          (internal only — no host binding; observability profile)
 #
 #  If a host port conflicts with another local service, change the LHS only; container-side
@@ -28,7 +29,7 @@ services:
     volumes:
       - mysql_data:/var/lib/mysql
     ports:
-      - "3307:3306"
+      - "${MYSQL_HOST_PORT:-3307}:3306"
     deploy:
       resources:
         limits:
@@ -40,7 +41,7 @@ services:
       retries: 10
 
   postgres:
-    image: pgvector/pgvector:pg16
+    image: pgvector/pgvector:0.8.6-pg16
     profiles: ["observability"]
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-postgres}
@@ -49,7 +50,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "${POSTGRES_HOST_PORT:-5432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER}"]
       interval: 5s
@@ -57,11 +58,11 @@ services:
       retries: 5
 
   redis:
-    image: redis:7-alpine
+    image: redis:7.4.9-alpine
     volumes:
       - redis_data:/data
     ports:
-      - "6379:6379"
+      - "${REDIS_HOST_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -69,7 +70,7 @@ services:
       retries: 5
 
   minio:
-    image: minio/minio:latest
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER in .env}
@@ -77,8 +78,8 @@ services:
     volumes:
       - minio_data:/data
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "${MINIO_HOST_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_HOST_PORT:-9001}:9001"
     deploy:
       resources:
         limits:
@@ -96,6 +97,7 @@ services:
       DATABASE_URL: mysql+aiomysql://${MYSQL_USER:-duckdock}:${MYSQL_PASSWORD:-duckdock}@mysql:3306/${MYSQL_DATABASE:-duckdock}?charset=utf8mb4
       REDIS_URL: ${DUCKDOCK_INTERNAL_REDIS_URL:-redis://redis:6379/0}
       MINIO_ENDPOINT: ${DUCKDOCK_INTERNAL_MINIO_ENDPOINT:-minio:9000}
+      MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT:-localhost:9000}
       DUCKDOCK_LLM_API_KEY: ${DUCKDOCK_LLM_API_KEY:-}
       DUCKDOCK_LLM_BASE_URL: ${DUCKDOCK_LLM_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
       DUCKDOCK_LLM_MODEL: ${DUCKDOCK_LLM_MODEL:-qwen3.7-max}
@@ -103,9 +105,18 @@ services:
       DUCKDOCK_LLM_TIMEOUT_SECONDS: ${DUCKDOCK_LLM_TIMEOUT_SECONDS:-90}
       DUCKDOCK_LLM_MAX_INPUT_CHARS: ${DUCKDOCK_LLM_MAX_INPUT_CHARS:-24000}
       LLM_ALLOW_PRIVATE_BASE_URL: ${LLM_ALLOW_PRIVATE_BASE_URL:-false}
+      AGENT_EXECUTION_INGESTION_ENABLED: ${AGENT_EXECUTION_INGESTION_ENABLED:-true}
+      AGENT_EXECUTION_RUNTIME_ALLOWLIST: ${AGENT_EXECUTION_RUNTIME_ALLOWLIST:-[]}
+      SEMANTIC_EMBEDDING_ENABLED: ${SEMANTIC_EMBEDDING_ENABLED:-false}
+      SEMANTIC_EMBEDDING_PROFILE: ${SEMANTIC_EMBEDDING_PROFILE:-openai-compatible-local}
+      SEMANTIC_EMBEDDING_BASE_URL: ${SEMANTIC_EMBEDDING_BASE_URL:-}
+      SEMANTIC_EMBEDDING_API_KEY: ${SEMANTIC_EMBEDDING_API_KEY:-}
+      SEMANTIC_EMBEDDING_TIMEOUT_SECONDS: ${SEMANTIC_EMBEDDING_TIMEOUT_SECONDS:-15}
+      PROMETHEUS_BASE_URL: ${DUCKDOCK_INTERNAL_PROMETHEUS_URL:-http://prometheus:9090}
+      PROMETHEUS_READINESS_TIMEOUT_SECONDS: ${PROMETHEUS_READINESS_TIMEOUT_SECONDS:-3}
     ports:
-      - "8801:8801"
-      - "8990:8801"
+      - "${BACKEND_HOST_PORT:-8801}:8801"
+      - "${BACKEND_ALT_HOST_PORT:-8990}:8801"
     depends_on:
       mysql:
         condition: service_healthy
@@ -131,6 +142,7 @@ services:
       DATABASE_URL: mysql+aiomysql://${MYSQL_USER:-duckdock}:${MYSQL_PASSWORD:-duckdock}@mysql:3306/${MYSQL_DATABASE:-duckdock}?charset=utf8mb4
       REDIS_URL: ${DUCKDOCK_INTERNAL_REDIS_URL:-redis://redis:6379/0}
       MINIO_ENDPOINT: ${DUCKDOCK_INTERNAL_MINIO_ENDPOINT:-minio:9000}
+      MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT:-localhost:9000}
       DUCKDOCK_LLM_API_KEY: ${DUCKDOCK_LLM_API_KEY:-}
       DUCKDOCK_LLM_BASE_URL: ${DUCKDOCK_LLM_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
       DUCKDOCK_LLM_MODEL: ${DUCKDOCK_LLM_MODEL:-qwen3.7-max}
@@ -164,6 +176,7 @@ services:
       DATABASE_URL: mysql+aiomysql://${MYSQL_USER:-duckdock}:${MYSQL_PASSWORD:-duckdock}@mysql:3306/${MYSQL_DATABASE:-duckdock}?charset=utf8mb4
       REDIS_URL: ${DUCKDOCK_INTERNAL_REDIS_URL:-redis://redis:6379/0}
       MINIO_ENDPOINT: ${DUCKDOCK_INTERNAL_MINIO_ENDPOINT:-minio:9000}
+      MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT:-localhost:9000}
       DUCKDOCK_LLM_API_KEY: ${DUCKDOCK_LLM_API_KEY:-}
       DUCKDOCK_LLM_BASE_URL: ${DUCKDOCK_LLM_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
       DUCKDOCK_LLM_MODEL: ${DUCKDOCK_LLM_MODEL:-qwen3.7-max}
@@ -224,14 +237,190 @@ services:
       dockerfile: Dockerfile
     environment:
       VITE_API_PROXY_TARGET: http://backend:8801
+      VITE_PROMETHEUS_URL: ${VITE_PROMETHEUS_URL:-http://127.0.0.1:9090}
     ports:
-      - "5174:5174"
-      - "5175:5174"
+      - "${FRONTEND_HOST_PORT:-5174}:5174"
+      - "${FRONTEND_ALT_HOST_PORT:-5175}:5174"
     depends_on:
       - backend
     volumes:
       - ./frontend:/app
       - /app/node_modules
+
+  # Local control-plane SLO and alerting service. The backend exposes
+  # only route-template labels and numeric status/latency metrics; no tenant,
+  # public ID, prompt, trace body or credential enters the Prometheus surface.
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    profiles: ["operations"]
+    depends_on:
+      backend:
+        condition: service_healthy
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${DUCKDOCK_PROMETHEUS_RETENTION:-15d}
+      - --web.enable-lifecycle
+    volumes:
+      - ./ops/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./ops/prometheus/duckdock-alerts.yml:/etc/prometheus/duckdock-alerts.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:${DUCKDOCK_PROMETHEUS_HOST_PORT:-9090}:9090"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9090/-/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    deploy:
+      resources:
+        limits:
+          memory: ${PROMETHEUS_MEM_LIMIT:-512m}
+
+  # Optional per-Runtime OpenClaw shadow telemetry trust boundary.
+  # It is deliberately excluded from the default stack. The base config exports
+  # redacted metadata to debug; the telemetry-langfuse profile adds the provider sink.
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.157.0
+    profiles: ["telemetry"]
+    command:
+      - --config=/etc/otelcol/config.yaml
+    environment:
+      DUCKDOCK_OTEL_HTPASSWD: ${DUCKDOCK_OTEL_HTPASSWD:-duckdock-runtime-dev:duckdock-otel-dev}
+      DUCKDOCK_OTEL_NAMESPACE_PUBLIC_ID: ${DUCKDOCK_OTEL_NAMESPACE_PUBLIC_ID:-ns_openclaw_shadow_dev}
+      DUCKDOCK_OTEL_RUNTIME_PUBLIC_ID: ${DUCKDOCK_OTEL_RUNTIME_PUBLIC_ID:-rt_openclaw_shadow_dev}
+    volumes:
+      - ./ops/otel-collector/openclaw-shadow.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "127.0.0.1:${DUCKDOCK_OTEL_GRPC_HOST_PORT:-4317}:4317"
+      - "127.0.0.1:${DUCKDOCK_OTEL_HTTP_HOST_PORT:-4318}:4318"
+      - "127.0.0.1:${DUCKDOCK_OTEL_HEALTH_HOST_PORT:-13133}:13133"
+    deploy:
+      resources:
+        limits:
+          memory: ${OTEL_COLLECTOR_MEM_LIMIT:-384m}
+
+  # S3/RT-04: same trust boundary with the optional Langfuse v4 exporter
+  # overlay. It uses distinct localhost ports so it cannot collide with the
+  # debug reference profile.
+  otel-langfuse-queue-init:
+    image: python:3.12-alpine
+    profiles: ["telemetry-langfuse"]
+    user: "0:0"
+    volumes:
+      - otel_langfuse_queue_data:/var/lib/otelcol
+    command:
+      - sh
+      - -c
+      - >
+        mkdir -p /var/lib/otelcol &&
+        chown 10001:10001 /var/lib/otelcol &&
+        chmod 0700 /var/lib/otelcol
+    restart: "no"
+
+  otel-collector-langfuse:
+    image: otel/opentelemetry-collector-contrib:0.157.0
+    profiles: ["telemetry-langfuse"]
+    depends_on:
+      otel-langfuse-queue-init:
+        condition: service_completed_successfully
+    command:
+      - --config=file:/etc/otelcol/openclaw-shadow.yaml
+      - --config=file:/etc/otelcol/langfuse-v4-overlay.yaml
+    environment:
+      DUCKDOCK_OTEL_HTPASSWD: ${DUCKDOCK_OTEL_HTPASSWD:-duckdock-runtime-dev:duckdock-otel-dev}
+      DUCKDOCK_OTEL_NAMESPACE_PUBLIC_ID: ${DUCKDOCK_OTEL_NAMESPACE_PUBLIC_ID:-ns_openclaw_shadow_dev}
+      DUCKDOCK_OTEL_RUNTIME_PUBLIC_ID: ${DUCKDOCK_OTEL_RUNTIME_PUBLIC_ID:-rt_openclaw_shadow_dev}
+      DUCKDOCK_LANGFUSE_OTLP_ENDPOINT: ${DUCKDOCK_LANGFUSE_OTLP_ENDPOINT:-http://langfuse-web:3000/api/public/otel}
+      DUCKDOCK_LANGFUSE_PUBLIC_KEY: ${DUCKDOCK_LANGFUSE_PUBLIC_KEY:-pk-lf-duckdock-local-public}
+      DUCKDOCK_LANGFUSE_SECRET_KEY: ${DUCKDOCK_LANGFUSE_SECRET_KEY:-sk-lf-duckdock-local-secret}
+      DUCKDOCK_OTEL_QUEUE_SIZE: ${DUCKDOCK_OTEL_QUEUE_SIZE:-2048}
+      DUCKDOCK_OTEL_QUEUE_MAX_BYTES: ${DUCKDOCK_OTEL_QUEUE_MAX_BYTES:-134217728}
+    volumes:
+      - ./ops/otel-collector/openclaw-shadow.yaml:/etc/otelcol/openclaw-shadow.yaml:ro
+      - ./ops/otel-collector/langfuse-v4-overlay.yaml:/etc/otelcol/langfuse-v4-overlay.yaml:ro
+      - otel_langfuse_queue_data:/var/lib/otelcol
+    ports:
+      - "127.0.0.1:${DUCKDOCK_LANGFUSE_OTEL_GRPC_HOST_PORT:-14327}:4317"
+      - "127.0.0.1:${DUCKDOCK_LANGFUSE_OTEL_HTTP_HOST_PORT:-14328}:4318"
+      - "127.0.0.1:${DUCKDOCK_LANGFUSE_OTEL_HEALTH_HOST_PORT:-14133}:13133"
+      - "127.0.0.1:${DUCKDOCK_LANGFUSE_OTEL_METRICS_HOST_PORT:-18888}:8888"
+    deploy:
+      resources:
+        limits:
+          memory: ${OTEL_COLLECTOR_MEM_LIMIT:-384m}
+    stop_grace_period: 20s
+
+  # S4/RT-06: provider-neutral, per-Runtime Generic OTLP bridge. It fans
+  # sanitized spans out to the trace provider and the DuckDock metadata-only
+  # projection endpoint. Configure a ReporterCredential and TelemetrySink
+  # before enabling this optional profile.
+  otel-generic-queue-init:
+    image: python:3.12-alpine
+    profiles: ["telemetry-generic"]
+    user: "0:0"
+    volumes:
+      - otel_generic_queue_data:/var/lib/otelcol
+    command:
+      - sh
+      - -c
+      - >
+        mkdir -p /var/lib/otelcol &&
+        chown 10001:10001 /var/lib/otelcol &&
+        chmod 0700 /var/lib/otelcol
+    restart: "no"
+
+  otel-collector-generic:
+    image: otel/opentelemetry-collector-contrib:0.157.0
+    profiles: ["telemetry-generic"]
+    depends_on:
+      backend:
+        condition: service_healthy
+      otel-generic-queue-init:
+        condition: service_completed_successfully
+    command:
+      - --config=/etc/otelcol/config.yaml
+    environment:
+      DUCKDOCK_OTEL_HTPASSWD: ${DUCKDOCK_GENERIC_OTEL_HTPASSWD:-duckdock-generic-dev:duckdock-otel-generic-dev}
+      DUCKDOCK_OTEL_NAMESPACE_PUBLIC_ID: ${DUCKDOCK_GENERIC_NAMESPACE_PUBLIC_ID:-ns_configure_generic_bridge}
+      DUCKDOCK_OTEL_RUNTIME_PUBLIC_ID: ${DUCKDOCK_GENERIC_RUNTIME_PUBLIC_ID:-rt_configure_generic_bridge}
+      DUCKDOCK_API_BASE: http://backend:8801
+      DUCKDOCK_TELEMETRY_SINK_PUBLIC_ID: ${DUCKDOCK_GENERIC_TELEMETRY_SINK_PUBLIC_ID:-tsk_configure_generic_bridge}
+      DUCKDOCK_GENERIC_REPORTER_TOKEN: ${DUCKDOCK_GENERIC_REPORTER_TOKEN:-configure-reporter-token}
+      DUCKDOCK_GENERIC_PROVIDER_OTLP_ENDPOINT: ${DUCKDOCK_GENERIC_PROVIDER_OTLP_ENDPOINT:-http://host.docker.internal:4319}
+      DUCKDOCK_GENERIC_PROVIDER_TOKEN: ${DUCKDOCK_GENERIC_PROVIDER_TOKEN:-configure-provider-token}
+      DUCKDOCK_OTEL_QUEUE_SIZE: ${DUCKDOCK_GENERIC_OTEL_QUEUE_SIZE:-2048}
+      DUCKDOCK_OTEL_QUEUE_MAX_BYTES: ${DUCKDOCK_GENERIC_OTEL_QUEUE_MAX_BYTES:-134217728}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./ops/otel-collector/generic-otlp-bridge.yaml:/etc/otelcol/config.yaml:ro
+      - otel_generic_queue_data:/var/lib/otelcol
+    ports:
+      - "127.0.0.1:${DUCKDOCK_GENERIC_OTEL_GRPC_HOST_PORT:-14527}:4317"
+      - "127.0.0.1:${DUCKDOCK_GENERIC_OTEL_HTTP_HOST_PORT:-14528}:4318"
+      - "127.0.0.1:${DUCKDOCK_GENERIC_OTEL_HEALTH_HOST_PORT:-14135}:13133"
+      - "127.0.0.1:${DUCKDOCK_GENERIC_OTEL_METRICS_HOST_PORT:-18889}:8888"
+    deploy:
+      resources:
+        limits:
+          memory: ${OTEL_COLLECTOR_MEM_LIMIT:-384m}
+    stop_grace_period: 20s
+
+  # One-shot, network-internal endpoint for collector conformance verification only.
+  otel-langfuse-mock:
+    image: python:3.12-alpine
+    profiles: ["telemetry-test"]
+    environment:
+      DUCKDOCK_LANGFUSE_MOCK_HOST: 0.0.0.0
+      DUCKDOCK_LANGFUSE_MOCK_PORT: 14319
+      DUCKDOCK_LANGFUSE_PUBLIC_KEY: ${DUCKDOCK_LANGFUSE_PUBLIC_KEY:-pk-shadow-export}
+      DUCKDOCK_LANGFUSE_SECRET_KEY: ${DUCKDOCK_LANGFUSE_SECRET_KEY:-sk-shadow-export}
+    volumes:
+      - ./ops/otel-collector/mock_langfuse_otlp.py:/mock_langfuse_otlp.py:ro
+    command:
+      - python
+      - /mock_langfuse_otlp.py
 
   # ── Langfuse self-hosted stack (Clinic observability) ────────────────
   # All internal-only except langfuse-web on 3000. ClickHouse stays
@@ -262,7 +451,9 @@ services:
     restart: "no"
 
   clickhouse:
-    image: clickhouse/clickhouse-server:24.8
+    # Langfuse v4 requires ClickHouse >=25.12. The accepted patch is exact;
+    # change it only together with the compatibility gate baseline.
+    image: ${LANGFUSE_CLICKHOUSE_IMAGE:-clickhouse/clickhouse-server}:${LANGFUSE_CLICKHOUSE_TAG:-25.12.11.4}
     profiles: ["observability"]
     environment:
       CLICKHOUSE_DB: default
@@ -282,12 +473,12 @@ services:
       timeout: 5s
       retries: 6
 
-  # One-shot bucket bootstrap — Langfuse v3 does NOT auto-create its
+  # One-shot bucket bootstrap — Langfuse does not auto-create its
   # S3 bucket on first use, and ingest silently fails with
   # "The specified bucket does not exist" until this runs.
   # Uses MinIO's mc client against the compose-internal minio endpoint.
   langfuse-minio-init:
-    image: minio/mc:latest
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
     profiles: ["observability"]
     env_file: .env
     depends_on:
@@ -303,7 +494,7 @@ services:
     restart: "no"
 
   langfuse-worker:
-    image: langfuse/langfuse-worker:3
+    image: ${LANGFUSE_IMAGE_REGISTRY:-ghcr.io/langfuse}/langfuse-worker:${LANGFUSE_IMAGE_TAG:-4.1.0}
     profiles: ["observability"]
     restart: unless-stopped
     depends_on:
@@ -317,12 +508,25 @@ services:
         condition: service_healthy
       minio:
         condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://$$(hostname -i):3030/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
     environment: &langfuse-env
       DATABASE_URL: postgres://${POSTGRES_USER:-duckdock}:${POSTGRES_PASSWORD:-duckdock-postgres}@postgres:5432/langfuse
       SALT: ${LANGFUSE_SALT:-duckdock-local-langfuse-salt}
       ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
       TELEMETRY_ENABLED: "false"
       LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "false"
+      # This optional stack is a fresh local v4 deployment. All DuckDock
+      # producers use Python SDK v4 or OTLP with ingestion version 4, so the
+      # legacy ClickHouse write path is intentionally disabled.
+      LANGFUSE_MIGRATION_V4_WRITE_MODE: ${LANGFUSE_MIGRATION_V4_WRITE_MODE:-events_only}
+      LANGFUSE_MIGRATION_V4_NATIVE_OTEL_BEHAVIOUR: ${LANGFUSE_MIGRATION_V4_NATIVE_OTEL_BEHAVIOUR:-direct}
+      LANGFUSE_MIGRATION_V4_ALLOW_PREVIEW_OPT_IN: ${LANGFUSE_MIGRATION_V4_ALLOW_PREVIEW_OPT_IN:-true}
+      LANGFUSE_BACKGROUND_MIGRATION_V4_ENABLE_HISTORIC_BACKFILL: ${LANGFUSE_BACKGROUND_MIGRATION_V4_ENABLE_HISTORIC_BACKFILL:-true}
       CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
       CLICKHOUSE_URL: http://clickhouse:8123
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
@@ -347,12 +551,18 @@ services:
       LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
 
   langfuse-web:
-    image: langfuse/langfuse:3
+    image: ${LANGFUSE_IMAGE_REGISTRY:-ghcr.io/langfuse}/langfuse:${LANGFUSE_IMAGE_TAG:-4.1.0}
     profiles: ["observability"]
     restart: unless-stopped
     depends_on:
       langfuse-worker:
-        condition: service_started
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://$$(hostname -i):3000/api/public/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
     ports:
       - "${LANGFUSE_HOST_PORT:-3200}:3000"
     environment:
@@ -379,3 +589,6 @@ volumes:
   repos_data:
   clickhouse_data:
   clickhouse_logs:
+  otel_langfuse_queue_data:
+  otel_generic_queue_data:
+  prometheus_data:

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { AtSign, CheckCircle2, Hexagon, LockKeyhole, UserPlus, UserRound } from "lucide-react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "../router";
 import { authApi } from "../api/client";
 import LanguageToggle from "../components/LanguageToggle";
 import { Button, IconTile, Input } from "../components/ui";

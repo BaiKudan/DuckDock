@@ -15,7 +15,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "../router";
 import {
   controlPlaneApi,
   type AIAsset,
@@ -136,11 +136,14 @@ function PersonalWorkspaceContent({
   message: ReturnType<typeof AntApp.useApp>["message"];
 }) {
   const data = query.data;
-  const assets = data?.assets ?? [];
+  const assets = useMemo(() => data?.assets ?? [], [data?.assets]);
   const traces = data?.work_traces ?? [];
   const handovers = data?.handovers ?? [];
   const contexts = data?.project_contexts ?? [];
-  const reporterStatuses = data?.reporter_statuses ?? [];
+  const reporterStatuses = useMemo(
+    () => data?.reporter_statuses ?? [],
+    [data?.reporter_statuses],
+  );
   const readiness = data?.readiness;
   const offboardingVisible = data?.offboarding_visible ?? false;
 
@@ -285,7 +288,7 @@ function PersonalWorkspaceContent({
           <Card title="Reporter 自报" description="只显示与你的资产或工作历程有关联的运行时。">
             {reporterStatuses.length === 0 ? (
               <div className="px-6 py-7 text-sm leading-6 text-slate-500">
-                暂未发现与你关联的 Reporter 上报。让 WorkBuddy/OpenClaw 执行接入对话并上传一次 dry-run 包后，这里会出现状态。
+                暂未发现与你关联的 Reporter 上报。让 WorkBuddy/OpenClaw 执行接入对话并上传一个最小校验包后，这里会出现状态。
               </div>
             ) : (
               <div className="divide-y divide-slate-200">
@@ -359,7 +362,7 @@ function PersonalWorkspaceContent({
           rows={5}
           maxLength={1000}
           showCount
-          placeholder="例如：这个 Prompt 只用于测试，不应进入正式资产范围；或这个 Agent 由项目组共同维护。"
+          placeholder="例如：这个 Prompt 仅用于一次性迁移，不应进入长期资产范围；或这个 Agent 由项目组共同维护。"
         />
       </Modal>
     </div>

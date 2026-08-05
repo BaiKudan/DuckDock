@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { CheckCircle2, Hexagon, LockKeyhole, ShieldCheck, UserRound } from "lucide-react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "../router";
 import { authApi, iamApi, type PublicSSOProvider } from "../api/client";
 import { defaultRouteForUser } from "../authRoutes";
 import LanguageToggle from "../components/LanguageToggle";

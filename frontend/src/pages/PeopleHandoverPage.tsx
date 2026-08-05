@@ -115,7 +115,7 @@ export default function PeopleHandoverPage() {
       handover_receiver_user_id: selected.handover_receiver_user_id ? String(selected.handover_receiver_user_id) : "",
       note: selected.note ?? "",
     });
-  }, [selected?.id, selected?.profile_updated_at]);
+  }, [selected]);
 
   return (
     <div className="app-page max-w-[1180px] space-y-6">

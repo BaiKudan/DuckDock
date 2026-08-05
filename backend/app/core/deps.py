@@ -42,7 +42,7 @@ async def _authenticate_token(token: str, db: AsyncSession, exc: HTTPException) 
 
 async def get_current_user(
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(bearer_scheme)],
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db, scope="function")],
 ) -> User:
     token = credentials.credentials
     credentials_exception = HTTPException(
@@ -55,7 +55,7 @@ async def get_current_user(
 
 async def get_optional_current_user(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(optional_bearer_scheme)],
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db, scope="function")],
 ) -> User | None:
     if credentials is None:
         return None
@@ -68,7 +68,7 @@ async def get_optional_current_user(
 
 
 async def _auth_robot(token: str, db: AsyncSession, exc: HTTPException) -> User:
-    """Authenticate a robot token and return a synthetic User-like proxy."""
+    """Authenticate a robot token and return a non-persistent User-like principal."""
     from app.models.robot import RobotAccount
 
     # token = "dkr_robot_{prefix}_{secret}"
@@ -321,7 +321,7 @@ async def require_admin(
 
 async def require_iam_admin(
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db, scope="function")],
 ) -> User:
     if current_user.system_role == SystemRole.ADMIN:
         return current_user
@@ -336,7 +336,7 @@ async def require_iam_admin(
 
 async def require_system_permission(
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db, scope="function")],
     *,
     permission_key: str,
     error_detail: str,
@@ -359,7 +359,7 @@ async def require_system_permission(
 
 async def require_users_manager(
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db, scope="function")],
 ) -> User:
     return await require_system_permission(
         current_user,
@@ -372,7 +372,7 @@ async def require_users_manager(
 
 async def require_org_reader(
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db, scope="function")],
 ) -> User:
     return await require_system_permission(
         current_user,
@@ -385,7 +385,7 @@ async def require_org_reader(
 
 async def require_org_manager(
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db, scope="function")],
 ) -> User:
     return await require_system_permission(
         current_user,
@@ -398,7 +398,7 @@ async def require_org_manager(
 
 async def require_sso_manager(
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db, scope="function")],
 ) -> User:
     return await require_system_permission(
         current_user,
@@ -411,7 +411,7 @@ async def require_sso_manager(
 
 async def require_audit_reader(
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db, scope="function")],
 ) -> User:
     if current_user.system_role == SystemRole.ADMIN:
         return current_user
@@ -426,7 +426,7 @@ async def require_audit_reader(
 
 async def require_runtime_reader(
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db, scope="function")],
 ) -> User:
     return await require_system_permission(
         current_user,
@@ -439,7 +439,7 @@ async def require_runtime_reader(
 
 async def require_runtime_manager(
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db, scope="function")],
 ) -> User:
     return await require_system_permission(
         current_user,
@@ -451,7 +451,7 @@ async def require_runtime_manager(
 
 async def require_asset_reader(
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db, scope="function")],
 ) -> User:
     return await require_system_permission(
         current_user,
@@ -464,7 +464,7 @@ async def require_asset_reader(
 
 async def require_asset_manager(
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db, scope="function")],
 ) -> User:
     return await require_system_permission(
         current_user,
@@ -476,7 +476,7 @@ async def require_asset_manager(
 
 async def require_worktrace_reader(
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db, scope="function")],
 ) -> User:
     return await require_system_permission(
         current_user,
@@ -489,7 +489,7 @@ async def require_worktrace_reader(
 
 async def require_evidence_reader(
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db, scope="function")],
 ) -> User:
     return await require_system_permission(
         current_user,
@@ -502,7 +502,7 @@ async def require_evidence_reader(
 
 async def require_handover_reader(
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db, scope="function")],
 ) -> User:
     return await require_system_permission(
         current_user,
@@ -515,7 +515,7 @@ async def require_handover_reader(
 
 async def require_handover_manager(
     current_user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db, scope="function")],
 ) -> User:
     return await require_system_permission(
         current_user,
@@ -542,4 +542,4 @@ WorktraceReaderUser = Annotated[User, Depends(require_worktrace_reader)]
 EvidenceReaderUser = Annotated[User, Depends(require_evidence_reader)]
 HandoverReaderUser = Annotated[User, Depends(require_handover_reader)]
 HandoverManagerUser = Annotated[User, Depends(require_handover_manager)]
-DB = Annotated[AsyncSession, Depends(get_db)]
+DB = Annotated[AsyncSession, Depends(get_db, scope="function")]

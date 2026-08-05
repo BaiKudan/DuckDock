@@ -239,11 +239,16 @@ Hermes Reporter 的推荐接入路径是：
 3. Reporter 把 credential 写入 `~/.duckdock/reporter/hermes.json`，权限收为 `0600`。
 4. Hermes cron 创建 `DuckDock Hermes Reporter Pilot` 定时任务，周五 16:00 执行。
 5. cron 以 no-agent script 模式执行 `scripts/hermes_reporter_pilot.py`。
-6. 默认任务提交 `duckdock-structured-report-v1` JSON，只采集 Hermes 公开元数据、插件/模型摘要、cron 状态和交接/风险信号。
-7. 交接/审计时显式运行 pack 模式，生成摘要/索引型 `duckdock-pack-v1.zip` 后再走 MinIO + Analysis Worker。
-8. 管理员资产列表可见 Hermes runtime / scheduled task / gateway / plugins，员工工作台可见资产、工作历程和 healthy Reporter 状态。
+6. 每次任务先以 `hermes-reporter` profile 完成 v2 handshake/heartbeat，创建
+   metadata-only Session/Run；成功或失败都写入明确终态，duration 由服务端计算。
+7. 默认任务提交 `duckdock-structured-report-v1` JSON，只采集 Hermes 公开元数据、插件/模型摘要、cron 状态和交接/风险信号。
+8. 交接/审计时显式运行 pack 模式，生成摘要/索引型 `duckdock-pack-v1.zip` 后再走 MinIO + Analysis Worker。
+9. 管理员 Fleet 可见 Hermes 原生 profile、DD-C1 和 heartbeat；资产列表可见
+   runtime / scheduled task / gateway / plugins，员工工作台可见资产和工作历程。
 
-当前 Hermes 仍按 `provider=custom + agent_kind=hermes` 接入；是否新增一等 `hermes` provider 枚举属于后续产品决策。
+当前 Hermes 的 Runtime 仍按 `provider=custom + agent_kind=hermes` 接入，但 Adapter
+已使用一等 `hermes-reporter` profile；是否新增一等 `hermes` Runtime provider 枚举
+属于后续产品决策。
 
 ## 8. WorkBuddy 接入说明
 
@@ -283,7 +288,7 @@ tools/duckdock-runtime-mcp/duckdock_runtime_mcp.py
 - `duckdock.reporter.pause`
 - `duckdock.reporter.uninstall`
 
-推荐顺序是：先在 WorkBuddy 中配置 DuckDock MCP，再让用户通过一句话完成 Reporter 安装、dry-run 和周期任务创建。详细说明见 [DuckDock Runtime MCP 接入说明](./duckdock-runtime-mcp.zh-CN.md)。
+推荐顺序是：先在 WorkBuddy 中配置 DuckDock MCP，再让用户通过一句话完成 Reporter 安装、最小校验上报和周期任务创建。详细说明见 [DuckDock Runtime MCP 接入说明](./duckdock-runtime-mcp.zh-CN.md)。
 
 ## 10. 常见问题
 

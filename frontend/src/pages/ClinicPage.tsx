@@ -14,7 +14,7 @@ import {
   Sparkles,
   Workflow,
 } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "../router";
 import { clinicApi, namespacesApi, type EvaluationSummary, type Namespace } from "../api/client";
 import { useI18n } from "../i18n";
 import { Badge, Button, Card, IconTile, MonoPill, PageHeader } from "../components/ui";

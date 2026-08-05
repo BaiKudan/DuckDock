@@ -521,7 +521,7 @@ async def finalize_analysis_job(
                 "materialized_counts": materialized_counts,
             }
 
-    # FR-005: per-artifact failures determine the terminal collection-job status.
+    # Per-artifact failures determine the terminal collection-job status.
     # Some succeeded + some failed -> PARTIAL_FAILED; all artifacts failed -> FAILED;
     # otherwise SUCCEEDED. The analysis job itself stays SUCCEEDED (AnalysisJobStatus
     # has no partial state) but records the failure detail in summary_json.

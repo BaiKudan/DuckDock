@@ -222,7 +222,7 @@ async def _ensure_user(
     if user is None:
         user = User(
             username=username,
-            email=f"{username}@e2e.duckdock.local",
+            email=f"{username}@e2e.duckdock.example.com",
             full_name=username.replace("-", " ").title(),
             hashed_password=hash_password(password),
             system_role=role,
@@ -243,7 +243,6 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Seed a pending-approval handover case for P3-11 Playwright E2E.")
     parser.add_argument("--json", action="store_true", help="Print JSON output (default).")
     parser.add_argument("--shell", action="store_true", help="Print shell exports for E2E_* variables.")
-    parser.add_argument("--allow-non-debug", action="store_true", help="Allow seeding when DEBUG is false.")
     parser.add_argument("--admin-username", default=os.getenv("E2E_ADMIN_USER", DEFAULT_ADMIN_USERNAME))
     parser.add_argument("--admin-password", default=os.getenv("E2E_ADMIN_PASS", DEFAULT_ADMIN_PASSWORD))
     parser.add_argument("--reset-admin-password", action="store_true", default=os.getenv("E2E_RESET_ADMIN_PASSWORD") == "1")
@@ -261,10 +260,10 @@ async def async_main() -> int:
     args = parse_args()
     engine.echo = False
     logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
-    if not settings.DEBUG and not args.allow_non_debug and os.getenv("E2E_ALLOW_SEED") != "1":
+    if not settings.DEBUG:
         raise SystemExit(
             "Refusing to seed handover E2E data while DEBUG=false. "
-            "Use DEBUG=true for dev/test, or pass --allow-non-debug intentionally."
+            "This test utility has no production override."
         )
 
     config = HandoverE2ESeedConfig(

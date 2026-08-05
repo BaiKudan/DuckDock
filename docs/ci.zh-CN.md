@@ -14,14 +14,15 @@ CI 配置位于 `.github/workflows/ci.yml`。
 
 ## 2. 检查矩阵
 
-CI 分为四个阻塞 job。
+CI 分为五个阻塞 job。
 
 | Job | 目的 | 关键命令 |
 |---|---|---|
-| `backend` | 校验 FastAPI 后端 lint/type/test/import、MySQL Alembic 迁移可在空库执行 | `ruff check`、`mypy`、`pytest`、`python -m compileall app alembic`、`python -m alembic -c alembic.ini upgrade head` |
-| `frontend` | 校验 React / TypeScript 前端 lint/unit/build | `npm ci`、`npm run lint`、`npm test`、`npm run build` |
+| `backend` | 校验 FastAPI 后端锁定依赖、漏洞、lint/type/test/import、MySQL Alembic 与冻结契约 | `pip install --require-hashes`、`pip-audit`、`ruff check`、`mypy`、`pytest`、`alembic upgrade/check`、OpenAPI drift check |
+| `frontend` | 校验 React / TypeScript 锁定依赖、漏洞、lint/unit/build | `npm ci`、`npm audit`、`npm run lint -- --max-warnings=0`、`npm test`、`npm run build` |
 | `e2e` | 启动完整 DuckDock dev 栈，运行 Playwright auth smoke 与 seeded P3-11 交接闭环 | `bash scripts/dev.sh up`、`npx playwright test` |
-| `compose` | 校验默认 Docker Compose 只包含 DuckDock 核心服务，`analysis-worker` / Langfuse 只在对应 profile 中出现 | `docker compose config --services`、`docker compose --profile analysis-worker config --services`、`docker compose --profile observability config --services` |
+| `compose` | 校验开发与生产 Compose，确保可选组件只在对应 profile 中出现 | `docker compose config`、`docker compose -f docker-compose.prod.yml config --quiet` |
+| `release-images` | 构建带 provenance/SBOM 的生产镜像并阻断 Critical/High 漏洞 | Buildx、Docker Scout CVE gate |
 
 ## 3. 后端 CI 环境
 
@@ -45,7 +46,7 @@ COMPONENT_MANAGER_ENABLED=false
 
 ## 4. 前端 CI 环境
 
-前端 job 使用 Node.js 20，并基于 `frontend/package-lock.json` 执行确定性安装。
+前端 job 使用 Node.js 22，并基于 `frontend/package-lock.json` 执行确定性安装。
 
 本地等价命令：
 

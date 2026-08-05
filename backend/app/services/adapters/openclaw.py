@@ -38,37 +38,35 @@ class OpenClawAdapter(BaseRuntimeAdapter):
         metadata = self.runtime.metadata_json or {}
         version = str(metadata.get("version")) if metadata.get("version") else None
         return AdapterConnectionResult(
-            status="ok",
-            message="OpenClaw adapter is available. Live API handshake can be enabled after credentials are configured.",
+            status="degraded",
+            message=(
+                "No authenticated OpenClaw Reporter handshake has been observed. "
+                "Use Reporter enrollment or import a trusted backup package."
+            ),
             version=version,
-            details={"base_url": self.runtime.base_url, "credential_ref": self.runtime.credential_ref},
+            details={"reason_code": "dynamic_handshake_required"},
         )
 
     async def list_capabilities(self) -> AdapterCapabilities:
         return AdapterCapabilities(
             provider=RuntimeProvider.OPENCLAW,
             adapter_name=self.adapter_name,
-            asset_sync=True,
-            principal_sync=True,
-            worktrace_sync=True,
-            artifact_sync=True,
+            asset_sync="reporter_required",
+            principal_sync="reporter_required",
+            worktrace_sync="reporter_required",
+            artifact_sync="reporter_required",
             backup_import=True,
-            backup_create=True,
+            backup_create="provider_export_required",
             restore="manual",
             browser_fallback=False,
             version=(self.runtime.metadata_json or {}).get("version"),
         )
 
     async def collect(self, job) -> AdapterCollectionResult:
-        metadata = self.runtime.metadata_json or {}
-        payload = metadata.get("sample_collection") or metadata.get("backup_payload") or {}
-        result = normalize_openclaw_payload(
-            payload=payload,
-            adapter_name=self.adapter_name,
-            source="runtime_metadata",
+        raise RuntimeError(
+            "Pull collection is not supported for OpenClaw runtimes; "
+            "use authenticated Reporter ingestion or the trusted backup importer"
         )
-        result.capabilities = await self.list_capabilities()
-        return result
 
 
 def parse_openclaw_backup_bytes(content: bytes, filename: str | None = None) -> dict[str, Any]:

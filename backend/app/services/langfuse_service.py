@@ -3,15 +3,23 @@ from __future__ import annotations
 import logging
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from app.core.config import settings
+from app.services.langfuse_compatibility import (
+    LANGFUSE_OBSERVATIONS_FIELDS,
+    require_langfuse_sdk_compatibility,
+)
 
 logger = logging.getLogger(__name__)
 
+Langfuse: Any
 try:
-    from langfuse import Langfuse
+    from langfuse import Langfuse as _Langfuse
 except Exception:  # pragma: no cover
     Langfuse = None
+else:
+    Langfuse = _Langfuse
 
 
 class LangfuseService:
@@ -30,6 +38,7 @@ class LangfuseService:
         if not self.is_enabled():
             return None
         if self._client is None:
+            require_langfuse_sdk_compatibility()
             self._client = Langfuse(
                 public_key=settings.LANGFUSE_PUBLIC_KEY,
                 secret_key=settings.LANGFUSE_SECRET_KEY,
@@ -38,6 +47,25 @@ class LangfuseService:
                 timeout=settings.LANGFUSE_TIMEOUT_SECONDS,
             )
         return self._client
+
+    def get_trace_url(self, *, trace_id: str) -> str | None:
+        """Build a browser-safe trace URL without making telemetry mandatory."""
+        client = self.client()
+        if client is None:
+            return None
+        try:
+            trace_url = client.get_trace_url(trace_id=trace_id)
+        except Exception as exc:  # pragma: no cover - provider failure isolation
+            logger.warning("Langfuse trace URL lookup failed: %s", exc)
+            return None
+        if not trace_url:
+            return None
+
+        public_base_url = settings.LANGFUSE_PUBLIC_BASE_URL.rstrip("/")
+        marker = "/project/"
+        if public_base_url and marker in trace_url:
+            return f"{public_base_url}{marker}{trace_url.split(marker, 1)[1]}"
+        return trace_url
 
     @contextmanager
     def start_clinic_evaluation(
@@ -132,23 +160,26 @@ class LangfuseService:
                 from_timestamp = base - timedelta(minutes=2)
                 to_timestamp = base + timedelta(hours=1)
 
-            traces = client.api.trace.list(
+            observations = client.api.observations.get_many(
+                fields=LANGFUSE_OBSERVATIONS_FIELDS,
                 name="clinic-evaluation",
                 limit=20,
-                order_by="timestamp.desc",
-                from_timestamp=from_timestamp,
-                to_timestamp=to_timestamp,
+                from_start_time=from_timestamp,
+                to_start_time=to_timestamp,
             )
         except Exception as exc:  # pragma: no cover
             logger.warning("Langfuse trace lookup failed: %s", exc)
             return None
 
-        for trace in traces.data:
-            metadata = trace.metadata or {}
+        for observation in observations.data:
+            metadata = observation.metadata or {}
             if metadata.get("clinic_evaluation_id") == evaluation_id:
+                trace_id = observation.trace_id
+                if not trace_id:
+                    continue
                 return {
-                    "trace_id": trace.id,
-                    "trace_url": client.get_trace_url(trace_id=trace.id) or trace.html_path or "",
+                    "trace_id": trace_id,
+                    "trace_url": self.get_trace_url(trace_id=trace_id) or "",
                 }
         return None
 

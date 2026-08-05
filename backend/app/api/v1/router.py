@@ -8,6 +8,7 @@ from app.api.v1.endpoints import (
     clinic,
     components,
     control_plane,
+    deployments,
     iam,
     lifecycle,
     namespaces,
@@ -31,6 +32,7 @@ api_router.include_router(scans.router)
 api_router.include_router(clinic.router)
 api_router.include_router(components.router)
 api_router.include_router(control_plane.router)
+api_router.include_router(deployments.router)
 api_router.include_router(agent_overview.router)
 api_router.include_router(analysis.router)
 api_router.include_router(people.router)

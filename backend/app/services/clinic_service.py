@@ -854,7 +854,7 @@ class ClinicService:
         with langfuse_service.start_clinic_evaluation(
             evaluation_id=evaluation_id,
             namespace_id=namespace_id,
-            namespace_name=namespace_name or "fixture",
+            namespace_name=namespace_name or "unassigned",
             skill_count=len(skills_data),
             mode=settings.CLINIC_EVAL_MODE,
             rubric_version=settings.CLINIC_RUBRIC_VERSION,
@@ -916,9 +916,9 @@ class ClinicService:
             }
             if trace_span is not None:
                 trace_span.update(output={"overall_score": output["overall_score"], "grade": output["grade"]})
-                output["langfuse_trace_url"] = langfuse_service.client().get_trace_url(
+                output["langfuse_trace_url"] = langfuse_service.get_trace_url(
                     trace_id=trace_span.trace_id
-                ) if langfuse_service.client() is not None else None
+                )
             return output
 
 

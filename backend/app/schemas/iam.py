@@ -193,6 +193,8 @@ class IdentityLinkOut(BaseModel):
     email: str | None = None
     full_name: str | None = None
     claims_json: dict | None = None
+    is_active: bool
+    disabled_at: datetime | None = None
     last_seen_at: datetime | None = None
     created_at: datetime
     updated_at: datetime

@@ -1,5 +1,5 @@
 # ──────────────────────────────────────────────────────────────────────
-#  DuckDock 生产环境 compose(baseline · 预留补充)
+#  DuckDock 生产环境 Compose 基线
 #
 #  与 docker-compose.yml(开发)的区别:
 #    - 无源码挂载、无 --reload;镜像不可变(代码在 build 时打入)
@@ -12,7 +12,7 @@
 #  启动:  bash scripts/prod.sh up
 #  (等价于 docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build)
 #
-#  ⚠ 上线前必须自行补:TLS 终止(反向代理/证书)、监控接入与恢复演练。
+#  ⚠ 该文件不是生产授权。上线前仍需完成 TLS、监控、恢复演练和变更审批。
 # ──────────────────────────────────────────────────────────────────────
 name: duckdock-prod
 
@@ -27,6 +27,17 @@ x-app-env: &app-env
   DUCKDOCK_LLM_TIMEOUT_SECONDS: ${DUCKDOCK_LLM_TIMEOUT_SECONDS:-120}
   DUCKDOCK_LLM_MAX_INPUT_CHARS: ${DUCKDOCK_LLM_MAX_INPUT_CHARS:-24000}
   LLM_ALLOW_PRIVATE_BASE_URL: ${LLM_ALLOW_PRIVATE_BASE_URL:-false}
+  SEMANTIC_EMBEDDING_ENABLED: ${SEMANTIC_EMBEDDING_ENABLED:-false}
+  SEMANTIC_EMBEDDING_PROFILE: ${SEMANTIC_EMBEDDING_PROFILE:-openai-compatible-local}
+  SEMANTIC_EMBEDDING_BASE_URL: ${SEMANTIC_EMBEDDING_BASE_URL:-}
+  SEMANTIC_EMBEDDING_API_KEY: ${SEMANTIC_EMBEDDING_API_KEY:-}
+  SEMANTIC_EMBEDDING_TIMEOUT_SECONDS: ${SEMANTIC_EMBEDDING_TIMEOUT_SECONDS:-15}
+  SEMANTIC_MONITOR_LEASE_SECONDS: ${SEMANTIC_MONITOR_LEASE_SECONDS:-300}
+  SEMANTIC_MONITOR_MAX_ATTEMPTS: ${SEMANTIC_MONITOR_MAX_ATTEMPTS:-3}
+  SEMANTIC_MONITOR_BASE_RETRY_SECONDS: ${SEMANTIC_MONITOR_BASE_RETRY_SECONDS:-15}
+  SEMANTIC_MONITOR_MAX_RETRY_SECONDS: ${SEMANTIC_MONITOR_MAX_RETRY_SECONDS:-900}
+  SEMANTIC_MONITOR_DISPATCH_SCHEDULE_SECONDS: ${SEMANTIC_MONITOR_DISPATCH_SCHEDULE_SECONDS:-10}
+  SEMANTIC_MONITOR_DISPATCH_BATCH_SIZE: ${SEMANTIC_MONITOR_DISPATCH_BATCH_SIZE:-20}
 
 services:
   mysql:
@@ -53,7 +64,7 @@ services:
       retries: 20
 
   redis:
-    image: redis:7-alpine
+    image: redis:7.4.9-alpine
     restart: unless-stopped
     volumes:
       - redis_data:/data
@@ -68,7 +79,7 @@ services:
       retries: 5
 
   minio:
-    image: minio/minio:latest
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
@@ -104,7 +115,7 @@ services:
     command: python -m alembic -c alembic.ini upgrade head
 
   minio-init:
-    image: minio/mc:latest
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
     restart: "no"
     depends_on:
       - minio
@@ -173,6 +184,34 @@ services:
       timeout: 5s
       retries: 12
       start_period: 30s
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${DUCKDOCK_PROMETHEUS_RETENTION:-30d}
+      - --web.enable-lifecycle
+    volumes:
+      - ./ops/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./ops/prometheus/duckdock-alerts.yml:/etc/prometheus/duckdock-alerts.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:${DUCKDOCK_PROMETHEUS_HOST_PORT:-9090}:9090"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9090/-/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: ${PROMETHEUS_MEM_LIMIT:-512m}
 
   worker:
     build:
@@ -292,19 +331,21 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile.prod
+      args:
+        VITE_PROMETHEUS_URL: ${VITE_PROMETHEUS_URL:-}
     restart: unless-stopped
     depends_on:
       backend:
         condition: service_healthy
     ports:
-      - "${HTTP_PORT:-80}:80"      # 单端口入口:静态 SPA + /api 反代 backend:8801
+      - "${HTTP_PORT:-80}:8080"    # 非 root 单端口入口:静态 SPA + /api 反代 backend:8801
     deploy:
       resources:
         limits:
           memory: ${FRONTEND_MEM_LIMIT:-256m}
 
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/health >/dev/null"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/health >/dev/null"]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -315,3 +356,4 @@ volumes:
   redis_data:
   minio_data:
   repos_data:
+  prometheus_data:

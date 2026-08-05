@@ -408,6 +408,22 @@ def test_telemetry_metadata_is_bounded_and_required_attributes_are_safe() -> Non
     _expect_invalid(oversized_array_item, telemetry_schema)
 
 
+def test_package_component_graph_and_sbom_contracts_are_strict() -> None:
+    schema = _load_json(CONTRACTS_DIR / "agent-package-v2.schema.json")
+    package = _load_json(EXAMPLES_DIR / "agent-package-v2.example.json")
+
+    assert package["component_graph"]["edges"]
+    assert package["sbom"]["format"] == "cyclonedx-json"
+
+    unsafe_edge = copy.deepcopy(package)
+    unsafe_edge["component_graph"]["edges"][0]["prompt"] = "forbidden"
+    _expect_invalid(unsafe_edge, schema)
+
+    bad_sbom_digest = copy.deepcopy(package)
+    bad_sbom_digest["sbom"]["document_sha256"] = "not-a-digest"
+    _expect_invalid(bad_sbom_digest, schema)
+
+
 def _walk_keys(value: Any) -> list[str]:
     keys: list[str] = []
     if isinstance(value, dict):

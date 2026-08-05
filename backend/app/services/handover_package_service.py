@@ -1,4 +1,4 @@
-"""精简对外交接包构建([FR-012-OUTBOUND-PACKAGE] · FR-012)。
+"""构建脱敏后的对外交接归档。
 
 把一个交接 case 的成果打成一份**精简、可对外交付**的归档:
 
@@ -9,7 +9,7 @@
   · 写到 ``handovers/case-{id}/pack-{ts}.zip``,落一条可签名下载的 :class:`EvidenceItem`
     (object_uri / sha256 / summary / source_type)。
 
-**安全**(宪法原则 V):包内对凭证/密钥做**双层防护**——
+**安全**：包内对凭证和密钥做双层防护——
   · *选择性遮蔽*:敏感级(CONFIDENTIAL/RESTRICTED)工作历史只放占位摘要、绝不外泄 metadata
     与原文,与 ``control_plane._trace_summary_out`` 同形态;
   · *模式红act*:所有进 manifest/items 的自由文本(证据摘要、执行回执 note、item 风险说明、

@@ -1,6 +1,6 @@
 import { ChevronLeft, Pencil, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams } from "../router";
 import {
   lifecycleApi,
   namespacesApi,

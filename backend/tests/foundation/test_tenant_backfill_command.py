@@ -304,3 +304,25 @@ async def test_service_exception_rolls_back_and_propagates():
     assert session.commit_count == 0
     assert session.rollback_count == 1
     assert session.enter_count == 1 and session.exit_count == 1
+
+
+async def test_process_runner_always_disposes_database_engine(monkeypatch):
+    subject = _subject()
+
+    class FakeEngine:
+        def __init__(self) -> None:
+            self.dispose_count = 0
+
+        async def dispose(self) -> None:
+            self.dispose_count += 1
+
+    fake_engine = FakeEngine()
+
+    async def fake_async_main() -> int:
+        return 2
+
+    monkeypatch.setattr(subject, "engine", fake_engine)
+    monkeypatch.setattr(subject, "async_main", fake_async_main)
+
+    assert await subject._run_and_dispose() == 2
+    assert fake_engine.dispose_count == 1
