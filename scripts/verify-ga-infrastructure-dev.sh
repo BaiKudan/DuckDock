@@ -149,9 +149,17 @@ for _ in $(seq 1 120); do
   sleep 2
 done
 
+TASK_SOURCE_COMMIT="$(git rev-parse HEAD)"
+TASK_BACKEND_IMAGE_ID="$(docker inspect "${TASK_PROJECT}-backend-1" --format '{{.Image}}')"
+TASK_FRONTEND_IMAGE_ID="$(docker inspect "${TASK_PROJECT}-frontend-1" --format '{{.Image}}')"
 if ! python3 backend/scripts/probe_ga_target_tls.py \
     --app-url https://duckdock.localtest.me:18443/health \
     --object-store-url https://objects.duckdock.localtest.me:18443/minio/health/live \
+    --scope local-validation \
+    --target-environment "$TASK_PROJECT" \
+    --source-commit "$TASK_SOURCE_COMMIT" \
+    --backend-image "local/duckdock/backend@${TASK_BACKEND_IMAGE_ID}" \
+    --frontend-image "local/duckdock/frontend@${TASK_FRONTEND_IMAGE_ID}" \
     --ca-file "$TASK_CERT" \
     --output "$TASK_TLS_REPORT" >/dev/null; then
   cat "$TASK_TLS_REPORT" >&2

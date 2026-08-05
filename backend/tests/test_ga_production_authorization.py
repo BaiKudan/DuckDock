@@ -149,8 +149,17 @@ def _document(tmp_path: Path, now: datetime) -> dict:
     tls_path.write_text(
         json.dumps(
             {
-                "schema_version": "duckdock-ga-tls-probe-v1",
+                "schema_version": "duckdock-ga-tls-probe-v2",
+                "scope": "target-production",
                 "status": "PASS",
+                "passed": True,
+                "observed_at": observed_at.isoformat(),
+                "target_environment": "customer-production",
+                "source_commit": commit,
+                "images": {
+                    "backend": {"name": backend_image},
+                    "frontend": {"name": frontend_image},
+                },
                 "application_url": "https://duckdock.example.com/health",
                 "object_store_url": "https://objects.example.com/minio/health/live",
                 "negotiated_protocols": ["TLSv1.2", "TLSv1.3"],
@@ -173,8 +182,16 @@ def _document(tmp_path: Path, now: datetime) -> dict:
     capacity_path.write_text(
         json.dumps(
             {
-                "schema_version": "duckdock-target-capacity-gate-v1",
+                "schema_version": "duckdock-target-capacity-gate-v2",
+                "scope": "target-production",
+                "status": "PASSED",
+                "observed_at": observed_at.isoformat(),
                 "target_environment": "customer-production",
+                "source_commit": commit,
+                "images": {
+                    "backend": {"name": backend_image},
+                    "frontend": {"name": frontend_image},
+                },
                 "base_url": "https://duckdock.example.com",
                 "transport": "network HTTPS against target",
                 "phases": [
@@ -702,6 +719,46 @@ def test_local_asgi_capacity_report_cannot_authorize_target(tmp_path: Path) -> N
     report = json.loads(path.read_text(encoding="utf-8"))
     report["schema_version"] = "duckdock-capacity-gate-v1"
     report["transport"] = "FastAPI ASGI HTTP with real MySQL"
+    path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+    evidence["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(document, authorization_path=tmp_path / "authorization.json", now=now)
+
+    assert result["status"] == "BLOCKED"
+    capacity = next(item for item in result["checks"] if item["key"] == "capacity")
+    assert capacity["status"] == "BLOCK"
+
+
+def test_tls_report_from_previous_release_cannot_authorize_current_release(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    evidence = document["controls"]["tls"]["evidence"]
+    path = Path(evidence["path"])
+    report = json.loads(path.read_text(encoding="utf-8"))
+    report["source_commit"] = "9" * 40
+    path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+    evidence["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(document, authorization_path=tmp_path / "authorization.json", now=now)
+
+    assert result["status"] == "BLOCKED"
+    tls = next(item for item in result["checks"] if item["key"] == "tls")
+    assert tls["status"] == "BLOCK"
+
+
+def test_capacity_report_from_previous_image_cannot_authorize_current_release(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    evidence = document["controls"]["capacity"]["evidence"]
+    path = Path(evidence["path"])
+    report = json.loads(path.read_text(encoding="utf-8"))
+    report["images"]["frontend"]["name"] = f"registry.example.com/duckdock/frontend@sha256:{'9' * 64}"
     path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
     evidence["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
     _add_signed_approvals(document, tmp_path, now)

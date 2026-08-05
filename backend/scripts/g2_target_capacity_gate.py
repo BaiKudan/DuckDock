@@ -21,7 +21,12 @@ from urllib.parse import urlparse
 
 import httpx
 
-from scripts.g1_run_control_load_gate import LoadPhase, build_run_start_request, run_load_phase
+try:
+    from scripts.g1_run_control_load_gate import LoadPhase, build_run_start_request, run_load_phase
+    from scripts.ga_release_identity import EVIDENCE_SCOPES, build_release_binding
+except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
+    from g1_run_control_load_gate import LoadPhase, build_run_start_request, run_load_phase
+    from ga_release_identity import EVIDENCE_SCOPES, build_release_binding
 
 
 def require_safe_target(base_url: str, *, allow_http_localhost: bool) -> str:
@@ -175,14 +180,17 @@ async def run_gate(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         and conflict.status_code == 409
         and timeline["passed"]
     )
+    finished_at = datetime.now(timezone.utc)
     payload = {
-        "schema_version": "duckdock-target-capacity-gate-v1",
-        "target_environment": args.target_environment,
+        "schema_version": "duckdock-target-capacity-gate-v2",
+        **args.release_binding,
+        "status": "PASSED" if passed else "BLOCKED",
+        "observed_at": finished_at.isoformat(),
         "base_url": base_url,
         "namespace_id": args.namespace_id,
         "transport": "network HTTPS against target" if base_url.startswith("https://") else "local HTTP validation",
         "started_at": started_at.isoformat(),
-        "finished_at": datetime.now(timezone.utc).isoformat(),
+        "finished_at": finished_at.isoformat(),
         "phases": [{**result.as_dict(), "passed": result.passed} for result in results],
         "offered_runs": offered,
         "materialized_runs": succeeded,
@@ -206,6 +214,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--target-environment", required=True)
+    parser.add_argument("--scope", choices=sorted(EVIDENCE_SCOPES), default="target-production")
+    parser.add_argument("--source-commit", required=True)
+    parser.add_argument("--backend-image", required=True)
+    parser.add_argument("--frontend-image", required=True)
     parser.add_argument("--acknowledge-target-mutation", required=True)
     parser.add_argument("--namespace-id", type=int, required=True)
     parser.add_argument("--reporter-token-env", default="DUCKDOCK_CAPACITY_REPORTER_TOKEN")
@@ -237,6 +249,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("durations must be positive")
     if args.minimum_materialized_runs < 1:
         parser.error("minimum materialized runs must be positive")
+    if args.allow_http_localhost and args.scope != "local-validation":
+        parser.error("--allow-http-localhost requires --scope local-validation")
+    try:
+        args.release_binding = build_release_binding(
+            scope=args.scope,
+            target_environment=args.target_environment,
+            source_commit=args.source_commit,
+            backend_image=args.backend_image,
+            frontend_image=args.frontend_image,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
     return args
 
 

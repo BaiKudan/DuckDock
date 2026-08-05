@@ -15,6 +15,7 @@ requirements-dev.lock
 uv.lock
 scripts/g1_run_control_load_gate.py
 scripts/g2_target_capacity_gate.py
+scripts/ga_release_identity.py
 scripts/probe_ga_target_tls.py
 scripts/verify_ga_production_authorization.py
 scripts/seed_handover_e2e.py

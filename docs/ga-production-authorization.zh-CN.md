@@ -17,7 +17,25 @@ DuckDock 有两个刻意分离的门禁：
    `2.0.0`，commit 必须为完整 40 位。
 3. 运行 `python3 scripts/verify-production-baseline.py`，保留 JSON；在目标
    Kubernetes overlay 中替换镜像、域名以及宽泛 egress，并做 server dry-run。
-4. 使用 `probe_ga_target_tls.py` 探测真实公网 application/object-store health URL。
+4. 使用 `probe_ga_target_tls.py` 探测真实公网 application/object-store health URL，
+   并把报告绑定到当前 target、commit 和两个不可变镜像：
+
+```bash
+export DUCKDOCK_GA_SOURCE_COMMIT='40-character Git commit'
+export DUCKDOCK_GA_BACKEND_IMAGE='registry.example.com/duckdock/backend@sha256:64-hex-digest'
+export DUCKDOCK_GA_FRONTEND_IMAGE='registry.example.com/duckdock/frontend@sha256:64-hex-digest'
+python backend/scripts/probe_ga_target_tls.py \
+  --app-url https://duckdock.example.com/health \
+  --object-store-url https://objects.example.com/minio/health/live \
+  --target-environment customer-production \
+  --source-commit "$DUCKDOCK_GA_SOURCE_COMMIT" \
+  --backend-image "$DUCKDOCK_GA_BACKEND_IMAGE" \
+  --frontend-image "$DUCKDOCK_GA_FRONTEND_IMAGE" \
+  --output /secure/evidence/target-tls.json
+```
+
+   输出必须是 `duckdock-ga-tls-probe-v2`；旧 v1、local-validation 或绑定到其他
+   候选版本的报告不能授权生产。
 5. 在专用 performance Namespace 创建限时 Reporter/User token，通过环境变量运行
    真实 HTTPS 容量门禁（token 不得写入命令行或报告）：
 
@@ -28,14 +46,19 @@ python backend/scripts/g2_target_capacity_gate.py \
   --base-url https://duckdock.example.com \
   --target-environment customer-production \
   --acknowledge-target-mutation customer-production \
+  --source-commit "$DUCKDOCK_GA_SOURCE_COMMIT" \
+  --backend-image "$DUCKDOCK_GA_BACKEND_IMAGE" \
+  --frontend-image "$DUCKDOCK_GA_FRONTEND_IMAGE" \
   --namespace-id 123 \
   --output /secure/evidence/target-capacity.json
 ```
 
-   它默认执行 900 秒持续写入、60 秒突发、50,000+ AgentRun 和增长后时间线查询。
+   它输出 `duckdock-target-capacity-gate-v2`，默认执行 900 秒持续写入、60 秒突发、
+   50,000+ AgentRun 和增长后时间线查询。
    保留 DBA 存储增长证据后删除专用 Namespace 并撤销两个 token。生产授权门禁
-   会解析报告 schema/target/base URL/transport/指标；本机 ASGI + MySQL 报告只能
-   证明工程基线，不能替代真实目标 HTTPS 报告。
+   会解析报告 schema/target/base URL/transport/指标，并逐项对照 commit 与镜像；
+   本机 ASGI + MySQL 报告或上一候选版本的报告只能证明工程基线，不能替代当前
+   release 的真实目标 HTTPS 报告。
 6. 先运行本地参考演练，确认发布镜像能在受限安全上下文启动、三类无状态服务
    正常跨域、节点 drain 时持续可用、Beat 能迁移且故障域返回后重新均衡：
 

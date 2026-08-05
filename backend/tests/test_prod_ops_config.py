@@ -183,6 +183,7 @@ def test_production_image_context_excludes_test_and_local_validation_artifacts()
         ".venv/",
         "scripts/seed_handover_e2e.py",
         "scripts/g2_target_capacity_gate.py",
+        "scripts/ga_release_identity.py",
         "scripts/probe_ga_target_tls.py",
         "scripts/verify_ga_production_authorization.py",
         "scripts/verify_*_dev.py",

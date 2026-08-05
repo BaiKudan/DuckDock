@@ -615,9 +615,15 @@ def evaluate(
     negotiated = tls.get("negotiated_protocols")
     tls_report = _evidence_json(tls, authorization_path)
     tls_report_matches_target = (
-        tls_report is not None
-        and tls_report.get("schema_version") == "duckdock-ga-tls-probe-v1"
-        and tls_report.get("status") == "PASS"
+        _report_release_target_binding(
+            tls_report,
+            schema_version="duckdock-ga-tls-probe-v2",
+            status="PASS",
+            control=tls,
+            target=target,
+            release=release,
+        )
+        and tls_report.get("passed") is True
         and _origin(tls_report.get("application_url")) == str(target.get("public_base_url", "")).rstrip("/")
         and _origin(tls_report.get("object_store_url")) == str(target.get("object_store_url", "")).rstrip("/")
         and tls_report.get("negotiated_protocols") == negotiated
@@ -932,8 +938,14 @@ def evaluate(
     if capacity_report is not None and isinstance(capacity_report.get("post_growth_timeline_query"), dict):
         timeline_report = capacity_report["post_growth_timeline_query"]
     report_matches_target = (
-        capacity_report is not None
-        and capacity_report.get("schema_version") == "duckdock-target-capacity-gate-v1"
+        _report_release_target_binding(
+            capacity_report,
+            schema_version="duckdock-target-capacity-gate-v2",
+            status="PASSED",
+            control=capacity,
+            target=target,
+            release=release,
+        )
         and capacity_report.get("passed") is True
         and capacity_report.get("transport") == "network HTTPS against target"
         and capacity_report.get("target_environment") == target.get("target_id")

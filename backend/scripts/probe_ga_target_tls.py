@@ -16,6 +16,11 @@ from pathlib import Path
 from typing import Any, Sequence
 from urllib.parse import urlparse
 
+try:
+    from scripts.ga_release_identity import EVIDENCE_SCOPES, build_release_binding
+except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
+    from ga_release_identity import EVIDENCE_SCOPES, build_release_binding
+
 
 HSTS_MAX_AGE_RE = re.compile(r"(?:^|;)\s*max-age=(\d+)", re.IGNORECASE)
 
@@ -62,9 +67,7 @@ def _handshake(
                     "cipher": tls_socket.cipher()[0] if tls_socket.cipher() else None,
                     "expires_at": expires_at.isoformat() if expires_at else None,
                     "certificate_days_remaining": (
-                        int((expires_at - datetime.now(timezone.utc)).total_seconds() // 86400)
-                        if expires_at
-                        else -1
+                        int((expires_at - datetime.now(timezone.utc)).total_seconds() // 86400) if expires_at else -1
                     ),
                     "hostname_verified": True,
                 }
@@ -192,8 +195,10 @@ def probe(args: argparse.Namespace) -> dict[str, Any]:
     minimum_hsts = min(hsts_values, default=0)
     passed = passed and minimum_days >= args.minimum_certificate_days and minimum_hsts >= args.minimum_hsts_max_age
     return {
-        "schema_version": "duckdock-ga-tls-probe-v1",
+        "schema_version": "duckdock-ga-tls-probe-v2",
+        **args.release_binding,
         "status": "PASS" if passed else "BLOCK",
+        "passed": passed,
         "observed_at": datetime.now(timezone.utc).isoformat(),
         "application_url": args.app_url,
         "object_store_url": args.object_store_url,
@@ -212,12 +217,28 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--app-url", required=True, help="application health URL")
     parser.add_argument("--object-store-url", required=True, help="object-store health URL")
+    parser.add_argument("--scope", choices=sorted(EVIDENCE_SCOPES), default="target-production")
+    parser.add_argument("--target-environment", required=True)
+    parser.add_argument("--source-commit", required=True)
+    parser.add_argument("--backend-image", required=True)
+    parser.add_argument("--frontend-image", required=True)
     parser.add_argument("--ca-file", type=Path)
     parser.add_argument("--timeout", type=float, default=10)
     parser.add_argument("--minimum-certificate-days", type=int, default=30)
     parser.add_argument("--minimum-hsts-max-age", type=int, default=31_536_000)
     parser.add_argument("--output", type=Path)
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    try:
+        args.release_binding = build_release_binding(
+            scope=args.scope,
+            target_environment=args.target_environment,
+            source_commit=args.source_commit,
+            backend_image=args.backend_image,
+            frontend_image=args.frontend_image,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+    return args
 
 
 def main(argv: Sequence[str] | None = None) -> int:
