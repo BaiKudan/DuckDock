@@ -23,7 +23,7 @@ deployment authorization.
 | PGA-06 | A 900-second-or-longer capacity gate sustains the declared floor, materializes at least 50,000 runs, and proves post-growth timeline p95 through the real target HTTPS endpoint for the exact target, commit and immutable images. | `duckdock-target-capacity-gate-v2` JSON. |
 | PGA-07 | An assessor independent of implementation tests the exact commit/images; no Critical/High remains. | Independent report bound by SHA-256. |
 | PGA-08 | Product, Architecture, Security and Operations use four distinct OpenSSH identities to approve the exact release/target/evidence digest after evidence completion. | Four verified `duckdock-ga` signatures. |
-| PGA-09 | Final version is `2.0.0`, images use immutable `@sha256`, all RC gates are rerun, and the production authorization result is `GA_AUTHORIZED`. | `duckdock-ga-production-authorization-v1` input/result bundle. |
+| PGA-09 | Final version is `2.0.0`, images use immutable `@sha256`, all RC gates are rerun through a release-bound target HTTPS readiness collector, and the production authorization result is `GA_AUTHORIZED`. | `duckdock-ga-target-readiness-v1` plus `duckdock-ga-production-authorization-v1` input/result bundle. |
 
 ## Truthful current boundary
 

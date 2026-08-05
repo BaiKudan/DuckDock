@@ -578,8 +578,24 @@ def evaluate(
 
     app = controls["application_readiness"]
     app_report = _evidence_json(app, authorization_path)
+    app_observed_at = _control_observed_at(app)
+    app_checked_at = _parse_time(app_report.get("checked_at") if isinstance(app_report, dict) else None)
     app_report_matches = (
-        app_report is not None
+        _report_release_target_binding(
+            app_report,
+            schema_version="duckdock-ga-target-readiness-v1",
+            status="READY",
+            control=app,
+            target=target,
+            release=release,
+        )
+        and app_report.get("passed") is True
+        and app_report.get("profile_version") == "duckdock-2-ga-readiness-v1"
+        and app_report.get("transport") == "network HTTPS against target"
+        and _origin(app_report.get("base_url")) == str(target.get("public_base_url", "")).rstrip("/")
+        and app_checked_at is not None
+        and app_observed_at is not None
+        and timedelta(0) <= app_observed_at - app_checked_at <= timedelta(minutes=5)
         and app_report.get("status") == app.get("status")
         and int(app_report.get("pass_count", -1)) == int(app.get("pass_count", -2))
         and int(app_report.get("block_count", -1)) == int(app.get("block_count", -2))
@@ -608,7 +624,7 @@ def evaluate(
             f"db={app.get('database_revision')}"
         ),
         expected="READY; >=14 pass; 0 block; final release contract digest/version; DB at expected revision",
-        detail="The content-addressed raw readiness response must match every imported claim; it does not replace target authorization.",
+        detail="The HTTPS collector report must bind the exact target, commit and images, be captured within five minutes of the readiness evaluation, and match every imported claim; it does not replace target authorization.",
     )
 
     tls = controls["tls"]

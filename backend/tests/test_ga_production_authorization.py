@@ -129,7 +129,21 @@ def _document(tmp_path: Path, now: datetime) -> dict:
     application_path.write_text(
         json.dumps(
             {
+                "schema_version": "duckdock-ga-target-readiness-v1",
+                "scope": "target-production",
                 "status": "READY",
+                "passed": True,
+                "observed_at": observed_at.isoformat(),
+                "checked_at": (observed_at - timedelta(seconds=10)).isoformat(),
+                "target_environment": "customer-production",
+                "source_commit": commit,
+                "images": {
+                    "backend": {"name": backend_image},
+                    "frontend": {"name": frontend_image},
+                },
+                "base_url": "https://duckdock.example.com",
+                "transport": "network HTTPS against target",
+                "profile_version": "duckdock-2-ga-readiness-v1",
                 "pass_count": 14,
                 "warn_count": 0,
                 "block_count": 0,
@@ -596,6 +610,57 @@ def test_internal_security_claim_is_not_independent_authorization(tmp_path: Path
     assert result["status"] == "AWAITING_EXTERNAL_APPROVALS"
     check = next(item for item in result["checks"] if item["key"] == "security_assessment")
     assert check["status"] == "BLOCK"
+
+
+def test_raw_readiness_response_without_target_binding_cannot_authorize_ga(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    evidence = document["controls"]["application_readiness"]["evidence"]
+    path = Path(evidence["path"])
+    report = json.loads(path.read_text(encoding="utf-8"))
+    for key in (
+        "schema_version",
+        "scope",
+        "passed",
+        "observed_at",
+        "target_environment",
+        "source_commit",
+        "images",
+        "base_url",
+        "transport",
+    ):
+        report.pop(key)
+    path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+    evidence["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(document, authorization_path=tmp_path / "authorization.json", now=now)
+
+    assert result["status"] == "BLOCKED"
+    readiness = next(item for item in result["checks"] if item["key"] == "application_readiness")
+    assert readiness["status"] == "BLOCK"
+
+
+def test_readiness_report_from_previous_release_cannot_authorize_current_release(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    evidence = document["controls"]["application_readiness"]["evidence"]
+    path = Path(evidence["path"])
+    report = json.loads(path.read_text(encoding="utf-8"))
+    report["images"]["backend"]["name"] = f"registry.example.com/duckdock/backend@sha256:{'9' * 64}"
+    path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+    evidence["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(document, authorization_path=tmp_path / "authorization.json", now=now)
+
+    assert result["status"] == "BLOCKED"
+    readiness = next(item for item in result["checks"] if item["key"] == "application_readiness")
+    assert readiness["status"] == "BLOCK"
 
 
 def test_unrestricted_target_network_blocks_ga(tmp_path: Path) -> None:

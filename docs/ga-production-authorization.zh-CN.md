@@ -15,15 +15,38 @@ DuckDock 有两个刻意分离的门禁：
 1. 从 `ops/ga/production-authorization.example.json` 复制目标环境文件。
 2. 将两个应用镜像改为流水线输出的 `registry/repo@sha256:...`，版本必须为
    `2.0.0`，commit 必须为完整 40 位。
-3. 运行 `python3 scripts/verify-production-baseline.py`，保留 JSON；在目标
-   Kubernetes overlay 中替换镜像、域名以及宽泛 egress，并做 server dry-run。
-4. 使用 `probe_ga_target_tls.py` 探测真实公网 application/object-store health URL，
-   并把报告绑定到当前 target、commit 和两个不可变镜像：
 
 ```bash
 export DUCKDOCK_GA_SOURCE_COMMIT='40-character Git commit'
 export DUCKDOCK_GA_BACKEND_IMAGE='registry.example.com/duckdock/backend@sha256:64-hex-digest'
 export DUCKDOCK_GA_FRONTEND_IMAGE='registry.example.com/duckdock/frontend@sha256:64-hex-digest'
+```
+
+3. 运行 `python3 scripts/verify-production-baseline.py`，保留 JSON；在目标
+   Kubernetes overlay 中替换镜像、域名以及宽泛 egress，并做 server dry-run。
+   然后用独立、短期、专用管理员 token 通过真实目标 HTTPS 仅调用只读 readiness
+   endpoint（token 只放环境变量，报告不会保留）：
+
+```bash
+export DUCKDOCK_GA_ADMIN_TOKEN='short-lived target validation token'
+python backend/scripts/collect_ga_target_readiness.py \
+  --base-url https://duckdock.example.com \
+  --target-environment customer-production \
+  --source-commit "$DUCKDOCK_GA_SOURCE_COMMIT" \
+  --backend-image "$DUCKDOCK_GA_BACKEND_IMAGE" \
+  --frontend-image "$DUCKDOCK_GA_FRONTEND_IMAGE" \
+  --output /secure/evidence/target-readiness.json
+unset DUCKDOCK_GA_ADMIN_TOKEN
+```
+
+   输出必须是 `duckdock-ga-target-readiness-v1`、`scope=target-production`、
+   `transport=network HTTPS against target`，且 API 检查时间与证据采集时间相差不
+   超过五分钟。裸 `/ga-readiness` 响应、本地 HTTP 报告或上一候选镜像的报告均
+   不能授权生产。若 API 不是 `READY`，collector 仍保留 BLOCKED 报告并退出 2。
+4. 使用 `probe_ga_target_tls.py` 探测真实公网 application/object-store health URL，
+   并把报告绑定到当前 target、commit 和两个不可变镜像：
+
+```bash
 python backend/scripts/probe_ga_target_tls.py \
   --app-url https://duckdock.example.com/health \
   --object-store-url https://objects.example.com/minio/health/live \
@@ -97,9 +120,10 @@ bash scripts/rehearse-kubernetes-ha.sh
     签名报告摘要，并绑定相同 target、contract、commit 和两个镜像摘要。评估方需
     用自己的 OpenSSH key 在 namespace `duckdock-security-assessment` 对报告原文件
     签名；门禁会读取 allowed-signers 和 `.sig` 实际验签，不接受布尔值自报验签。
-12. 为每份证据填绝对或授权文件相对路径、SHA-256 与 UTC 时间。Secrets、网络、
-    告警、恢复、HA 和独立安全报告内部 `observed_at` 必须与各自授权证据时间相同，
-    且 `scope` 只能是 `target-production`。本地 dev/kind 回执不能转换成该 scope。
+12. 为每份证据填绝对或授权文件相对路径、SHA-256 与 UTC 时间。Readiness、TLS、
+    Secrets、网络、告警、恢复、容量、HA 和独立安全报告内部 `observed_at` 必须与
+    各自授权证据时间相同，且 `scope` 只能是 `target-production`。本地 dev/kind
+    回执不能转换成该 scope。
 13. 先运行门禁取得 `release_digest`，四个不同负责人分别签署：
 
 ```bash

@@ -71,7 +71,7 @@ def test_prod_compose_deploys_the_prometheus_readiness_dependency():
     assert "prom/prometheus:v3.13.2" in compose
     assert "./ops/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro" in compose
     assert "prometheus_data:/prometheus" in compose
-    assert '127.0.0.1:${DUCKDOCK_PROMETHEUS_HOST_PORT:-9090}:9090' in compose
+    assert "127.0.0.1:${DUCKDOCK_PROMETHEUS_HOST_PORT:-9090}:9090" in compose
     assert "PROMETHEUS_BASE_URL=http://prometheus:9090" in env_example
     assert 'targets: ["backend:8801"]' in prometheus_config
     assert "environment: local-dev" not in prometheus_config
@@ -81,12 +81,10 @@ def test_production_exposes_only_the_tls_gateway_publicly():
     compose = _read("docker-compose.prod.yml")
     tls_compose = _read("docker-compose.prod-tls.yml")
 
-    assert '127.0.0.1:${HTTP_PORT:-8080}:8080' in compose
-    assert '127.0.0.1:${MINIO_HOST_PORT:-9000}:9000' in compose
+    assert "127.0.0.1:${HTTP_PORT:-8080}:8080" in compose
+    assert "127.0.0.1:${MINIO_HOST_PORT:-9000}:9000" in compose
     assert '"${HTTPS_BIND_ADDRESS:-0.0.0.0}:${HTTPS_PORT:-443}:8443"' in tls_compose
-    assert "ssl_protocols TLSv1.2 TLSv1.3" in _read(
-        "ops/tls-gateway/duckdock-tls.conf.template"
-    )
+    assert "ssl_protocols TLSv1.2 TLSv1.3" in _read("ops/tls-gateway/duckdock-tls.conf.template")
     assert "DUCKDOCK_TLS_CERT_FILE" in _read("scripts/prod.sh")
     assert "openssl x509" in _read("scripts/prod.sh")
 
@@ -114,16 +112,12 @@ def test_prometheus_routes_alerts_to_alertmanager_and_watches_delivery():
     assert '"/bin/amtool"' in compose
     assert '"--alertmanager.url=http://127.0.0.1:9093"' in compose
     assert '"alert"' in compose and '"query"' in compose
-    assert "__CHANGE_ME_ONCALL_WEBHOOK__" in _read(
-        "ops/alertmanager/alertmanager.example.yml"
-    )
+    assert "__CHANGE_ME_ONCALL_WEBHOOK__" in _read("ops/alertmanager/alertmanager.example.yml")
 
 
 def test_third_party_production_images_are_digest_pinned():
     compose = _read("docker-compose.prod.yml")
-    image_lines = [
-        line.strip() for line in compose.splitlines() if line.strip().startswith("image:")
-    ]
+    image_lines = [line.strip() for line in compose.splitlines() if line.strip().startswith("image:")]
 
     assert image_lines
     assert all("@sha256:" in line for line in image_lines)
@@ -181,6 +175,7 @@ def test_production_image_context_excludes_test_and_local_validation_artifacts()
         ".pytest_cache/",
         ".mypy_cache/",
         ".venv/",
+        "scripts/collect_ga_target_readiness.py",
         "scripts/seed_handover_e2e.py",
         "scripts/g2_target_capacity_gate.py",
         "scripts/ga_release_identity.py",
@@ -280,7 +275,7 @@ def test_prod_template_requires_public_cors_origins():
     env_example = _read(".env.prod.example")
 
     assert 'CORS_ORIGINS=["https://your-domain.example.com"]' in env_example
-    assert "CORS_ORIGINS=[\"http://localhost" not in env_example
+    assert 'CORS_ORIGINS=["http://localhost' not in env_example
 
 
 def test_prod_preflight_rejects_default_or_wildcard_cors():
@@ -297,9 +292,7 @@ def test_compose_deploys_celery_beat_scheduler_for_reaper():
     for compose_file in ("docker-compose.yml", "docker-compose.prod.yml"):
         compose = _read(compose_file)
         has_beat_service = "celery -A app.workers.celery_app beat" in compose
-        has_embedded_beat = (
-            "celery -A app.workers.celery_app worker" in compose and " -B " in compose
-        )
+        has_embedded_beat = "celery -A app.workers.celery_app worker" in compose and " -B " in compose
         assert has_beat_service or has_embedded_beat, (
             f"{compose_file} deploys no celery beat scheduler; the lease reaper would never run"
         )
@@ -377,7 +370,7 @@ def test_prod_backup_is_encrypted_signed_and_sent_offsite():
     assert "DUCKDOCK_BACKUP_AGE_RECIPIENT" in prod_script
     assert "DUCKDOCK_BACKUP_SIGNING_KEY" in prod_script
     assert "DUCKDOCK_BACKUP_S3_URI" in prod_script
-    assert 'ssh-keygen -Y sign' in seal_script
+    assert "ssh-keygen -Y sign" in seal_script
     assert 'age -r "$TASK_AGE_RECIPIENT"' in seal_script
     assert 'aws s3 cp "$TASK_BUNDLE"' in seal_script
     assert "duckdock-secure-backup-v1" in seal_script

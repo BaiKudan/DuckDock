@@ -28,7 +28,7 @@
       "database_revision": "20260804_0062",
       "expected_database_revision": "20260804_0062",
       "evidence": {
-        "path": "__CHANGE_ME_EVIDENCE_PATH__",
+        "path": "__CHANGE_ME_TARGET_READINESS_EVIDENCE_PATH__",
         "sha256": "__CHANGE_ME_64_HEX__",
         "observed_at": "2026-08-05T00:00:00Z"
       }
@@ -41,7 +41,7 @@
       "hostname_verified": true,
       "hsts_max_age_seconds": 31536000,
       "evidence": {
-        "path": "__CHANGE_ME_EVIDENCE_PATH__",
+        "path": "__CHANGE_ME_TARGET_TLS_EVIDENCE_PATH__",
         "sha256": "__CHANGE_ME_64_HEX__",
         "observed_at": "2026-08-05T00:00:00Z"
       }
@@ -108,7 +108,7 @@
       "timeline_p95_ms": 250,
       "post_growth_query_passed": true,
       "evidence": {
-        "path": "__CHANGE_ME_EVIDENCE_PATH__",
+        "path": "__CHANGE_ME_TARGET_CAPACITY_EVIDENCE_PATH__",
         "sha256": "__CHANGE_ME_64_HEX__",
         "observed_at": "2026-08-05T00:00:00Z"
       }
@@ -125,7 +125,7 @@
       "zone_failover_passed": true,
       "beat_recovery_passed": true,
       "evidence": {
-        "path": "__CHANGE_ME_EVIDENCE_PATH__",
+        "path": "__CHANGE_ME_TARGET_HA_EVIDENCE_PATH__",
         "sha256": "__CHANGE_ME_64_HEX__",
         "observed_at": "2026-08-05T00:00:00Z"
       }
