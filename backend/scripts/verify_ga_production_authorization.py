@@ -192,6 +192,59 @@ def _origin(value: Any) -> str | None:
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
+def _ha_component(report: dict[str, Any], snapshot: str, component: str) -> dict[str, Any]:
+    snapshots = report.get(snapshot)
+    if not isinstance(snapshots, dict):
+        return {}
+    value = snapshots.get(component)
+    return value if isinstance(value, dict) else {}
+
+
+def _ha_ready_replicas(report: dict[str, Any], snapshot: str, component: str) -> int:
+    try:
+        return int(_ha_component(report, snapshot, component).get("ready_replicas", -1))
+    except (TypeError, ValueError):
+        return -1
+
+
+def _ha_ready_zones(report: dict[str, Any], snapshot: str, component: str) -> set[str]:
+    pods = _ha_component(report, snapshot, component).get("pods")
+    if not isinstance(pods, list):
+        return set()
+    return {
+        str(item.get("zone"))
+        for item in pods
+        if isinstance(item, dict) and item.get("ready") is True and item.get("zone")
+    }
+
+
+def _ha_ready_nodes(report: dict[str, Any], snapshot: str, component: str) -> set[str]:
+    pods = _ha_component(report, snapshot, component).get("pods")
+    if not isinstance(pods, list):
+        return set()
+    return {
+        str(item.get("node"))
+        for item in pods
+        if isinstance(item, dict) and item.get("ready") is True and item.get("node")
+    }
+
+
+def _ha_snapshot_consistent(report: dict[str, Any], snapshot: str, component: str) -> bool:
+    value = _ha_component(report, snapshot, component)
+    pods = value.get("pods")
+    if not isinstance(pods, list):
+        return False
+    ready_pods = [item for item in pods if isinstance(item, dict) and item.get("ready") is True]
+    identities = [str(item.get("pod", "")) for item in ready_pods]
+    return (
+        _ha_ready_replicas(report, snapshot, component) == len(ready_pods)
+        and bool(identities)
+        and all(identities)
+        and len(set(identities)) == len(identities)
+        and all(item.get("node") and item.get("zone") for item in ready_pods)
+    )
+
+
 def _evidence_check(
     gate: Gate,
     *,
@@ -616,6 +669,129 @@ def evaluate(
 
     ha = controls["high_availability"]
     replica_counts = ha.get("replica_counts")
+    ha_report = _evidence_json(ha, authorization_path)
+    report_counts = ha_report.get("replica_counts") if isinstance(ha_report, dict) else None
+    report_domains_raw = ha_report.get("fault_domains") if isinstance(ha_report, dict) else None
+    report_domains = (
+        {str(item) for item in report_domains_raw if str(item).strip()}
+        if isinstance(report_domains_raw, list)
+        else set()
+    )
+    target_domains = (
+        {str(item) for item in fault_domains if str(item).strip()}
+        if isinstance(fault_domains, list)
+        else set()
+    )
+    report_fault = ha_report.get("fault_injection") if isinstance(ha_report, dict) else None
+    report_probe = ha_report.get("availability_probe") if isinstance(ha_report, dict) else None
+    report_network = ha_report.get("network_policy") if isinstance(ha_report, dict) else None
+    report_state = ha_report.get("state_services") if isinstance(ha_report, dict) else None
+    evidence_observed_at = _parse_time(
+        (ha.get("evidence") or {}).get("observed_at")
+        if isinstance(ha.get("evidence"), dict)
+        else None
+    )
+    expected_counts = {
+        name: int(replica_counts.get(name, 0))
+        for name in ("backend", "frontend", "worker", "beat")
+    } if isinstance(replica_counts, dict) else {}
+    report_counts_match = (
+        isinstance(report_counts, dict)
+        and all(
+            int(report_counts.get(name, -1)) == expected_counts.get(name)
+            for name in ("backend", "frontend", "worker", "beat")
+        )
+    )
+    before_ready = all(
+        _ha_snapshot_consistent(ha_report or {}, "before", name)
+        and _ha_ready_replicas(ha_report or {}, "before", name)
+        >= expected_counts.get(name, 1)
+        for name in ("backend", "frontend", "worker", "beat")
+    )
+    drain_ready = all(
+        _ha_snapshot_consistent(ha_report or {}, "after_zone_drain", name)
+        and _ha_ready_replicas(ha_report or {}, "after_zone_drain", name)
+        >= expected_counts.get(name, 1)
+        for name in ("backend", "frontend", "worker", "beat")
+    )
+    restored_ready_and_spread = all(
+        _ha_snapshot_consistent(
+            ha_report or {}, "after_zone_return_and_rolling_rebalance", name
+        )
+        and _ha_ready_replicas(
+            ha_report or {}, "after_zone_return_and_rolling_rebalance", name
+        )
+        >= expected_counts.get(name, 1)
+        and target_domains.issubset(
+            _ha_ready_zones(
+                ha_report or {}, "after_zone_return_and_rolling_rebalance", name
+            )
+        )
+        for name in ("backend", "frontend", "worker")
+    )
+    before_spread = all(
+        target_domains.issubset(_ha_ready_zones(ha_report or {}, "before", name))
+        for name in ("backend", "frontend", "worker")
+    )
+    drained_zone_absent = isinstance(report_fault, dict) and all(
+        report_fault.get("drained_zone")
+        not in _ha_ready_zones(ha_report or {}, "after_zone_drain", name)
+        and report_fault.get("drained_node")
+        not in _ha_ready_nodes(ha_report or {}, "after_zone_drain", name)
+        for name in ("backend", "frontend", "worker", "beat")
+    )
+    report_matches_target = (
+        isinstance(ha_report, dict)
+        and ha_report.get("schema_version") == "duckdock-kubernetes-ha-failover-v1"
+        and ha_report.get("scope") == "target-production"
+        and ha_report.get("status") == "PASS"
+        and ha_report.get("passed") is True
+        and ha_report.get("target_environment") == target.get("target_id")
+        and ha_report.get("source_commit") == commit
+        and _parse_time(ha_report.get("observed_at")) == evidence_observed_at
+        and isinstance(ha_report.get("images"), dict)
+        and isinstance(ha_report["images"].get("backend"), dict)
+        and isinstance(ha_report["images"].get("frontend"), dict)
+        and ha_report["images"]["backend"].get("name") == release.get("backend_image")
+        and ha_report["images"]["frontend"].get("name") == release.get("frontend_image")
+        and target_domains == report_domains
+        and len(report_domains) >= 2
+        and int(ha_report.get("fault_domains_exercised", 0)) == len(report_domains)
+        and int(ha_report.get("fault_domains_exercised", 0))
+        == int(ha.get("fault_domains_exercised", -1))
+        and report_counts_match
+        and before_ready
+        and before_spread
+        and drain_ready
+        and drained_zone_absent
+        and restored_ready_and_spread
+        and isinstance(report_fault, dict)
+        and report_fault.get("drained_zone") in target_domains
+        and isinstance(report_fault.get("drained_node"), str)
+        and bool(report_fault.get("drained_node"))
+        and report_fault.get("node_failover_passed") is True
+        and report_fault.get("zone_failover_passed") is True
+        and report_fault.get("beat_recovery_passed") is True
+        and report_fault.get("beat_original_node") != report_fault.get("beat_recovery_node")
+        and int(report_fault.get("recovery_seconds", target_rto + 1)) <= target_rto
+        and isinstance(report_probe, dict)
+        and report_probe.get("transport") == "network HTTPS against target"
+        and str(report_probe.get("base_url", "")).rstrip("/")
+        == str(target.get("public_base_url", "")).rstrip("/")
+        and report_probe.get("passed") is True
+        and int(report_probe.get("sample_count", 0)) >= 5
+        and int(report_probe.get("failure_count", -1)) == 0
+        and isinstance(report_network, dict)
+        and report_network.get("enforcement_exercised") is True
+        and report_network.get("passed") is True
+        and isinstance(report_state, dict)
+        and report_state.get("managed_mysql_ha") is True
+        and report_state.get("managed_redis_ha") is True
+        and report_state.get("object_store_ha") is True
+        and report_state.get("rwx_repository_storage_ha") is True
+        and report_state.get("failover_exercised") is True
+        and report_state.get("data_integrity_passed") is True
+    )
     ha_ok = (
         ha.get("status") == "PASS"
         and isinstance(replica_counts, dict)
@@ -628,14 +804,19 @@ def evaluate(
         and ha.get("node_failover_passed") is True
         and ha.get("zone_failover_passed") is True
         and ha.get("beat_recovery_passed") is True
+        and report_matches_target
     )
     gate.add(
         "high_availability",
         owner="Architecture",
         passed=ha_ok,
-        observed=f"status={ha.get('status')}, replicas={replica_counts}, zones={ha.get('fault_domains_exercised')}",
+        observed=(
+            f"status={ha.get('status')}, replicas={replica_counts}, "
+            f"zones={ha.get('fault_domains_exercised')}, "
+            f"report_scope={ha_report.get('scope') if isinstance(ha_report, dict) else 'missing'}"
+        ),
         expected="3x stateless replicas; 2+ zones; HA state stores/RWX; node+zone+beat failover passed",
-        detail="Manifests prove intent; only a target fault-injection report proves the availability commitment.",
+        detail="The content-addressed report must bind the exact target, commit and images; prove target HTTPS continuity, node/zone/Beat failover, restored spread, enforced policy and state-service integrity. Local kind evidence cannot authorize production.",
     )
 
     security = controls["security_assessment"]

@@ -108,6 +108,13 @@
       "status": "PASS"
     },
     {
+      "expected": ">=3 taint-aware and ReplicaSet-revision-aware zone constraints",
+      "key": "ha_fault_domain_outage_scheduling",
+      "observed": "taint-aware=3, revision-aware=3",
+      "passed": true,
+      "status": "PASS"
+    },
+    {
       "expected": "all workloads disable service-account token automount",
       "key": "ha_no_service_account_tokens",
       "observed": "6",
@@ -120,10 +127,24 @@
       "observed": "fail-closed placeholders retained",
       "passed": true,
       "status": "PASS"
+    },
+    {
+      "expected": "numeric non-root image users accepted by Kubernetes runAsNonRoot",
+      "key": "ha_numeric_non_root_images",
+      "observed": "backend=10001:10001, frontend=101:101",
+      "passed": true,
+      "status": "PASS"
+    },
+    {
+      "expected": "repeatable local rehearsal cannot be mistaken for target-production evidence",
+      "key": "ha_local_rehearsal_fail_closed",
+      "observed": "local-only scope; state/policy non-authorizing; Kubernetes Service proxy",
+      "passed": true,
+      "status": "PASS"
     }
   ],
-  "observed_at": "2026-08-05T05:37:16.069970+00:00",
-  "pass_count": 17,
+  "observed_at": "2026-08-05T08:53:22.800013+00:00",
+  "pass_count": 20,
   "schema_version": "duckdock-production-baseline-v1",
   "status": "PASS"
 }

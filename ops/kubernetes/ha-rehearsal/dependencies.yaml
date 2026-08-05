@@ -1,0 +1,176 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: duckdock-ha-deps
+  labels:
+    duckdock.io/rehearsal-only: "true"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: mysql, namespace: duckdock-ha-deps}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: duckdock-ha-mysql}}
+  template:
+    metadata: {labels: {app: duckdock-ha-mysql}}
+    spec:
+      nodeName: duckdock-ga-ha-control-plane
+      containers:
+        - name: mysql
+          image: mysql:8.4@sha256:c36050afdca850f23cef85703f84c7531a5ae155a11b5ee1c60acb09937c4084
+          envFrom: [{secretRef: {name: duckdock-ha-deps-secrets}}]
+          args: [--character-set-server=utf8mb4, --collation-server=utf8mb4_0900_ai_ci]
+          ports: [{name: mysql, containerPort: 3306}]
+          readinessProbe:
+            exec:
+              command: [sh, -c, 'mysqladmin ping -h 127.0.0.1 -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" --silent']
+            periodSeconds: 3
+            failureThreshold: 60
+          resources:
+            requests: {cpu: 100m, memory: 512Mi}
+            limits: {cpu: "1", memory: 2Gi}
+          volumeMounts: [{name: data, mountPath: /var/lib/mysql}]
+      volumes: [{name: data, emptyDir: {sizeLimit: 2Gi}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: mysql, namespace: duckdock-ha-deps}
+spec:
+  selector: {app: duckdock-ha-mysql}
+  ports: [{name: mysql, port: 3306, targetPort: mysql}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: redis, namespace: duckdock-ha-deps}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: duckdock-ha-redis}}
+  template:
+    metadata: {labels: {app: duckdock-ha-redis}}
+    spec:
+      nodeName: duckdock-ga-ha-control-plane
+      containers:
+        - name: redis
+          image: redis:7.4.10-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
+          ports: [{name: redis, containerPort: 6379}]
+          readinessProbe:
+            exec: {command: [redis-cli, ping]}
+            periodSeconds: 3
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 300m, memory: 256Mi}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: redis, namespace: duckdock-ha-deps}
+spec:
+  selector: {app: duckdock-ha-redis}
+  ports: [{name: redis, port: 6379, targetPort: redis}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: minio, namespace: duckdock-ha-deps}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: duckdock-ha-minio}}
+  template:
+    metadata: {labels: {app: duckdock-ha-minio}}
+    spec:
+      nodeName: duckdock-ga-ha-control-plane
+      containers:
+        - name: minio
+          image: minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+          args: [server, /data]
+          envFrom: [{secretRef: {name: duckdock-ha-deps-secrets}}]
+          ports: [{name: s3, containerPort: 9000}]
+          readinessProbe:
+            httpGet: {path: /minio/health/live, port: s3}
+            periodSeconds: 3
+            failureThreshold: 60
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+          volumeMounts: [{name: data, mountPath: /data}]
+      volumes: [{name: data, emptyDir: {sizeLimit: 2Gi}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: minio, namespace: duckdock-ha-deps}
+spec:
+  selector: {app: duckdock-ha-minio}
+  ports: [{name: s3, port: 9000, targetPort: s3}]
+---
+apiVersion: batch/v1
+kind: Job
+metadata: {name: minio-init, namespace: duckdock-ha-deps}
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      nodeName: duckdock-ga-ha-control-plane
+      restartPolicy: Never
+      containers:
+        - name: minio-init
+          image: duckdock-backend:2.0.0-rc.1
+          imagePullPolicy: IfNotPresent
+          envFrom: [{secretRef: {name: duckdock-ha-deps-secrets}}]
+          command: [python, -c]
+          args:
+            - |
+              import os
+              import time
+              import boto3
+              from botocore.exceptions import BotoCoreError, ClientError
+
+              client = boto3.client(
+                  "s3",
+                  endpoint_url="http://minio:9000",
+                  aws_access_key_id=os.environ["MINIO_ROOT_USER"],
+                  aws_secret_access_key=os.environ["MINIO_ROOT_PASSWORD"],
+                  region_name="us-east-1",
+              )
+              for attempt in range(60):
+                  try:
+                      client.create_bucket(Bucket="duckdock")
+                      break
+                  except (BotoCoreError, ClientError) as exc:
+                      code = (
+                          exc.response.get("Error", {}).get("Code")
+                          if isinstance(exc, ClientError)
+                          else None
+                      )
+                      if code in {"BucketAlreadyOwnedByYou", "BucketAlreadyExists"}:
+                          break
+                      if attempt == 59:
+                          raise
+                      time.sleep(2)
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: duckdock-ha-probe
+  labels:
+    duckdock.io/ingress: "true"
+    duckdock.io/monitoring: "true"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: availability-probe
+  namespace: duckdock-ha-probe
+  labels: {app: duckdock-ha-probe}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: duckdock-ha-probe}}
+  template:
+    metadata: {labels: {app: duckdock-ha-probe}}
+    spec:
+      nodeName: duckdock-ga-ha-control-plane
+      containers:
+        - name: probe
+          image: duckdock-backend:2.0.0-rc.1
+          imagePullPolicy: IfNotPresent
+          command: [/bin/sh, -c, "while true; do sleep 3600; done"]
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: 100m, memory: 256Mi}

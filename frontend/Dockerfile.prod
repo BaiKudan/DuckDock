@@ -23,6 +23,6 @@ LABEL org.opencontainers.image.title="DuckDock frontend" \
       org.opencontainers.image.version="${DUCKDOCK_VERSION}" \
       org.opencontainers.image.source="https://github.com/BaiKudan/DuckDock"
 COPY --from=runtime / /
-USER nginx
+USER 101:101
 EXPOSE 8080
 CMD ["nginx", "-g", "daemon off;"]

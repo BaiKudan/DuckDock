@@ -301,6 +301,7 @@ jobs:
           bash -n scripts/seal-backup.sh
           bash -n scripts/sign-ga-approval.sh
           bash -n scripts/verify-ga-infrastructure-dev.sh
+          bash -n scripts/rehearse-kubernetes-ha.sh
           sh -n ops/tls-gateway/entrypoint.sh
 
       - name: Validate Prometheus and Alertmanager configuration

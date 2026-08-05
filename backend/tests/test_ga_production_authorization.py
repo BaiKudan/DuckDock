@@ -201,6 +201,98 @@ def _document(tmp_path: Path, now: datetime) -> dict:
     controls["capacity"]["evidence"]["sha256"] = hashlib.sha256(
         capacity_path.read_bytes()
     ).hexdigest()
+    ha_path = Path(controls["high_availability"]["evidence"]["path"])
+
+    def ha_snapshot(zones: list[str]) -> dict:
+        return {
+            component: {
+                "ready_replicas": count,
+                "pods": [
+                    {
+                        "pod": f"{component}-{index}",
+                        "node": f"node-{zone}",
+                        "zone": zone,
+                        "ready": True,
+                    }
+                    for index, zone in enumerate(
+                        (zones * ((count + len(zones) - 1) // len(zones)))[:count],
+                        start=1,
+                    )
+                ],
+            }
+            for component, count in {
+                "backend": 3,
+                "frontend": 3,
+                "worker": 3,
+                "beat": 1,
+            }.items()
+        }
+
+    ha_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "duckdock-kubernetes-ha-failover-v1",
+                "scope": "target-production",
+                "status": "PASS",
+                "passed": True,
+                "observed_at": observed_at.isoformat(),
+                "target_environment": "customer-production",
+                "source_commit": commit,
+                "images": {
+                    "backend": {"name": backend_image},
+                    "frontend": {"name": frontend_image},
+                },
+                "fault_domains": ["zone-a", "zone-b"],
+                "fault_domains_exercised": 2,
+                "replica_counts": {
+                    "backend": 3,
+                    "frontend": 3,
+                    "worker": 3,
+                    "beat": 1,
+                },
+                "before": ha_snapshot(["zone-a", "zone-b"]),
+                "after_zone_drain": ha_snapshot(["zone-b"]),
+                "after_zone_return_and_rolling_rebalance": ha_snapshot(
+                    ["zone-a", "zone-b"]
+                ),
+                "fault_injection": {
+                    "drained_node": "node-zone-a",
+                    "drained_zone": "zone-a",
+                    "recovery_seconds": 45,
+                    "node_failover_passed": True,
+                    "zone_failover_passed": True,
+                    "beat_recovery_passed": True,
+                    "beat_original_node": "node-zone-a",
+                    "beat_recovery_node": "node-zone-b",
+                },
+                "availability_probe": {
+                    "transport": "network HTTPS against target",
+                    "base_url": "https://duckdock.example.com",
+                    "sample_count": 60,
+                    "failure_count": 0,
+                    "passed": True,
+                },
+                "network_policy": {
+                    "enforcement_exercised": True,
+                    "passed": True,
+                },
+                "state_services": {
+                    "managed_mysql_ha": True,
+                    "managed_redis_ha": True,
+                    "object_store_ha": True,
+                    "rwx_repository_storage_ha": True,
+                    "failover_exercised": True,
+                    "data_integrity_passed": True,
+                },
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    controls["high_availability"]["evidence"]["sha256"] = hashlib.sha256(
+        ha_path.read_bytes()
+    ).hexdigest()
     release = {
         "version": "2.0.0",
         "git_commit": commit,
@@ -321,3 +413,69 @@ def test_local_asgi_capacity_report_cannot_authorize_target(tmp_path: Path) -> N
     assert result["status"] == "BLOCKED"
     capacity = next(item for item in result["checks"] if item["key"] == "capacity")
     assert capacity["status"] == "BLOCK"
+
+
+def test_local_reference_ha_report_cannot_authorize_target(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    evidence = document["controls"]["high_availability"]["evidence"]
+    path = Path(evidence["path"])
+    report = json.loads(path.read_text(encoding="utf-8"))
+    report["scope"] = "local-rehearsal"
+    report["target_environment"] = "local-kind-duckdock-ga-ha"
+    report["availability_probe"]["transport"] = (
+        "in-cluster frontend Service health and unauthenticated API proxy probes"
+    )
+    report["network_policy"]["enforcement_exercised"] = False
+    report["state_services"]["managed_mysql_ha"] = False
+    path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+    evidence["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(document, authorization_path=tmp_path / "authorization.json", now=now)
+
+    assert result["status"] == "BLOCKED"
+    high_availability = next(
+        item for item in result["checks"] if item["key"] == "high_availability"
+    )
+    assert high_availability["status"] == "BLOCK"
+
+
+def test_ha_claims_cannot_outpace_fault_injection_evidence(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    evidence = document["controls"]["high_availability"]["evidence"]
+    path = Path(evidence["path"])
+    report = json.loads(path.read_text(encoding="utf-8"))
+    report["fault_injection"]["zone_failover_passed"] = False
+    path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+    evidence["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(document, authorization_path=tmp_path / "authorization.json", now=now)
+
+    assert result["status"] == "BLOCKED"
+    high_availability = next(
+        item for item in result["checks"] if item["key"] == "high_availability"
+    )
+    assert high_availability["status"] == "BLOCK"
+
+
+def test_ha_ready_count_must_match_retained_pod_snapshot(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    evidence = document["controls"]["high_availability"]["evidence"]
+    path = Path(evidence["path"])
+    report = json.loads(path.read_text(encoding="utf-8"))
+    report["after_zone_drain"]["backend"]["pods"].pop()
+    path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+    evidence["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(document, authorization_path=tmp_path / "authorization.json", now=now)
+
+    assert result["status"] == "BLOCKED"
+    high_availability = next(
+        item for item in result["checks"] if item["key"] == "high_availability"
+    )
+    assert high_availability["status"] == "BLOCK"

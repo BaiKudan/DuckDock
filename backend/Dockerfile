@@ -23,8 +23,8 @@ RUN pip install --disable-pip-version-check --no-cache-dir \
         --require-hashes -r requirements.lock
 
 COPY . .
-RUN addgroup --system appuser \
-    && adduser --system --ingroup appuser appuser \
+RUN addgroup -S -g 10001 appuser \
+    && adduser -S -D -H -u 10001 -G appuser appuser \
     && mkdir -p /repos \
     && chown -R appuser:appuser /app /repos
 
@@ -41,5 +41,5 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 WORKDIR /app
 EXPOSE 8801
-USER appuser
+USER 10001:10001
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8801"]

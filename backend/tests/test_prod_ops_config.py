@@ -202,6 +202,18 @@ def test_production_frontend_runtime_image_contains_only_built_assets():
     assert "npm ci" not in runtime_stage
 
 
+def test_production_images_use_numeric_non_root_users_for_kubernetes():
+    backend = _read("backend/Dockerfile")
+    frontend = _read("frontend/Dockerfile.prod")
+
+    assert "addgroup -S -g 10001 appuser" in backend
+    assert "adduser -S -D -H -u 10001 -G appuser appuser" in backend
+    assert "USER 10001:10001" in backend
+    assert "USER 101:101" in frontend
+    assert "USER appuser" not in backend
+    assert "USER nginx" not in frontend
+
+
 def test_e2e_seed_has_no_production_override():
     seed_script = _read("backend/scripts/seed_handover_e2e.py")
 
@@ -392,6 +404,9 @@ def test_kubernetes_ha_reference_has_cross_zone_safety_controls():
 
     assert workloads.count("replicas: 3") >= 3
     assert workloads.count("topology.kubernetes.io/zone") >= 3
+    assert workloads.count("whenUnsatisfiable: DoNotSchedule") >= 3
+    assert workloads.count("nodeTaintsPolicy: Honor") >= 3
+    assert workloads.count("matchLabelKeys: [pod-template-hash]") >= 3
     assert workloads.count("automountServiceAccountToken: false") >= 5
     assert availability.count("kind: PodDisruptionBudget") == 3
     assert availability.count("kind: HorizontalPodAutoscaler") == 3
@@ -399,6 +414,20 @@ def test_kubernetes_ha_reference_has_cross_zone_safety_controls():
     assert "controlled-external-egress" in policies
     assert "0.0.0.0/0" in policies
     assert "production gate rejects an unmodified target report" in policies
+
+
+def test_kubernetes_ha_rehearsal_is_non_authorizing_and_kubernetes_native():
+    script = _read("scripts/rehearse-kubernetes-ha.sh")
+    nginx = _read("ops/kubernetes/ha-rehearsal/frontend-kubernetes.conf")
+    kustomization = _read("ops/kubernetes/ha-rehearsal/kustomization.yaml")
+
+    assert '"schema_version": "duckdock-kubernetes-ha-failover-v1"' in script
+    assert '"scope": "local-rehearsal"' in script
+    assert '"enforcement_exercised": False' in script
+    assert '"managed_mysql_ha": False' in script
+    assert "backend.duckdock.svc.cluster.local" in nginx
+    assert "resolver 127.0.0.11" not in nginx
+    assert "emptyDir" in kustomization
 
 
 def test_frontend_nginx_resolves_backend_dynamically():

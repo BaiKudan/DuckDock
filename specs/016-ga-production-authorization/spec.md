@@ -28,12 +28,17 @@ deployment authorization.
 ## Truthful current boundary
 
 PGA-01 through the repository portion of PGA-06 and the complete PGA-07/PGA-08
-protocol are implemented and automated. A local reference capacity result can
-prove the small-production engineering floor, but it does not prove the
-customer's actual network, datastore or fault domains. PGA-02/PGA-03/PGA-04/
-PGA-05 target receipts, PGA-07 independent execution and PGA-08 human signatures
-cannot be fabricated by the project agent; the final gate intentionally blocks
-without them.
+protocol are implemented and automated. PGA-05 now includes a real disposable
+four-node kind rehearsal: restricted images are deployed across three simulated
+zones, the Beat-hosting node is tainted/drained, stateless replicas recover in
+the two surviving zones under continuous API probes, and a revision-aware
+rolling rebalance restores three-zone coverage. Its report is deliberately
+`local-rehearsal`: single-node state dependencies, emptyDir repositories and
+unproven CNI enforcement remain false. A local capacity or HA result can prove
+the engineering baseline, but not the customer's actual network, datastore or
+fault domains. PGA-02/PGA-03/PGA-04/PGA-05 target receipts, PGA-07 independent
+execution and PGA-08 human signatures cannot be fabricated by the project
+agent; the final gate intentionally blocks without them.
 
 The authoritative workflow is
 [`docs/ga-production-authorization.zh-CN.md`](../../docs/ga-production-authorization.zh-CN.md).

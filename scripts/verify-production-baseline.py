@@ -15,7 +15,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -177,6 +176,17 @@ def verify(env_file: Path) -> dict[str, Any]:
         ">=3 zone spread constraints",
     )
     add(
+        "ha_fault_domain_outage_scheduling",
+        rendered.count("nodeTaintsPolicy: Honor") >= 3
+        and rendered.count("matchLabelKeys:") >= 3
+        and rendered.count("pod-template-hash") >= 3,
+        (
+            f"taint-aware={rendered.count('nodeTaintsPolicy: Honor')}, "
+            f"revision-aware={rendered.count('pod-template-hash')}"
+        ),
+        ">=3 taint-aware and ReplicaSet-revision-aware zone constraints",
+    )
+    add(
         "ha_no_service_account_tokens",
         rendered.count("automountServiceAccountToken: false") >= 5,
         rendered.count("automountServiceAccountToken: false"),
@@ -187,6 +197,33 @@ def verify(env_file: Path) -> dict[str, Any]:
         "example.invalid" in rendered and "sha256:0000000000000000" in rendered and "0.0.0.0/0" in rendered,
         "fail-closed placeholders retained",
         "target must replace image/domain/egress placeholders before authorization",
+    )
+    backend_dockerfile = (REPO_ROOT / "backend/Dockerfile").read_text(encoding="utf-8")
+    frontend_dockerfile = (REPO_ROOT / "frontend/Dockerfile.prod").read_text(
+        encoding="utf-8"
+    )
+    add(
+        "ha_numeric_non_root_images",
+        "USER 10001:10001" in backend_dockerfile
+        and "USER 101:101" in frontend_dockerfile,
+        "backend=10001:10001, frontend=101:101",
+        "numeric non-root image users accepted by Kubernetes runAsNonRoot",
+    )
+    rehearsal_script = (REPO_ROOT / "scripts/rehearse-kubernetes-ha.sh").read_text(
+        encoding="utf-8"
+    )
+    kubernetes_nginx = (
+        REPO_ROOT / "ops/kubernetes/ha-rehearsal/frontend-kubernetes.conf"
+    ).read_text(encoding="utf-8")
+    add(
+        "ha_local_rehearsal_fail_closed",
+        '"scope": "local-rehearsal"' in rehearsal_script
+        and '"enforcement_exercised": False' in rehearsal_script
+        and '"managed_mysql_ha": False' in rehearsal_script
+        and "resolver 127.0.0.11" not in kubernetes_nginx
+        and "backend.duckdock.svc.cluster.local" in kubernetes_nginx,
+        "local-only scope; state/policy non-authorizing; Kubernetes Service proxy",
+        "repeatable local rehearsal cannot be mistaken for target-production evidence",
     )
 
     passed = all(check.passed for check in checks)

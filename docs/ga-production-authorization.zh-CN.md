@@ -36,14 +36,33 @@ python backend/scripts/g2_target_capacity_gate.py \
    保留 DBA 存储增长证据后删除专用 Namespace 并撤销两个 token。生产授权门禁
    会解析报告 schema/target/base URL/transport/指标；本机 ASGI + MySQL 报告只能
    证明工程基线，不能替代真实目标 HTTPS 报告。
-6. 在两个故障域执行节点和 zone 故障注入，验证 backend/frontend/worker、
-   托管 MySQL/Redis/S3、RWX 仓库存储以及单逻辑 Beat 的恢复时间。
+6. 先运行本地参考演练，确认发布镜像能在受限安全上下文启动、三类无状态服务
+   正常跨域、节点 drain 时持续可用、Beat 能迁移且故障域返回后重新均衡：
+
+```bash
+bash scripts/rehearse-kubernetes-ha.sh
+```
+
+   该命令输出 `duckdock-kubernetes-ha-failover-v1`，但其 scope 固定为
+   `local-rehearsal`，状态服务、RWX 与 NetworkPolicy enforcement 固定为 false，
+   因而绝不能授权生产。若 Docker Desktop 只有约 8 GiB 内存，先暂停本地
+   DuckDock/Langfuse 栈，演练结束后再恢复，避免宿主 OOM 污染结果。
+
+   然后必须在目标生产集群执行同一类节点和 zone 故障注入。目标报告 scope
+   必须为 `target-production`，绑定同一 target ID、commit、两个不可变镜像摘要；
+   通过真实目标 HTTPS 连续探测，证明 backend/frontend/worker 和单逻辑 Beat
+   恢复；验证故障域回归后新 ReplicaSet 重新覆盖全部目标域；实际执行目标 CNI
+   隔离，并证明托管 MySQL/Redis/S3、RWX 故障切换与数据完整性。任何本地报告、
+   仅有 YAML 的声明或与授权字段不一致的报告都会被内容级门禁拒绝。
+   报告字段模板见 `ops/ga/high-availability-evidence.example.json`；模板中的 Pod
+   条目只是结构示意，必须替换为目标集群实际快照，不能复制后自报通过。
 7. 从异地、加密、不可变备份介质进行破坏性 staging 恢复，验证 MySQL 行、
    MinIO 对象和 Git 仓库，并记录 RPO/RTO。
 8. 触发并恢复测试告警，保留两张派发回执和实际 on-call schedule。
 9. 委托与项目实现方独立的安全机构按指定范围测试，关闭全部 Critical/High，
    将报告绑定到相同 commit 和两个镜像摘要。
-10. 为每份证据填绝对或授权文件相对路径、SHA-256 与 UTC 时间。
+10. 为每份证据填绝对或授权文件相对路径、SHA-256 与 UTC 时间。HA 报告内部
+    `observed_at` 必须与授权文件中的证据时间相同。
 11. 先运行门禁取得 `release_digest`，四个不同负责人分别签署：
 
 ```bash
