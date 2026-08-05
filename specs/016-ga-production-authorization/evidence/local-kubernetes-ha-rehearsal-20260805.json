@@ -1,0 +1,317 @@
+{
+  "after_zone_drain": {
+    "backend": {
+      "pods": [
+        {
+          "node": "duckdock-ga-ha-worker2",
+          "pod": "backend-85ddfbf9f6-7ltmx",
+          "ready": true,
+          "zone": "rehearsal-zone-b"
+        },
+        {
+          "node": "duckdock-ga-ha-worker2",
+          "pod": "backend-85ddfbf9f6-h8db5",
+          "ready": true,
+          "zone": "rehearsal-zone-b"
+        },
+        {
+          "node": "duckdock-ga-ha-worker",
+          "pod": "backend-85ddfbf9f6-x5m9t",
+          "ready": true,
+          "zone": "rehearsal-zone-a"
+        }
+      ],
+      "ready_replicas": 3
+    },
+    "beat": {
+      "pods": [
+        {
+          "node": "duckdock-ga-ha-worker",
+          "pod": "beat-995c85c9d-jg8tk",
+          "ready": true,
+          "zone": "rehearsal-zone-a"
+        }
+      ],
+      "ready_replicas": 1
+    },
+    "frontend": {
+      "pods": [
+        {
+          "node": "duckdock-ga-ha-worker2",
+          "pod": "frontend-6574556ccc-5q79m",
+          "ready": true,
+          "zone": "rehearsal-zone-b"
+        },
+        {
+          "node": "duckdock-ga-ha-worker2",
+          "pod": "frontend-6574556ccc-spslg",
+          "ready": true,
+          "zone": "rehearsal-zone-b"
+        },
+        {
+          "node": "duckdock-ga-ha-worker",
+          "pod": "frontend-6574556ccc-tt4jj",
+          "ready": true,
+          "zone": "rehearsal-zone-a"
+        }
+      ],
+      "ready_replicas": 3
+    },
+    "worker": {
+      "pods": [
+        {
+          "node": "duckdock-ga-ha-worker",
+          "pod": "worker-5f975477c6-cdrx2",
+          "ready": true,
+          "zone": "rehearsal-zone-a"
+        },
+        {
+          "node": "duckdock-ga-ha-worker2",
+          "pod": "worker-5f975477c6-cwvvd",
+          "ready": true,
+          "zone": "rehearsal-zone-b"
+        },
+        {
+          "node": "duckdock-ga-ha-worker",
+          "pod": "worker-5f975477c6-t4492",
+          "ready": true,
+          "zone": "rehearsal-zone-a"
+        }
+      ],
+      "ready_replicas": 3
+    }
+  },
+  "after_zone_return_and_rolling_rebalance": {
+    "backend": {
+      "pods": [
+        {
+          "node": "duckdock-ga-ha-worker3",
+          "pod": "backend-5ccc5fb567-5k27g",
+          "ready": true,
+          "zone": "rehearsal-zone-c"
+        },
+        {
+          "node": "duckdock-ga-ha-worker",
+          "pod": "backend-5ccc5fb567-7bdfg",
+          "ready": true,
+          "zone": "rehearsal-zone-a"
+        },
+        {
+          "node": "duckdock-ga-ha-worker2",
+          "pod": "backend-5ccc5fb567-pxgvf",
+          "ready": true,
+          "zone": "rehearsal-zone-b"
+        }
+      ],
+      "ready_replicas": 3
+    },
+    "beat": {
+      "pods": [
+        {
+          "node": "duckdock-ga-ha-worker",
+          "pod": "beat-995c85c9d-jg8tk",
+          "ready": true,
+          "zone": "rehearsal-zone-a"
+        }
+      ],
+      "ready_replicas": 1
+    },
+    "frontend": {
+      "pods": [
+        {
+          "node": "duckdock-ga-ha-worker",
+          "pod": "frontend-767cd5b45d-mkt99",
+          "ready": true,
+          "zone": "rehearsal-zone-a"
+        },
+        {
+          "node": "duckdock-ga-ha-worker2",
+          "pod": "frontend-767cd5b45d-n989b",
+          "ready": true,
+          "zone": "rehearsal-zone-b"
+        },
+        {
+          "node": "duckdock-ga-ha-worker3",
+          "pod": "frontend-767cd5b45d-npzcf",
+          "ready": true,
+          "zone": "rehearsal-zone-c"
+        }
+      ],
+      "ready_replicas": 3
+    },
+    "worker": {
+      "pods": [
+        {
+          "node": "duckdock-ga-ha-worker3",
+          "pod": "worker-69d74dfdb7-4zcnt",
+          "ready": true,
+          "zone": "rehearsal-zone-c"
+        },
+        {
+          "node": "duckdock-ga-ha-worker2",
+          "pod": "worker-69d74dfdb7-n5pw5",
+          "ready": true,
+          "zone": "rehearsal-zone-b"
+        },
+        {
+          "node": "duckdock-ga-ha-worker",
+          "pod": "worker-69d74dfdb7-p96gz",
+          "ready": true,
+          "zone": "rehearsal-zone-a"
+        }
+      ],
+      "ready_replicas": 3
+    }
+  },
+  "authorization_scope": "stateless Kubernetes scheduling/failover evidence only; cannot authorize production GA",
+  "availability_probe": {
+    "failure_count": 0,
+    "passed": true,
+    "sample_count": 7,
+    "transport": "in-cluster frontend Service health and unauthenticated API proxy probes"
+  },
+  "before": {
+    "backend": {
+      "pods": [
+        {
+          "node": "duckdock-ga-ha-worker3",
+          "pod": "backend-85ddfbf9f6-9q2ld",
+          "ready": true,
+          "zone": "rehearsal-zone-c"
+        },
+        {
+          "node": "duckdock-ga-ha-worker2",
+          "pod": "backend-85ddfbf9f6-h8db5",
+          "ready": true,
+          "zone": "rehearsal-zone-b"
+        },
+        {
+          "node": "duckdock-ga-ha-worker",
+          "pod": "backend-85ddfbf9f6-x5m9t",
+          "ready": true,
+          "zone": "rehearsal-zone-a"
+        }
+      ],
+      "ready_replicas": 3
+    },
+    "beat": {
+      "pods": [
+        {
+          "node": "duckdock-ga-ha-worker3",
+          "pod": "beat-995c85c9d-ll46c",
+          "ready": true,
+          "zone": "rehearsal-zone-c"
+        }
+      ],
+      "ready_replicas": 1
+    },
+    "frontend": {
+      "pods": [
+        {
+          "node": "duckdock-ga-ha-worker2",
+          "pod": "frontend-6574556ccc-spslg",
+          "ready": true,
+          "zone": "rehearsal-zone-b"
+        },
+        {
+          "node": "duckdock-ga-ha-worker",
+          "pod": "frontend-6574556ccc-tt4jj",
+          "ready": true,
+          "zone": "rehearsal-zone-a"
+        },
+        {
+          "node": "duckdock-ga-ha-worker3",
+          "pod": "frontend-6574556ccc-tvlqs",
+          "ready": true,
+          "zone": "rehearsal-zone-c"
+        }
+      ],
+      "ready_replicas": 3
+    },
+    "worker": {
+      "pods": [
+        {
+          "node": "duckdock-ga-ha-worker2",
+          "pod": "worker-5f975477c6-cwvvd",
+          "ready": true,
+          "zone": "rehearsal-zone-b"
+        },
+        {
+          "node": "duckdock-ga-ha-worker3",
+          "pod": "worker-5f975477c6-mj5vn",
+          "ready": true,
+          "zone": "rehearsal-zone-c"
+        },
+        {
+          "node": "duckdock-ga-ha-worker",
+          "pod": "worker-5f975477c6-t4492",
+          "ready": true,
+          "zone": "rehearsal-zone-a"
+        }
+      ],
+      "ready_replicas": 3
+    }
+  },
+  "cleanup": "kind cluster deleted by trap unless --keep-cluster was explicitly supplied",
+  "cluster_context": "kind-duckdock-ga-ha",
+  "fault_domains": [
+    "rehearsal-zone-a",
+    "rehearsal-zone-b",
+    "rehearsal-zone-c"
+  ],
+  "fault_domains_exercised": 3,
+  "fault_injection": {
+    "beat_original_node": "duckdock-ga-ha-worker3",
+    "beat_recovery_node": "duckdock-ga-ha-worker",
+    "beat_recovery_passed": true,
+    "drained_node": "duckdock-ga-ha-worker3",
+    "drained_zone": "rehearsal-zone-c",
+    "node_failover_passed": true,
+    "recovered_at": "2026-08-05T09:17:02Z",
+    "recovery_seconds": 29,
+    "started_at": "2026-08-05T09:16:33Z",
+    "zone_failover_passed": true
+  },
+  "images": {
+    "backend": {
+      "local_image_id": "sha256:3564ec19f8c4bfd82c14dbac1e6d635ec425f1468460bd03414fc21e99494e6e",
+      "name": "duckdock-backend:2.0.0-rc.1"
+    },
+    "frontend": {
+      "local_image_id": "sha256:1821b2fc26a8cf19b217b6ab25ac1ee4eaeb340498cadf612cde728ccc1c0cb7",
+      "name": "duckdock-frontend:2.0.0-rc.1"
+    }
+  },
+  "kind_version": "kind v0.32.0 go1.26.3 darwin/arm64",
+  "kubernetes_version": "v1.36.1",
+  "network_policy": {
+    "detail": "kindnet admission is not proof of target CNI enforcement",
+    "enforcement_exercised": false,
+    "objects_admitted": 5
+  },
+  "observed_at": "2026-08-05T09:18:10.686682+00:00",
+  "passed": true,
+  "pdb_min_available": {
+    "backend": 2,
+    "frontend": 2,
+    "worker": 2
+  },
+  "replica_counts": {
+    "backend": 3,
+    "beat": 1,
+    "frontend": 3,
+    "worker": 3
+  },
+  "schema_version": "duckdock-kubernetes-ha-failover-v1",
+  "scope": "local-rehearsal",
+  "source_commit": "9509b67f85cc0718d0adfb7ff38bd5e5518cddf7",
+  "state_services": {
+    "detail": "disposable single-node dependencies and emptyDir repository mounts are rehearsal-only",
+    "managed_mysql_ha": false,
+    "managed_redis_ha": false,
+    "object_store_ha": false,
+    "rwx_repository_storage_ha": false
+  },
+  "status": "PASS_LOCAL_REFERENCE",
+  "target_environment": "local-kind-duckdock-ga-ha"
+}
