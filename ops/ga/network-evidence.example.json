@@ -1,0 +1,32 @@
+{
+  "schema_version": "duckdock-ga-network-evidence-v1",
+  "scope": "target-production",
+  "status": "PASS",
+  "passed": true,
+  "observed_at": "2026-08-05T00:00:00Z",
+  "target_environment": "__CHANGE_ME_TARGET_ID__",
+  "source_commit": "__CHANGE_ME_40_HEX_GIT_COMMIT__",
+  "images": {
+    "backend": {"name": "registry.example.invalid/duckdock/backend@sha256:__CHANGE_ME_64_HEX__"},
+    "frontend": {"name": "registry.example.invalid/duckdock/frontend@sha256:__CHANGE_ME_64_HEX__"}
+  },
+  "public_tcp_ports": [443],
+  "database_public": false,
+  "redis_public": false,
+  "object_store_direct_public": false,
+  "default_deny_ingress": true,
+  "egress_allowlist_enforced": true,
+  "enforced_by": "__CHANGE_ME_CNI_AND_VERSION__",
+  "external_scan": {
+    "transport": "network TCP scan from outside target",
+    "discovered_tcp_ports": [443],
+    "passed": true
+  },
+  "policy_tests": {
+    "default_deny_ingress_exercised": true,
+    "unapproved_egress_denied": true,
+    "approved_egress_allowed": true,
+    "private_data_services_unreachable_externally": true,
+    "passed": true
+  }
+}

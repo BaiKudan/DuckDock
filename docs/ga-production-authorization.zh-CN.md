@@ -56,14 +56,28 @@ bash scripts/rehearse-kubernetes-ha.sh
    仅有 YAML 的声明或与授权字段不一致的报告都会被内容级门禁拒绝。
    报告字段模板见 `ops/ga/high-availability-evidence.example.json`；模板中的 Pod
    条目只是结构示意，必须替换为目标集群实际快照，不能复制后自报通过。
-7. 从异地、加密、不可变备份介质进行破坏性 staging 恢复，验证 MySQL 行、
-   MinIO 对象和 Git 仓库，并记录 RPO/RTO。
-8. 触发并恢复测试告警，保留两张派发回执和实际 on-call schedule。
-9. 委托与项目实现方独立的安全机构按指定范围测试，关闭全部 Critical/High，
-   将报告绑定到相同 commit 和两个镜像摘要。
-10. 为每份证据填绝对或授权文件相对路径、SHA-256 与 UTC 时间。HA 报告内部
-    `observed_at` 必须与授权文件中的证据时间相同。
-11. 先运行门禁取得 `release_digest`，四个不同负责人分别签署：
+7. 按 `ops/ga/secrets-evidence.example.json` 在目标环境实际轮换每类生产
+   credential。验证旧 credential 被拒绝、工作负载重新加载、审计事件落盘，且
+   证据只记录 secret 类别，绝不能包含 secret/token/password 值。
+8. 按 `ops/ga/network-evidence.example.json` 从集群外执行 TCP 扫描，并在目标
+   CNI 中实际执行默认拒绝 ingress、非白名单 egress 拒绝、白名单 egress 放行和
+   数据服务外部不可达测试。配置文件或 server dry-run 本身不是运行证据。
+9. 按 `ops/ga/recovery-evidence.example.json` 从异地、加密、不可变备份介质对
+   非生产恢复目标进行破坏性恢复。验证备份签名、manifest 摘要、外部解密密钥、
+   MySQL 行、对象和 Git 仓库，并记录 RPO/RTO；禁止覆盖生产数据。
+10. 触发测试告警，由命名 on-call schedule 实际确认，再恢复告警。按
+    `ops/ga/alerting-evidence.example.json` 保留三个不同且有时序的 firing、ack、
+    resolved receipt。加载规则或仅送达 webhook 不能证明有人值守。
+11. 委托与项目实现方独立的安全机构按指定范围执行渗透测试和人工代码审查，
+    关闭并复测全部 Critical/High。按
+    `ops/ga/independent-security-evidence.example.json` 记录独立性、五类必测范围、
+    签名报告摘要，并绑定相同 target、contract、commit 和两个镜像摘要。评估方需
+    用自己的 OpenSSH key 在 namespace `duckdock-security-assessment` 对报告原文件
+    签名；门禁会读取 allowed-signers 和 `.sig` 实际验签，不接受布尔值自报验签。
+12. 为每份证据填绝对或授权文件相对路径、SHA-256 与 UTC 时间。Secrets、网络、
+    告警、恢复、HA 和独立安全报告内部 `observed_at` 必须与各自授权证据时间相同，
+    且 `scope` 只能是 `target-production`。本地 dev/kind 回执不能转换成该 scope。
+13. 先运行门禁取得 `release_digest`，四个不同负责人分别签署：
 
 ```bash
 python backend/scripts/verify_ga_production_authorization.py \

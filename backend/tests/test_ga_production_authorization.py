@@ -144,9 +144,7 @@ def _document(tmp_path: Path, now: datetime) -> dict:
         + "\n",
         encoding="utf-8",
     )
-    controls["application_readiness"]["evidence"]["sha256"] = hashlib.sha256(
-        application_path.read_bytes()
-    ).hexdigest()
+    controls["application_readiness"]["evidence"]["sha256"] = hashlib.sha256(application_path.read_bytes()).hexdigest()
     tls_path = Path(controls["tls"]["evidence"]["path"])
     tls_path.write_text(
         json.dumps(
@@ -198,9 +196,7 @@ def _document(tmp_path: Path, now: datetime) -> dict:
         + "\n",
         encoding="utf-8",
     )
-    controls["capacity"]["evidence"]["sha256"] = hashlib.sha256(
-        capacity_path.read_bytes()
-    ).hexdigest()
+    controls["capacity"]["evidence"]["sha256"] = hashlib.sha256(capacity_path.read_bytes()).hexdigest()
     ha_path = Path(controls["high_availability"]["evidence"]["path"])
 
     def ha_snapshot(zones: list[str]) -> dict:
@@ -252,9 +248,7 @@ def _document(tmp_path: Path, now: datetime) -> dict:
                 },
                 "before": ha_snapshot(["zone-a", "zone-b"]),
                 "after_zone_drain": ha_snapshot(["zone-b"]),
-                "after_zone_return_and_rolling_rebalance": ha_snapshot(
-                    ["zone-a", "zone-b"]
-                ),
+                "after_zone_return_and_rolling_rebalance": ha_snapshot(["zone-a", "zone-b"]),
                 "fault_injection": {
                     "drained_node": "node-zone-a",
                     "drained_zone": "zone-a",
@@ -290,9 +284,212 @@ def _document(tmp_path: Path, now: datetime) -> dict:
         + "\n",
         encoding="utf-8",
     )
-    controls["high_availability"]["evidence"]["sha256"] = hashlib.sha256(
-        ha_path.read_bytes()
-    ).hexdigest()
+    controls["high_availability"]["evidence"]["sha256"] = hashlib.sha256(ha_path.read_bytes()).hexdigest()
+
+    def write_target_report(control_name: str, report: dict) -> None:
+        path = Path(controls[control_name]["evidence"]["path"])
+        path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+        controls[control_name]["evidence"]["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def target_report(schema_version: str, status: str = "PASS") -> dict:
+        return {
+            "schema_version": schema_version,
+            "scope": "target-production",
+            "status": status,
+            "passed": True,
+            "observed_at": observed_at.isoformat(),
+            "target_environment": "customer-production",
+            "source_commit": commit,
+            "images": {
+                "backend": {"name": backend_image},
+                "frontend": {"name": frontend_image},
+            },
+        }
+
+    secrets_report = target_report("duckdock-ga-secrets-evidence-v1")
+    secrets_report.update(
+        {
+            "provider": "External Secrets",
+            "plaintext_env_persisted": False,
+            "rotation_tested": True,
+            "secret_store": {
+                "encrypted_at_rest": True,
+                "access_audit_enabled": True,
+                "credentials_external_to_evidence": True,
+            },
+            "rotation": {
+                "executed": True,
+                "secret_classes": ["database", "object-store", "application-signing"],
+                "started_at": (now - timedelta(minutes=20)).isoformat(),
+                "completed_at": (now - timedelta(minutes=10)).isoformat(),
+                "old_credentials_rejected": True,
+                "workloads_reloaded": True,
+                "audit_event_recorded": True,
+            },
+        }
+    )
+    write_target_report("secrets", secrets_report)
+
+    network_report = target_report("duckdock-ga-network-evidence-v1")
+    network_report.update(
+        {
+            "public_tcp_ports": [443],
+            "database_public": False,
+            "redis_public": False,
+            "object_store_direct_public": False,
+            "default_deny_ingress": True,
+            "egress_allowlist_enforced": True,
+            "enforced_by": "Cilium 1.18",
+            "external_scan": {
+                "transport": "network TCP scan from outside target",
+                "discovered_tcp_ports": [443],
+                "passed": True,
+            },
+            "policy_tests": {
+                "default_deny_ingress_exercised": True,
+                "unapproved_egress_denied": True,
+                "approved_egress_allowed": True,
+                "private_data_services_unreachable_externally": True,
+                "passed": True,
+            },
+        }
+    )
+    write_target_report("network", network_report)
+
+    alerting_report = target_report("duckdock-ga-alerting-evidence-v1")
+    alerting_report.update(
+        {
+            "test_notification_delivered": True,
+            "resolved_notification_delivered": True,
+            "oncall_schedule": "platform-primary",
+            "firing_receipt": {
+                "receipt_id": "incident-fire-123",
+                "delivered": True,
+                "delivered_at": (now - timedelta(minutes=8)).isoformat(),
+            },
+            "oncall_acknowledgement": {
+                "receipt_id": "incident-ack-123",
+                "acknowledged": True,
+                "schedule": "platform-primary",
+                "acknowledged_at": (now - timedelta(minutes=7)).isoformat(),
+            },
+            "resolved_receipt": {
+                "receipt_id": "incident-resolved-123",
+                "delivered": True,
+                "delivered_at": (now - timedelta(minutes=6)).isoformat(),
+            },
+        }
+    )
+    write_target_report("alerting", alerting_report)
+
+    recovery_report = target_report("duckdock-ga-recovery-evidence-v1", "PASSED")
+    recovery_report.update(
+        {
+            "offsite_media": True,
+            "encrypted": True,
+            "immutable_or_object_locked": True,
+            "rpo_seconds": 0,
+            "rto_seconds": 600,
+            "mysql_rows_verified": 10,
+            "objects_verified": 3,
+            "git_repositories_verified": True,
+            "backup": {
+                "manifest_schema_version": "duckdock-secure-backup-v1",
+                "manifest_sha256": "e" * 64,
+                "signature_verified": True,
+                "decryption_key_external": True,
+            },
+            "restore": {
+                "destructive_restore": True,
+                "target_environment": "customer-recovery-staging",
+                "production_data_overwrite": False,
+                "integrity_digest_verified": True,
+                "started_at": (now - timedelta(minutes=30)).isoformat(),
+                "completed_at": (now - timedelta(minutes=10)).isoformat(),
+            },
+            "verification": {
+                "mysql_rows_verified": 10,
+                "objects_verified": 3,
+                "git_repositories_verified": True,
+                "passed": True,
+            },
+        }
+    )
+    write_target_report("recovery", recovery_report)
+
+    if shutil.which("ssh-keygen") is None:
+        pytest.skip("ssh-keygen is required for independent-assessment verification")
+    assessment_path = tmp_path / "independent-assessment-report"
+    assessment_path.write_text(
+        "Independent DuckDock 2.0 assessment: no open critical or high findings.\n",
+        encoding="utf-8",
+    )
+    assessment_key = tmp_path / "independent_assessor_key"
+    subprocess.run(
+        ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(assessment_key)],
+        check=True,
+    )
+    assessor_identity = "assessor@independent-security.example"
+    assessor_allowed_signers = tmp_path / "independent_assessor_allowed_signers"
+    assessor_public_key = assessment_key.with_suffix(".pub").read_text(encoding="utf-8").strip()
+    assessor_allowed_signers.write_text(
+        f"{assessor_identity} {assessor_public_key}\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            "ssh-keygen",
+            "-q",
+            "-Y",
+            "sign",
+            "-f",
+            str(assessment_key),
+            "-n",
+            "duckdock-security-assessment",
+            str(assessment_path),
+        ],
+        check=True,
+    )
+    assessment_signature = assessment_path.with_suffix(".sig")
+
+    security_report = target_report("duckdock-ga-independent-security-evidence-v1")
+    security_report.update(
+        {
+            "independent": True,
+            "provider": "Independent Security Lab",
+            "contract_digest": "d" * 64,
+            "open_critical": 0,
+            "open_high": 0,
+            "assessment": {
+                "assessment_id": "ISL-DD-2026-08",
+                "independence_attested": True,
+                "scope": [
+                    "application-and-api",
+                    "identity-and-access",
+                    "kubernetes-infrastructure",
+                    "supply-chain",
+                    "agent-security",
+                ],
+                "methodologies": ["penetration-test", "manual-code-review"],
+                "started_at": (now - timedelta(days=14)).isoformat(),
+                "completed_at": (now - timedelta(days=1)).isoformat(),
+            },
+            "findings": {
+                "open_critical": 0,
+                "open_high": 0,
+                "retest_completed": True,
+            },
+            "signed_report": {
+                "path": str(assessment_path),
+                "sha256": hashlib.sha256(assessment_path.read_bytes()).hexdigest(),
+                "signer_identity": assessor_identity,
+                "allowed_signers_path": str(assessor_allowed_signers),
+                "signature_path": str(assessment_signature),
+            },
+        }
+    )
+    write_target_report("security_assessment", security_report)
+
     release = {
         "version": "2.0.0",
         "git_commit": commit,
@@ -396,6 +593,107 @@ def test_unrestricted_target_network_blocks_ga(tmp_path: Path) -> None:
     assert result["block_count"] == 1
 
 
+@pytest.mark.parametrize(
+    ("control_name", "expected_status"),
+    [
+        ("secrets", "BLOCKED"),
+        ("network", "BLOCKED"),
+        ("alerting", "BLOCKED"),
+        ("recovery", "BLOCKED"),
+        ("security_assessment", "AWAITING_EXTERNAL_APPROVALS"),
+    ],
+)
+def test_unrelated_digest_bound_json_cannot_substitute_for_target_control_evidence(
+    tmp_path: Path,
+    control_name: str,
+    expected_status: str,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    evidence = document["controls"][control_name]["evidence"]
+    path = Path(evidence["path"])
+    path.write_text(
+        json.dumps({"control": control_name, "passed": True}) + "\n",
+        encoding="utf-8",
+    )
+    evidence["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(document, authorization_path=tmp_path / "authorization.json", now=now)
+
+    assert result["status"] == expected_status
+    check = next(item for item in result["checks"] if item["key"] == control_name)
+    assert check["status"] == "BLOCK"
+
+
+def test_target_control_reports_cannot_be_reused_for_another_environment(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    bound_controls = (
+        "secrets",
+        "network",
+        "alerting",
+        "recovery",
+        "security_assessment",
+    )
+    for control_name in bound_controls:
+        evidence = document["controls"][control_name]["evidence"]
+        path = Path(evidence["path"])
+        report = json.loads(path.read_text(encoding="utf-8"))
+        report["target_environment"] = "different-production"
+        path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+        evidence["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(document, authorization_path=tmp_path / "authorization.json", now=now)
+
+    assert result["status"] == "BLOCKED"
+    statuses = {item["key"]: item["status"] for item in result["checks"]}
+    assert all(statuses[control_name] == "BLOCK" for control_name in bound_controls)
+
+
+def test_secrets_evidence_rejects_embedded_secret_material(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    evidence = document["controls"]["secrets"]["evidence"]
+    path = Path(evidence["path"])
+    report = json.loads(path.read_text(encoding="utf-8"))
+    report["rotation"]["password"] = "must-not-be-retained"
+    path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+    evidence["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(document, authorization_path=tmp_path / "authorization.json", now=now)
+
+    assert result["status"] == "BLOCKED"
+    check = next(item for item in result["checks"] if item["key"] == "secrets")
+    assert check["status"] == "BLOCK"
+
+
+def test_tampered_assessor_report_fails_even_when_digest_claim_is_updated(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    evidence = document["controls"]["security_assessment"]["evidence"]
+    evidence_path = Path(evidence["path"])
+    report = json.loads(evidence_path.read_text(encoding="utf-8"))
+    signed_report_path = Path(report["signed_report"]["path"])
+    signed_report_path.write_text("tampered after assessor signature\n", encoding="utf-8")
+    report["signed_report"]["sha256"] = hashlib.sha256(signed_report_path.read_bytes()).hexdigest()
+    evidence_path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+    evidence["sha256"] = hashlib.sha256(evidence_path.read_bytes()).hexdigest()
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(document, authorization_path=tmp_path / "authorization.json", now=now)
+
+    assert result["status"] == "AWAITING_EXTERNAL_APPROVALS"
+    signature_check = next(item for item in result["checks"] if item["key"] == "security_assessment_signature")
+    assert signature_check["status"] == "BLOCK"
+
+
 def test_local_asgi_capacity_report_cannot_authorize_target(tmp_path: Path) -> None:
     now = datetime.now(timezone.utc)
     document = _document(tmp_path, now)
@@ -435,9 +733,7 @@ def test_local_reference_ha_report_cannot_authorize_target(tmp_path: Path) -> No
     result = evaluate(document, authorization_path=tmp_path / "authorization.json", now=now)
 
     assert result["status"] == "BLOCKED"
-    high_availability = next(
-        item for item in result["checks"] if item["key"] == "high_availability"
-    )
+    high_availability = next(item for item in result["checks"] if item["key"] == "high_availability")
     assert high_availability["status"] == "BLOCK"
 
 
@@ -455,9 +751,7 @@ def test_ha_claims_cannot_outpace_fault_injection_evidence(tmp_path: Path) -> No
     result = evaluate(document, authorization_path=tmp_path / "authorization.json", now=now)
 
     assert result["status"] == "BLOCKED"
-    high_availability = next(
-        item for item in result["checks"] if item["key"] == "high_availability"
-    )
+    high_availability = next(item for item in result["checks"] if item["key"] == "high_availability")
     assert high_availability["status"] == "BLOCK"
 
 
@@ -475,7 +769,5 @@ def test_ha_ready_count_must_match_retained_pod_snapshot(tmp_path: Path) -> None
     result = evaluate(document, authorization_path=tmp_path / "authorization.json", now=now)
 
     assert result["status"] == "BLOCKED"
-    high_availability = next(
-        item for item in result["checks"] if item["key"] == "high_availability"
-    )
+    high_availability = next(item for item in result["checks"] if item["key"] == "high_availability")
     assert high_availability["status"] == "BLOCK"

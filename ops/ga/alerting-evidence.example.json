@@ -1,0 +1,32 @@
+{
+  "schema_version": "duckdock-ga-alerting-evidence-v1",
+  "scope": "target-production",
+  "status": "PASS",
+  "passed": true,
+  "observed_at": "2026-08-05T00:00:00Z",
+  "target_environment": "__CHANGE_ME_TARGET_ID__",
+  "source_commit": "__CHANGE_ME_40_HEX_GIT_COMMIT__",
+  "images": {
+    "backend": {"name": "registry.example.invalid/duckdock/backend@sha256:__CHANGE_ME_64_HEX__"},
+    "frontend": {"name": "registry.example.invalid/duckdock/frontend@sha256:__CHANGE_ME_64_HEX__"}
+  },
+  "test_notification_delivered": true,
+  "resolved_notification_delivered": true,
+  "oncall_schedule": "__CHANGE_ME_ONCALL_SCHEDULE__",
+  "firing_receipt": {
+    "receipt_id": "__CHANGE_ME_FIRING_RECEIPT_ID__",
+    "delivered": true,
+    "delivered_at": "2026-08-04T23:50:00Z"
+  },
+  "oncall_acknowledgement": {
+    "receipt_id": "__CHANGE_ME_ACK_RECEIPT_ID__",
+    "acknowledged": true,
+    "schedule": "__CHANGE_ME_ONCALL_SCHEDULE__",
+    "acknowledged_at": "2026-08-04T23:53:00Z"
+  },
+  "resolved_receipt": {
+    "receipt_id": "__CHANGE_ME_RESOLVED_RECEIPT_ID__",
+    "delivered": true,
+    "delivered_at": "2026-08-04T23:58:00Z"
+  }
+}

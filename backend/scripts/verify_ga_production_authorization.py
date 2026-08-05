@@ -37,6 +37,7 @@ REQUIRED_CONTROLS = {
 REQUIRED_APPROVAL_ROLES = {"Product", "Architecture", "Security", "Operations"}
 EXTERNAL_CHECK_KEYS = {
     "security_assessment",
+    "security_assessment_signature",
     "approval_roles",
     "approval_four_eyes",
     "approval_Product",
@@ -192,6 +193,78 @@ def _origin(value: Any) -> str | None:
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
+def _meaningful_string(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip()) and not any(marker in value for marker in PLACEHOLDER_MARKERS)
+
+
+def _control_observed_at(control: dict[str, Any]) -> datetime | None:
+    evidence = control.get("evidence")
+    return _parse_time(evidence.get("observed_at")) if isinstance(evidence, dict) else None
+
+
+def _report_release_target_binding(
+    report: dict[str, Any] | None,
+    *,
+    schema_version: str,
+    status: str,
+    control: dict[str, Any],
+    target: dict[str, Any],
+    release: dict[str, Any],
+) -> bool:
+    if not isinstance(report, dict):
+        return False
+    images = report.get("images")
+    observed_at = _control_observed_at(control)
+    return (
+        report.get("schema_version") == schema_version
+        and report.get("scope") == "target-production"
+        and report.get("status") == status
+        and report.get("passed") is True
+        and report.get("target_environment") == target.get("target_id")
+        and report.get("source_commit") == release.get("git_commit")
+        and observed_at is not None
+        and _parse_time(report.get("observed_at")) == observed_at
+        and isinstance(images, dict)
+        and isinstance(images.get("backend"), dict)
+        and isinstance(images.get("frontend"), dict)
+        and images["backend"].get("name") == release.get("backend_image")
+        and images["frontend"].get("name") == release.get("frontend_image")
+    )
+
+
+def _contains_secret_material_key(value: Any) -> bool:
+    forbidden = {
+        "credential",
+        "credential_value",
+        "password",
+        "password_value",
+        "plaintext",
+        "plaintext_value",
+        "private_key",
+        "raw_secret",
+        "secret_value",
+        "secret_values",
+        "token",
+        "token_value",
+    }
+    if isinstance(value, dict):
+        return any(str(key).lower() in forbidden or _contains_secret_material_key(item) for key, item in value.items())
+    if isinstance(value, list):
+        return any(_contains_secret_material_key(item) for item in value)
+    return False
+
+
+def _ordered_report_times(
+    *values: Any,
+    no_later_than: datetime | None = None,
+) -> bool:
+    parsed = [_parse_time(value) for value in values]
+    if any(value is None for value in parsed):
+        return False
+    concrete = [value for value in parsed if value is not None]
+    return concrete == sorted(concrete) and (no_later_than is None or concrete[-1] <= no_later_than)
+
+
 def _ha_component(report: dict[str, Any], snapshot: str, component: str) -> dict[str, Any]:
     snapshots = report.get(snapshot)
     if not isinstance(snapshots, dict):
@@ -306,14 +379,14 @@ def _release_digest(release: dict[str, Any], target: dict[str, Any], controls: d
     return hashlib.sha256(canonical).hexdigest()
 
 
-def _verify_ssh_signature(
+def _verify_ssh_payload(
     *,
     identity: str,
     allowed_signers: Path,
     signature: Path,
-    release_digest: str,
+    namespace: str,
+    payload: bytes,
 ) -> tuple[bool, str]:
-    statement = f"{SCHEMA_VERSION}:{release_digest}\n".encode()
     try:
         completed = subprocess.run(
             [
@@ -325,11 +398,11 @@ def _verify_ssh_signature(
                 "-I",
                 identity,
                 "-n",
-                "duckdock-ga",
+                namespace,
                 "-s",
                 str(signature),
             ],
-            input=statement,
+            input=payload,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             check=False,
@@ -337,6 +410,60 @@ def _verify_ssh_signature(
     except OSError as exc:
         return False, str(exc)
     return completed.returncode == 0, completed.stdout.decode("utf-8", errors="replace").strip()
+
+
+def _verify_ssh_signature(
+    *,
+    identity: str,
+    allowed_signers: Path,
+    signature: Path,
+    release_digest: str,
+) -> tuple[bool, str]:
+    statement = f"{SCHEMA_VERSION}:{release_digest}\n".encode()
+    return _verify_ssh_payload(
+        identity=identity,
+        allowed_signers=allowed_signers,
+        signature=signature,
+        namespace="duckdock-ga",
+        payload=statement,
+    )
+
+
+def _verify_signed_evidence_file(
+    signed_file: dict[str, Any],
+    *,
+    authorization_path: Path,
+    namespace: str,
+) -> tuple[bool, str]:
+    path = _resolve_file(signed_file.get("path"), authorization_path)
+    allowed_signers = _resolve_file(signed_file.get("allowed_signers_path"), authorization_path)
+    signature = _resolve_file(signed_file.get("signature_path"), authorization_path)
+    identity = signed_file.get("signer_identity")
+    expected_digest = str(signed_file.get("sha256", ""))
+    exists = path is not None and path.is_file()
+    actual_digest = _sha256(path) if exists else "missing"
+    digest_ok = bool(DIGEST_RE.fullmatch(expected_digest)) and actual_digest == expected_digest
+    artifacts_ok = (
+        _meaningful_string(identity)
+        and allowed_signers is not None
+        and allowed_signers.is_file()
+        and signature is not None
+        and signature.is_file()
+    )
+    signature_ok = False
+    signature_detail = "missing signer identity or signature artifacts"
+    if exists and artifacts_ok:
+        signature_ok, signature_detail = _verify_ssh_payload(
+            identity=identity,
+            allowed_signers=allowed_signers,
+            signature=signature,
+            namespace=namespace,
+            payload=path.read_bytes(),
+        )
+    return (
+        exists and digest_ok and artifacts_ok and signature_ok,
+        f"path={path or 'missing'}, digest={actual_digest}, signer={identity or 'missing'}, signature={signature_detail}",
+    )
 
 
 def evaluate(
@@ -461,10 +588,7 @@ def evaluate(
         and app_report.get("current_db_revision") == app.get("database_revision")
         and app_report.get("expected_db_revision") == app.get("expected_database_revision")
         and isinstance(app_report.get("checks"), list)
-        and all(
-            isinstance(item, dict) and item.get("status") == "PASS"
-            for item in app_report["checks"]
-        )
+        and all(isinstance(item, dict) and item.get("status") == "PASS" for item in app_report["checks"])
     )
     gate.add(
         "application_readiness",
@@ -494,18 +618,13 @@ def evaluate(
         tls_report is not None
         and tls_report.get("schema_version") == "duckdock-ga-tls-probe-v1"
         and tls_report.get("status") == "PASS"
-        and _origin(tls_report.get("application_url"))
-        == str(target.get("public_base_url", "")).rstrip("/")
-        and _origin(tls_report.get("object_store_url"))
-        == str(target.get("object_store_url", "")).rstrip("/")
+        and _origin(tls_report.get("application_url")) == str(target.get("public_base_url", "")).rstrip("/")
+        and _origin(tls_report.get("object_store_url")) == str(target.get("object_store_url", "")).rstrip("/")
         and tls_report.get("negotiated_protocols") == negotiated
-        and tls_report.get("legacy_protocols_rejected")
-        == tls.get("legacy_protocols_rejected")
-        and int(tls_report.get("certificate_days_remaining", -1))
-        == int(tls.get("certificate_days_remaining", -2))
+        and tls_report.get("legacy_protocols_rejected") == tls.get("legacy_protocols_rejected")
+        and int(tls_report.get("certificate_days_remaining", -1)) == int(tls.get("certificate_days_remaining", -2))
         and tls_report.get("hostname_verified") is tls.get("hostname_verified")
-        and int(tls_report.get("hsts_max_age_seconds", -1))
-        == int(tls.get("hsts_max_age_seconds", -2))
+        and int(tls_report.get("hsts_max_age_seconds", -1)) == int(tls.get("hsts_max_age_seconds", -2))
         and isinstance(tls_report.get("endpoints"), dict)
         and set(tls_report["endpoints"]) == {"application", "object_store"}
         and all(
@@ -534,11 +653,53 @@ def evaluate(
     )
 
     secrets = controls["secrets"]
+    secrets_report = _evidence_json(secrets, authorization_path)
+    secret_store = (
+        secrets_report.get("secret_store")
+        if isinstance(secrets_report, dict) and isinstance(secrets_report.get("secret_store"), dict)
+        else {}
+    )
+    secret_rotation = (
+        secrets_report.get("rotation")
+        if isinstance(secrets_report, dict) and isinstance(secrets_report.get("rotation"), dict)
+        else {}
+    )
+    secret_classes = secret_rotation.get("secret_classes")
+    secrets_report_matches = (
+        _report_release_target_binding(
+            secrets_report,
+            schema_version="duckdock-ga-secrets-evidence-v1",
+            status="PASS",
+            control=secrets,
+            target=target,
+            release=release,
+        )
+        and secrets_report.get("provider") == secrets.get("provider")
+        and secrets_report.get("plaintext_env_persisted") is secrets.get("plaintext_env_persisted")
+        and secrets_report.get("rotation_tested") is secrets.get("rotation_tested")
+        and secret_store.get("encrypted_at_rest") is True
+        and secret_store.get("access_audit_enabled") is True
+        and secret_store.get("credentials_external_to_evidence") is True
+        and secret_rotation.get("executed") is True
+        and secret_rotation.get("old_credentials_rejected") is True
+        and secret_rotation.get("workloads_reloaded") is True
+        and secret_rotation.get("audit_event_recorded") is True
+        and not _contains_secret_material_key(secrets_report)
+        and isinstance(secret_classes, list)
+        and bool(secret_classes)
+        and all(_meaningful_string(item) for item in secret_classes)
+        and _ordered_report_times(
+            secret_rotation.get("started_at"),
+            secret_rotation.get("completed_at"),
+            no_later_than=_control_observed_at(secrets),
+        )
+    )
     secrets_ok = (
         secrets.get("status") == "PASS"
         and secrets.get("plaintext_env_persisted") is False
         and secrets.get("rotation_tested") is True
         and secrets.get("provider") in {"SOPS/age", "External Secrets", "Vault", "cloud-secret-manager"}
+        and secrets_report_matches
     )
     gate.add(
         "secrets",
@@ -546,10 +707,52 @@ def evaluate(
         passed=secrets_ok,
         observed=f"status={secrets.get('status')}, provider={secrets.get('provider')}, rotation={secrets.get('rotation_tested')}",
         expected="approved secret manager; no persisted plaintext env; rotation tested",
-        detail="A configured provider without a completed rotation test is not operational proof.",
+        detail="The target report must bind the release and prove audited encrypted storage, credential rejection and workload reload without retaining secret values.",
     )
 
     network = controls["network"]
+    network_report = _evidence_json(network, authorization_path)
+    external_scan = (
+        network_report.get("external_scan")
+        if isinstance(network_report, dict) and isinstance(network_report.get("external_scan"), dict)
+        else {}
+    )
+    policy_tests = (
+        network_report.get("policy_tests")
+        if isinstance(network_report, dict) and isinstance(network_report.get("policy_tests"), dict)
+        else {}
+    )
+    network_claims_match = isinstance(network_report, dict) and all(
+        network_report.get(key) == network.get(key)
+        for key in (
+            "public_tcp_ports",
+            "database_public",
+            "redis_public",
+            "object_store_direct_public",
+            "default_deny_ingress",
+            "egress_allowlist_enforced",
+        )
+    )
+    network_report_matches = (
+        _report_release_target_binding(
+            network_report,
+            schema_version="duckdock-ga-network-evidence-v1",
+            status="PASS",
+            control=network,
+            target=target,
+            release=release,
+        )
+        and network_claims_match
+        and _meaningful_string(network_report.get("enforced_by"))
+        and external_scan.get("transport") == "network TCP scan from outside target"
+        and external_scan.get("discovered_tcp_ports") == [443]
+        and external_scan.get("passed") is True
+        and policy_tests.get("default_deny_ingress_exercised") is True
+        and policy_tests.get("unapproved_egress_denied") is True
+        and policy_tests.get("approved_egress_allowed") is True
+        and policy_tests.get("private_data_services_unreachable_externally") is True
+        and policy_tests.get("passed") is True
+    )
     network_ok = (
         network.get("status") == "PASS"
         and network.get("public_tcp_ports") == [443]
@@ -558,6 +761,7 @@ def evaluate(
         and network.get("object_store_direct_public") is False
         and network.get("default_deny_ingress") is True
         and network.get("egress_allowlist_enforced") is True
+        and network_report_matches
     )
     gate.add(
         "network",
@@ -565,16 +769,60 @@ def evaluate(
         passed=network_ok,
         observed=f"status={network.get('status')}, public_ports={network.get('public_tcp_ports')}, egress={network.get('egress_allowlist_enforced')}",
         expected="only 443 public; data stores private; default deny; target egress allowlist",
-        detail="The portable 0.0.0.0/0 Kubernetes template must be narrowed in the target overlay.",
+        detail="The release-bound target report must include an outside TCP scan plus exercised ingress and egress policy paths; YAML declarations alone do not pass.",
     )
 
     alerting = controls["alerting"]
+    alerting_report = _evidence_json(alerting, authorization_path)
+    firing_receipt = (
+        alerting_report.get("firing_receipt")
+        if isinstance(alerting_report, dict) and isinstance(alerting_report.get("firing_receipt"), dict)
+        else {}
+    )
+    resolved_receipt = (
+        alerting_report.get("resolved_receipt")
+        if isinstance(alerting_report, dict) and isinstance(alerting_report.get("resolved_receipt"), dict)
+        else {}
+    )
+    acknowledgement = (
+        alerting_report.get("oncall_acknowledgement")
+        if isinstance(alerting_report, dict) and isinstance(alerting_report.get("oncall_acknowledgement"), dict)
+        else {}
+    )
+    alerting_report_matches = (
+        _report_release_target_binding(
+            alerting_report,
+            schema_version="duckdock-ga-alerting-evidence-v1",
+            status="PASS",
+            control=alerting,
+            target=target,
+            release=release,
+        )
+        and alerting_report.get("test_notification_delivered") is alerting.get("test_notification_delivered")
+        and alerting_report.get("resolved_notification_delivered") is alerting.get("resolved_notification_delivered")
+        and alerting_report.get("oncall_schedule") == alerting.get("oncall_schedule")
+        and firing_receipt.get("delivered") is True
+        and resolved_receipt.get("delivered") is True
+        and _meaningful_string(firing_receipt.get("receipt_id"))
+        and _meaningful_string(resolved_receipt.get("receipt_id"))
+        and firing_receipt.get("receipt_id") != resolved_receipt.get("receipt_id")
+        and acknowledgement.get("acknowledged") is True
+        and acknowledgement.get("schedule") == alerting.get("oncall_schedule")
+        and _meaningful_string(acknowledgement.get("receipt_id"))
+        and _ordered_report_times(
+            firing_receipt.get("delivered_at"),
+            acknowledgement.get("acknowledged_at"),
+            resolved_receipt.get("delivered_at"),
+            no_later_than=_control_observed_at(alerting),
+        )
+    )
     alerting_ok = (
         alerting.get("status") == "PASS"
         and alerting.get("test_notification_delivered") is True
         and alerting.get("resolved_notification_delivered") is True
         and isinstance(alerting.get("oncall_schedule"), str)
         and not any(marker in str(alerting.get("oncall_schedule")) for marker in PLACEHOLDER_MARKERS)
+        and alerting_report_matches
     )
     gate.add(
         "alerting",
@@ -582,12 +830,70 @@ def evaluate(
         passed=alerting_ok,
         observed=f"status={alerting.get('status')}, fired={alerting.get('test_notification_delivered')}, resolved={alerting.get('resolved_notification_delivered')}",
         expected="firing + resolved notifications delivered to a named on-call schedule",
-        detail="Loaded Prometheus rules are insufficient until the receiver path is exercised.",
+        detail="The release-bound target report must retain distinct firing/resolved receipts and a timestamped acknowledgement from the named on-call schedule.",
     )
 
     recovery = controls["recovery"]
     target_rpo = int(target.get("maximum_rpo_seconds", 900))
     target_rto = int(target.get("maximum_rto_seconds", 14_400))
+    recovery_report = _evidence_json(recovery, authorization_path)
+    backup_report = (
+        recovery_report.get("backup")
+        if isinstance(recovery_report, dict) and isinstance(recovery_report.get("backup"), dict)
+        else {}
+    )
+    restore_report = (
+        recovery_report.get("restore")
+        if isinstance(recovery_report, dict) and isinstance(recovery_report.get("restore"), dict)
+        else {}
+    )
+    verification_report = (
+        recovery_report.get("verification")
+        if isinstance(recovery_report, dict) and isinstance(recovery_report.get("verification"), dict)
+        else {}
+    )
+    recovery_claims_match = isinstance(recovery_report, dict) and all(
+        recovery_report.get(key) == recovery.get(key)
+        for key in (
+            "offsite_media",
+            "encrypted",
+            "immutable_or_object_locked",
+            "rpo_seconds",
+            "rto_seconds",
+            "mysql_rows_verified",
+            "objects_verified",
+            "git_repositories_verified",
+        )
+    )
+    recovery_report_matches = (
+        _report_release_target_binding(
+            recovery_report,
+            schema_version="duckdock-ga-recovery-evidence-v1",
+            status="PASSED",
+            control=recovery,
+            target=target,
+            release=release,
+        )
+        and recovery_claims_match
+        and backup_report.get("manifest_schema_version") == "duckdock-secure-backup-v1"
+        and bool(DIGEST_RE.fullmatch(str(backup_report.get("manifest_sha256", ""))))
+        and backup_report.get("signature_verified") is True
+        and backup_report.get("decryption_key_external") is True
+        and restore_report.get("destructive_restore") is True
+        and _meaningful_string(restore_report.get("target_environment"))
+        and restore_report.get("target_environment") != target.get("target_id")
+        and restore_report.get("production_data_overwrite") is False
+        and restore_report.get("integrity_digest_verified") is True
+        and _ordered_report_times(
+            restore_report.get("started_at"),
+            restore_report.get("completed_at"),
+            no_later_than=_control_observed_at(recovery),
+        )
+        and verification_report.get("mysql_rows_verified") == recovery.get("mysql_rows_verified")
+        and verification_report.get("objects_verified") == recovery.get("objects_verified")
+        and verification_report.get("git_repositories_verified") is recovery.get("git_repositories_verified")
+        and verification_report.get("passed") is True
+    )
     recovery_ok = (
         recovery.get("status") == "PASSED"
         and recovery.get("offsite_media") is True
@@ -598,6 +904,7 @@ def evaluate(
         and int(recovery.get("mysql_rows_verified", 0)) > 0
         and int(recovery.get("objects_verified", 0)) > 0
         and recovery.get("git_repositories_verified") is True
+        and recovery_report_matches
     )
     gate.add(
         "recovery",
@@ -605,7 +912,7 @@ def evaluate(
         passed=recovery_ok,
         observed=f"status={recovery.get('status')}, RPO={recovery.get('rpo_seconds')}, RTO={recovery.get('rto_seconds')}",
         expected=f"offsite encrypted immutable restore; RPO<={target_rpo}s; RTO<={target_rto}s; DB/object/Git verified",
-        detail="A backup creation receipt without destructive restore verification cannot pass.",
+        detail="The release-bound report must prove a signed offsite encrypted immutable backup and a destructive non-production restore with DB/object/Git integrity checks.",
     )
 
     capacity = controls["capacity"]
@@ -630,8 +937,7 @@ def evaluate(
         and capacity_report.get("passed") is True
         and capacity_report.get("transport") == "network HTTPS against target"
         and capacity_report.get("target_environment") == target.get("target_id")
-        and str(capacity_report.get("base_url", "")).rstrip("/")
-        == str(target.get("public_base_url", "")).rstrip("/")
+        and str(capacity_report.get("base_url", "")).rstrip("/") == str(target.get("public_base_url", "")).rstrip("/")
         and isinstance(sustained_report, dict)
         and sustained_report.get("passed") is True
         and int(sustained_report.get("duration_seconds", 0)) == int(capacity.get("sustained_seconds", -1))
@@ -639,8 +945,7 @@ def evaluate(
         and int(capacity_report.get("materialized_runs", -1)) == int(capacity.get("materialized_runs", -2))
         and float(capacity_report.get("error_rate", -1)) == float(capacity.get("error_rate", -2))
         and float(sustained_report.get("p95_ms", -1)) == float(capacity.get("write_p95_ms", -2))
-        and float(timeline_report.get("p95_ms", -1))
-        == float(capacity.get("timeline_p95_ms", -2))
+        and float(timeline_report.get("p95_ms", -1)) == float(capacity.get("timeline_p95_ms", -2))
         and timeline_report.get("passed") is capacity.get("post_growth_query_passed")
     )
     capacity_ok = (
@@ -678,55 +983,39 @@ def evaluate(
         else set()
     )
     target_domains = (
-        {str(item) for item in fault_domains if str(item).strip()}
-        if isinstance(fault_domains, list)
-        else set()
+        {str(item) for item in fault_domains if str(item).strip()} if isinstance(fault_domains, list) else set()
     )
     report_fault = ha_report.get("fault_injection") if isinstance(ha_report, dict) else None
     report_probe = ha_report.get("availability_probe") if isinstance(ha_report, dict) else None
     report_network = ha_report.get("network_policy") if isinstance(ha_report, dict) else None
     report_state = ha_report.get("state_services") if isinstance(ha_report, dict) else None
     evidence_observed_at = _parse_time(
-        (ha.get("evidence") or {}).get("observed_at")
-        if isinstance(ha.get("evidence"), dict)
-        else None
+        (ha.get("evidence") or {}).get("observed_at") if isinstance(ha.get("evidence"), dict) else None
     )
-    expected_counts = {
-        name: int(replica_counts.get(name, 0))
+    expected_counts = (
+        {name: int(replica_counts.get(name, 0)) for name in ("backend", "frontend", "worker", "beat")}
+        if isinstance(replica_counts, dict)
+        else {}
+    )
+    report_counts_match = isinstance(report_counts, dict) and all(
+        int(report_counts.get(name, -1)) == expected_counts.get(name)
         for name in ("backend", "frontend", "worker", "beat")
-    } if isinstance(replica_counts, dict) else {}
-    report_counts_match = (
-        isinstance(report_counts, dict)
-        and all(
-            int(report_counts.get(name, -1)) == expected_counts.get(name)
-            for name in ("backend", "frontend", "worker", "beat")
-        )
     )
     before_ready = all(
         _ha_snapshot_consistent(ha_report or {}, "before", name)
-        and _ha_ready_replicas(ha_report or {}, "before", name)
-        >= expected_counts.get(name, 1)
+        and _ha_ready_replicas(ha_report or {}, "before", name) >= expected_counts.get(name, 1)
         for name in ("backend", "frontend", "worker", "beat")
     )
     drain_ready = all(
         _ha_snapshot_consistent(ha_report or {}, "after_zone_drain", name)
-        and _ha_ready_replicas(ha_report or {}, "after_zone_drain", name)
-        >= expected_counts.get(name, 1)
+        and _ha_ready_replicas(ha_report or {}, "after_zone_drain", name) >= expected_counts.get(name, 1)
         for name in ("backend", "frontend", "worker", "beat")
     )
     restored_ready_and_spread = all(
-        _ha_snapshot_consistent(
-            ha_report or {}, "after_zone_return_and_rolling_rebalance", name
-        )
-        and _ha_ready_replicas(
-            ha_report or {}, "after_zone_return_and_rolling_rebalance", name
-        )
+        _ha_snapshot_consistent(ha_report or {}, "after_zone_return_and_rolling_rebalance", name)
+        and _ha_ready_replicas(ha_report or {}, "after_zone_return_and_rolling_rebalance", name)
         >= expected_counts.get(name, 1)
-        and target_domains.issubset(
-            _ha_ready_zones(
-                ha_report or {}, "after_zone_return_and_rolling_rebalance", name
-            )
-        )
+        and target_domains.issubset(_ha_ready_zones(ha_report or {}, "after_zone_return_and_rolling_rebalance", name))
         for name in ("backend", "frontend", "worker")
     )
     before_spread = all(
@@ -734,10 +1023,8 @@ def evaluate(
         for name in ("backend", "frontend", "worker")
     )
     drained_zone_absent = isinstance(report_fault, dict) and all(
-        report_fault.get("drained_zone")
-        not in _ha_ready_zones(ha_report or {}, "after_zone_drain", name)
-        and report_fault.get("drained_node")
-        not in _ha_ready_nodes(ha_report or {}, "after_zone_drain", name)
+        report_fault.get("drained_zone") not in _ha_ready_zones(ha_report or {}, "after_zone_drain", name)
+        and report_fault.get("drained_node") not in _ha_ready_nodes(ha_report or {}, "after_zone_drain", name)
         for name in ("backend", "frontend", "worker", "beat")
     )
     report_matches_target = (
@@ -757,8 +1044,7 @@ def evaluate(
         and target_domains == report_domains
         and len(report_domains) >= 2
         and int(ha_report.get("fault_domains_exercised", 0)) == len(report_domains)
-        and int(ha_report.get("fault_domains_exercised", 0))
-        == int(ha.get("fault_domains_exercised", -1))
+        and int(ha_report.get("fault_domains_exercised", 0)) == int(ha.get("fault_domains_exercised", -1))
         and report_counts_match
         and before_ready
         and before_spread
@@ -776,8 +1062,7 @@ def evaluate(
         and int(report_fault.get("recovery_seconds", target_rto + 1)) <= target_rto
         and isinstance(report_probe, dict)
         and report_probe.get("transport") == "network HTTPS against target"
-        and str(report_probe.get("base_url", "")).rstrip("/")
-        == str(target.get("public_base_url", "")).rstrip("/")
+        and str(report_probe.get("base_url", "")).rstrip("/") == str(target.get("public_base_url", "")).rstrip("/")
         and report_probe.get("passed") is True
         and int(report_probe.get("sample_count", 0)) >= 5
         and int(report_probe.get("failure_count", -1)) == 0
@@ -820,6 +1105,85 @@ def evaluate(
     )
 
     security = controls["security_assessment"]
+    security_report = _evidence_json(security, authorization_path)
+    assessment_report = (
+        security_report.get("assessment")
+        if isinstance(security_report, dict) and isinstance(security_report.get("assessment"), dict)
+        else {}
+    )
+    findings_report = (
+        security_report.get("findings")
+        if isinstance(security_report, dict) and isinstance(security_report.get("findings"), dict)
+        else {}
+    )
+    signed_report = (
+        security_report.get("signed_report")
+        if isinstance(security_report, dict) and isinstance(security_report.get("signed_report"), dict)
+        else {}
+    )
+    assessment_scope = assessment_report.get("scope")
+    methodologies = assessment_report.get("methodologies")
+    assessment_scope_values = (
+        set(assessment_scope)
+        if isinstance(assessment_scope, list) and all(isinstance(item, str) for item in assessment_scope)
+        else set()
+    )
+    methodology_values = (
+        set(methodologies)
+        if isinstance(methodologies, list) and all(isinstance(item, str) for item in methodologies)
+        else set()
+    )
+    required_assessment_scope = {
+        "application-and-api",
+        "identity-and-access",
+        "kubernetes-infrastructure",
+        "supply-chain",
+        "agent-security",
+    }
+    signed_report_ok, signed_report_detail = _verify_signed_evidence_file(
+        signed_report,
+        authorization_path=authorization_path,
+        namespace="duckdock-security-assessment",
+    )
+    gate.add(
+        "security_assessment_signature",
+        owner="Security",
+        passed=signed_report_ok,
+        observed=signed_report_detail,
+        expected="digest-matched assessor report with valid OpenSSH signature",
+        detail="The independent assessor, not the DuckDock implementation team, must sign the retained report in namespace duckdock-security-assessment.",
+    )
+    security_report_matches = (
+        _report_release_target_binding(
+            security_report,
+            schema_version="duckdock-ga-independent-security-evidence-v1",
+            status="PASS",
+            control=security,
+            target=target,
+            release=release,
+        )
+        and security_report.get("independent") is security.get("independent")
+        and security_report.get("provider") == security.get("provider")
+        and security_report.get("open_critical") == security.get("open_critical")
+        and security_report.get("open_high") == security.get("open_high")
+        and security_report.get("contract_digest") == release.get("contract_digest")
+        and assessment_report.get("independence_attested") is True
+        and _meaningful_string(assessment_report.get("assessment_id"))
+        and isinstance(assessment_scope, list)
+        and required_assessment_scope.issubset(assessment_scope_values)
+        and isinstance(methodologies, list)
+        and {"penetration-test", "manual-code-review"}.issubset(methodology_values)
+        and _ordered_report_times(
+            assessment_report.get("started_at"),
+            assessment_report.get("completed_at"),
+            no_later_than=_control_observed_at(security),
+        )
+        and findings_report.get("open_critical") == security.get("open_critical")
+        and findings_report.get("open_high") == security.get("open_high")
+        and findings_report.get("retest_completed") is True
+        and bool(DIGEST_RE.fullmatch(str(signed_report.get("sha256", ""))))
+        and _meaningful_string(signed_report.get("signer_identity"))
+    )
     security_ok = (
         security.get("status") == "PASS"
         and security.get("independent") is True
@@ -830,6 +1194,8 @@ def evaluate(
         and security.get("source_commit") == commit
         and security.get("backend_image") == release.get("backend_image")
         and security.get("frontend_image") == release.get("frontend_image")
+        and security_report_matches
+        and signed_report_ok
     )
     gate.add(
         "security_assessment",
@@ -837,7 +1203,7 @@ def evaluate(
         passed=security_ok,
         observed=f"status={security.get('status')}, independent={security.get('independent')}, C={security.get('open_critical')}, H={security.get('open_high')}",
         expected="independent scoped assessment; 0 open critical/high; exact commit and image digests",
-        detail="DuckDock's own tests and scans are useful preparation but are not an independent audit.",
+        detail="The independent signed report must bind the exact target, contract, commit and images; cover application, IAM, Kubernetes, supply-chain and agent risks; and record completed retesting.",
     )
 
     release_digest = _release_digest(release, target, controls)

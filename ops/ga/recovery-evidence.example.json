@@ -1,0 +1,41 @@
+{
+  "schema_version": "duckdock-ga-recovery-evidence-v1",
+  "scope": "target-production",
+  "status": "PASSED",
+  "passed": true,
+  "observed_at": "2026-08-05T00:00:00Z",
+  "target_environment": "__CHANGE_ME_TARGET_ID__",
+  "source_commit": "__CHANGE_ME_40_HEX_GIT_COMMIT__",
+  "images": {
+    "backend": {"name": "registry.example.invalid/duckdock/backend@sha256:__CHANGE_ME_64_HEX__"},
+    "frontend": {"name": "registry.example.invalid/duckdock/frontend@sha256:__CHANGE_ME_64_HEX__"}
+  },
+  "offsite_media": true,
+  "encrypted": true,
+  "immutable_or_object_locked": true,
+  "rpo_seconds": 0,
+  "rto_seconds": 3600,
+  "mysql_rows_verified": 1,
+  "objects_verified": 1,
+  "git_repositories_verified": true,
+  "backup": {
+    "manifest_schema_version": "duckdock-secure-backup-v1",
+    "manifest_sha256": "__CHANGE_ME_64_HEX__",
+    "signature_verified": true,
+    "decryption_key_external": true
+  },
+  "restore": {
+    "destructive_restore": true,
+    "target_environment": "__CHANGE_ME_NON_PRODUCTION_RESTORE_TARGET__",
+    "production_data_overwrite": false,
+    "integrity_digest_verified": true,
+    "started_at": "2026-08-04T22:30:00Z",
+    "completed_at": "2026-08-04T23:30:00Z"
+  },
+  "verification": {
+    "mysql_rows_verified": 1,
+    "objects_verified": 1,
+    "git_repositories_verified": true,
+    "passed": true
+  }
+}

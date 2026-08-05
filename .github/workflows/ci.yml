@@ -287,10 +287,15 @@ jobs:
         run: python3 scripts/verify-production-baseline.py
 
       - name: Validate GA authorization contract
-        run: >-
-          python3 backend/scripts/verify_ga_production_authorization.py
-          ops/ga/production-authorization.example.json
-          --lint
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 backend/scripts/verify_ga_production_authorization.py \
+            ops/ga/production-authorization.example.json \
+            --lint
+          for evidence_template in ops/ga/*-evidence.example.json; do
+            python3 -m json.tool "$evidence_template" >/dev/null
+          done
 
       - name: Validate production operations scripts
         shell: bash
