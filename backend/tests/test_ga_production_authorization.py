@@ -1,0 +1,323 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import shutil
+import subprocess
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import pytest
+
+from scripts.verify_ga_production_authorization import (
+    REQUIRED_APPROVAL_ROLES,
+    SCHEMA_VERSION,
+    _release_digest,
+    evaluate,
+    lint_authorization,
+)
+
+
+def _evidence(tmp_path: Path, name: str, observed_at: datetime) -> dict[str, str]:
+    path = tmp_path / f"{name}.json"
+    path.write_text(f'{{"control":"{name}","passed":true}}\n', encoding="utf-8")
+    return {
+        "path": str(path),
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "observed_at": observed_at.isoformat(),
+    }
+
+
+def _document(tmp_path: Path, now: datetime) -> dict:
+    observed_at = now - timedelta(minutes=5)
+    commit = "a" * 40
+    backend_image = f"registry.example.com/duckdock/backend@sha256:{'b' * 64}"
+    frontend_image = f"registry.example.com/duckdock/frontend@sha256:{'c' * 64}"
+    controls = {
+        "application_readiness": {
+            "status": "READY",
+            "pass_count": 14,
+            "block_count": 0,
+            "contract_version": "2.0.0",
+            "contract_digest": "d" * 64,
+            "database_revision": "20260804_0062",
+            "expected_database_revision": "20260804_0062",
+            "evidence": _evidence(tmp_path, "application", observed_at),
+        },
+        "tls": {
+            "status": "PASS",
+            "negotiated_protocols": ["TLSv1.2", "TLSv1.3"],
+            "legacy_protocols_rejected": ["TLSv1", "TLSv1.1"],
+            "certificate_days_remaining": 60,
+            "hostname_verified": True,
+            "hsts_max_age_seconds": 31_536_000,
+            "evidence": _evidence(tmp_path, "tls", observed_at),
+        },
+        "secrets": {
+            "status": "PASS",
+            "provider": "External Secrets",
+            "plaintext_env_persisted": False,
+            "rotation_tested": True,
+            "evidence": _evidence(tmp_path, "secrets", observed_at),
+        },
+        "network": {
+            "status": "PASS",
+            "public_tcp_ports": [443],
+            "database_public": False,
+            "redis_public": False,
+            "object_store_direct_public": False,
+            "default_deny_ingress": True,
+            "egress_allowlist_enforced": True,
+            "evidence": _evidence(tmp_path, "network", observed_at),
+        },
+        "alerting": {
+            "status": "PASS",
+            "test_notification_delivered": True,
+            "resolved_notification_delivered": True,
+            "oncall_schedule": "platform-primary",
+            "evidence": _evidence(tmp_path, "alerting", observed_at),
+        },
+        "recovery": {
+            "status": "PASSED",
+            "offsite_media": True,
+            "encrypted": True,
+            "immutable_or_object_locked": True,
+            "rpo_seconds": 0,
+            "rto_seconds": 600,
+            "mysql_rows_verified": 10,
+            "objects_verified": 3,
+            "git_repositories_verified": True,
+            "evidence": _evidence(tmp_path, "recovery", observed_at),
+        },
+        "capacity": {
+            "status": "PASSED",
+            "sustained_seconds": 900,
+            "sustained_rps": 50,
+            "materialized_runs": 50_000,
+            "error_rate": 0,
+            "write_p95_ms": 50,
+            "timeline_p95_ms": 30,
+            "post_growth_query_passed": True,
+            "evidence": _evidence(tmp_path, "capacity", observed_at),
+        },
+        "high_availability": {
+            "status": "PASS",
+            "replica_counts": {"backend": 3, "frontend": 3, "worker": 3, "beat": 1},
+            "fault_domains_exercised": 2,
+            "managed_mysql_ha": True,
+            "managed_redis_ha": True,
+            "object_store_ha": True,
+            "rwx_repository_storage_ha": True,
+            "node_failover_passed": True,
+            "zone_failover_passed": True,
+            "beat_recovery_passed": True,
+            "evidence": _evidence(tmp_path, "ha", observed_at),
+        },
+        "security_assessment": {
+            "status": "PASS",
+            "independent": True,
+            "provider": "Independent Security Lab",
+            "open_critical": 0,
+            "open_high": 0,
+            "source_commit": commit,
+            "backend_image": backend_image,
+            "frontend_image": frontend_image,
+            "evidence": _evidence(tmp_path, "security", observed_at),
+        },
+    }
+    application_path = Path(controls["application_readiness"]["evidence"]["path"])
+    application_path.write_text(
+        json.dumps(
+            {
+                "status": "READY",
+                "pass_count": 14,
+                "warn_count": 0,
+                "block_count": 0,
+                "contract_version": "2.0.0",
+                "contract_digest": "d" * 64,
+                "current_db_revision": "20260804_0062",
+                "expected_db_revision": "20260804_0062",
+                "checks": [{"key": f"check-{index}", "status": "PASS"} for index in range(14)],
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    controls["application_readiness"]["evidence"]["sha256"] = hashlib.sha256(
+        application_path.read_bytes()
+    ).hexdigest()
+    tls_path = Path(controls["tls"]["evidence"]["path"])
+    tls_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "duckdock-ga-tls-probe-v1",
+                "status": "PASS",
+                "application_url": "https://duckdock.example.com/health",
+                "object_store_url": "https://objects.example.com/minio/health/live",
+                "negotiated_protocols": ["TLSv1.2", "TLSv1.3"],
+                "legacy_protocols_rejected": ["TLSv1", "TLSv1.1"],
+                "certificate_days_remaining": 60,
+                "hostname_verified": True,
+                "hsts_max_age_seconds": 31_536_000,
+                "endpoints": {
+                    "application": {"passed": True},
+                    "object_store": {"passed": True},
+                },
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    controls["tls"]["evidence"]["sha256"] = hashlib.sha256(tls_path.read_bytes()).hexdigest()
+    capacity_path = Path(controls["capacity"]["evidence"]["path"])
+    capacity_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "duckdock-target-capacity-gate-v1",
+                "target_environment": "customer-production",
+                "base_url": "https://duckdock.example.com",
+                "transport": "network HTTPS against target",
+                "phases": [
+                    {
+                        "name": "sustained",
+                        "duration_seconds": 900,
+                        "target_rate": 50,
+                        "p95_ms": 50,
+                        "passed": True,
+                    }
+                ],
+                "materialized_runs": 50_000,
+                "error_rate": 0,
+                "post_growth_timeline_query": {"p95_ms": 30, "passed": True},
+                "passed": True,
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    controls["capacity"]["evidence"]["sha256"] = hashlib.sha256(
+        capacity_path.read_bytes()
+    ).hexdigest()
+    release = {
+        "version": "2.0.0",
+        "git_commit": commit,
+        "backend_image": backend_image,
+        "frontend_image": frontend_image,
+        "contract_digest": "d" * 64,
+    }
+    target = {
+        "target_id": "customer-production",
+        "environment": "production",
+        "deployment_mode": "kubernetes-ha",
+        "public_base_url": "https://duckdock.example.com",
+        "object_store_url": "https://objects.example.com",
+        "fault_domains": ["zone-a", "zone-b"],
+        "maximum_rpo_seconds": 900,
+        "maximum_rto_seconds": 14_400,
+        "minimum_sustained_rps": 50,
+    }
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "release": release,
+        "target": target,
+        "controls": controls,
+        "approvals": [],
+    }
+
+
+def _add_signed_approvals(document: dict, tmp_path: Path, now: datetime) -> None:
+    if shutil.which("ssh-keygen") is None:
+        pytest.skip("ssh-keygen is required for production-approval signature verification")
+    digest = _release_digest(document["release"], document["target"], document["controls"])
+    statement = tmp_path / "statement"
+    statement.write_text(f"{SCHEMA_VERSION}:{digest}\n", encoding="utf-8")
+    allowed_signers = tmp_path / "allowed_signers"
+    public_lines: list[str] = []
+    approvals: list[dict] = []
+    for role in sorted(REQUIRED_APPROVAL_ROLES):
+        identity = f"{role.lower()}@example.com"
+        key = tmp_path / f"{role.lower()}_key"
+        subprocess.run(
+            ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)],
+            check=True,
+        )
+        public_key = key.with_suffix(".pub").read_text(encoding="utf-8").strip()
+        public_lines.append(f"{identity} {public_key}")
+        subprocess.run(
+            ["ssh-keygen", "-q", "-Y", "sign", "-f", str(key), "-n", "duckdock-ga", str(statement)],
+            check=True,
+        )
+        signature = tmp_path / f"{role.lower()}.sig"
+        statement.with_suffix(".sig").replace(signature)
+        approvals.append(
+            {
+                "role": role,
+                "identity": identity,
+                "decision": "APPROVED",
+                "approved_at": (now - timedelta(minutes=1)).isoformat(),
+                "signed_digest": digest,
+                "allowed_signers_path": str(allowed_signers),
+                "signature_path": str(signature),
+            }
+        )
+    allowed_signers.write_text("\n".join(public_lines) + "\n", encoding="utf-8")
+    document["approvals"] = approvals
+
+
+def test_complete_target_bundle_is_cryptographically_authorized(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _add_signed_approvals(document, tmp_path, now)
+
+    assert lint_authorization(document) == []
+    result = evaluate(document, authorization_path=tmp_path / "authorization.json", now=now)
+
+    assert result["status"] == "GA_AUTHORIZED"
+    assert result["block_count"] == 0
+
+
+def test_internal_security_claim_is_not_independent_authorization(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _add_signed_approvals(document, tmp_path, now)
+    document["controls"]["security_assessment"]["independent"] = False
+
+    result = evaluate(document, authorization_path=tmp_path / "authorization.json", now=now)
+
+    assert result["status"] == "AWAITING_EXTERNAL_APPROVALS"
+    check = next(item for item in result["checks"] if item["key"] == "security_assessment")
+    assert check["status"] == "BLOCK"
+
+
+def test_unrestricted_target_network_blocks_ga(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _add_signed_approvals(document, tmp_path, now)
+    document["controls"]["network"]["egress_allowlist_enforced"] = False
+
+    result = evaluate(document, authorization_path=tmp_path / "authorization.json", now=now)
+
+    assert result["status"] == "BLOCKED"
+    assert result["block_count"] == 1
+
+
+def test_local_asgi_capacity_report_cannot_authorize_target(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    evidence = document["controls"]["capacity"]["evidence"]
+    path = Path(evidence["path"])
+    report = json.loads(path.read_text(encoding="utf-8"))
+    report["schema_version"] = "duckdock-capacity-gate-v1"
+    report["transport"] = "FastAPI ASGI HTTP with real MySQL"
+    path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+    evidence["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(document, authorization_path=tmp_path / "authorization.json", now=now)
+
+    assert result["status"] == "BLOCKED"
+    capacity = next(item for item in result["checks"] if item["key"] == "capacity")
+    assert capacity["status"] == "BLOCK"

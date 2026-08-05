@@ -68,13 +68,76 @@ def test_prod_compose_deploys_the_prometheus_readiness_dependency():
     prometheus_config = _read("ops/prometheus/prometheus.yml")
 
     assert "  prometheus:" in compose
-    assert "prom/prometheus:v3.5.0" in compose
+    assert "prom/prometheus:v3.13.2" in compose
     assert "./ops/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro" in compose
     assert "prometheus_data:/prometheus" in compose
     assert '127.0.0.1:${DUCKDOCK_PROMETHEUS_HOST_PORT:-9090}:9090' in compose
     assert "PROMETHEUS_BASE_URL=http://prometheus:9090" in env_example
     assert 'targets: ["backend:8801"]' in prometheus_config
     assert "environment: local-dev" not in prometheus_config
+
+
+def test_production_exposes_only_the_tls_gateway_publicly():
+    compose = _read("docker-compose.prod.yml")
+    tls_compose = _read("docker-compose.prod-tls.yml")
+
+    assert '127.0.0.1:${HTTP_PORT:-8080}:8080' in compose
+    assert '127.0.0.1:${MINIO_HOST_PORT:-9000}:9000' in compose
+    assert '"${HTTPS_BIND_ADDRESS:-0.0.0.0}:${HTTPS_PORT:-443}:8443"' in tls_compose
+    assert "ssl_protocols TLSv1.2 TLSv1.3" in _read(
+        "ops/tls-gateway/duckdock-tls.conf.template"
+    )
+    assert "DUCKDOCK_TLS_CERT_FILE" in _read("scripts/prod.sh")
+    assert "openssl x509" in _read("scripts/prod.sh")
+
+
+def test_production_networks_separate_data_app_and_observability():
+    compose = _read("docker-compose.prod.yml")
+
+    for name in ("app_internal", "data_internal", "observability_internal"):
+        assert f"  {name}:\n    internal: true" in compose
+    assert "networks: [data_internal]" in compose
+    assert "networks: [app_internal]" in compose
+    assert "networks: [observability_internal]" in compose
+
+
+def test_prometheus_routes_alerts_to_alertmanager_and_watches_delivery():
+    compose = _read("docker-compose.prod.yml")
+    prometheus = _read("ops/prometheus/prometheus.yml")
+    alerts = _read("ops/prometheus/duckdock-alerts.yml")
+
+    assert "  alertmanager:" in compose
+    assert "alertmanager:9093" in prometheus
+    assert "DuckDockAlertmanagerUnavailable" in alerts
+    assert "DuckDockAlertDeliveryFailing" in alerts
+    assert "DuckDockRunTimelineLatencyHigh" in alerts
+    assert '"/bin/amtool"' in compose
+    assert '"--alertmanager.url=http://127.0.0.1:9093"' in compose
+    assert '"alert"' in compose and '"query"' in compose
+    assert "__CHANGE_ME_ONCALL_WEBHOOK__" in _read(
+        "ops/alertmanager/alertmanager.example.yml"
+    )
+
+
+def test_third_party_production_images_are_digest_pinned():
+    compose = _read("docker-compose.prod.yml")
+    image_lines = [
+        line.strip() for line in compose.splitlines() if line.strip().startswith("image:")
+    ]
+
+    assert image_lines
+    assert all("@sha256:" in line for line in image_lines)
+
+
+def test_alertmanager_is_rebuilt_from_exact_source_with_security_fixes():
+    dockerfile = _read("ops/alertmanager/Dockerfile")
+
+    assert dockerfile.count("2c8da51e03f3dbbed24f9711ca2d76aab4eef9c5") >= 3
+    assert "ARG ALERTMANAGER_SOURCE_COMMIT" not in dockerfile
+    assert "golang.org/x/crypto@v0.52.0" in dockerfile
+    assert "google.golang.org/grpc@v1.82.1" in dockerfile
+    assert "FROM scratch" in dockerfile
+    assert "USER 65534:65534" in dockerfile
 
 
 def test_prod_frontend_does_not_hardcode_a_loopback_prometheus_link():
@@ -119,6 +182,9 @@ def test_production_image_context_excludes_test_and_local_validation_artifacts()
         ".mypy_cache/",
         ".venv/",
         "scripts/seed_handover_e2e.py",
+        "scripts/g2_target_capacity_gate.py",
+        "scripts/probe_ga_target_tls.py",
+        "scripts/verify_ga_production_authorization.py",
         "scripts/verify_*_dev.py",
         "app/clinic_assets/fixtures/",
     ):
@@ -142,6 +208,7 @@ def test_e2e_seed_has_no_production_override():
     assert "if not settings.DEBUG:" in seed_script
     assert "--allow-non-debug" not in seed_script
     assert "E2E_ALLOW_SEED" not in seed_script
+    assert "await engine.dispose()" in seed_script
 
 
 def test_backend_exposes_readyz_route():
@@ -290,6 +357,19 @@ def test_prod_backup_archives_repos_and_minio_volumes():
     assert "duckdock-minio-${ts}.tar.gz" in prod_script
 
 
+def test_prod_backup_is_encrypted_signed_and_sent_offsite():
+    prod_script = _read("scripts/prod.sh")
+    seal_script = _read("scripts/seal-backup.sh")
+
+    assert "DUCKDOCK_BACKUP_AGE_RECIPIENT" in prod_script
+    assert "DUCKDOCK_BACKUP_SIGNING_KEY" in prod_script
+    assert "DUCKDOCK_BACKUP_S3_URI" in prod_script
+    assert 'ssh-keygen -Y sign' in seal_script
+    assert 'age -r "$TASK_AGE_RECIPIENT"' in seal_script
+    assert 'aws s3 cp "$TASK_BUNDLE"' in seal_script
+    assert "duckdock-secure-backup-v1" in seal_script
+
+
 def test_prod_restore_covers_mysql_repos_and_minio():
     restore_script = _read("scripts/restore.sh")
 
@@ -300,6 +380,25 @@ def test_prod_restore_covers_mysql_repos_and_minio():
     assert "repos_data" in restore_script
     assert "minio_data" in restore_script
     assert "SOPS_AGE_KEY_FILE" in restore_script
+    assert "ssh-keygen -Y verify" in restore_script
+    assert "encrypted_sha256" in restore_script
+    assert "plaintext_sha256" in restore_script
+
+
+def test_kubernetes_ha_reference_has_cross_zone_safety_controls():
+    workloads = _read("ops/kubernetes/ha/workloads.yaml")
+    availability = _read("ops/kubernetes/ha/availability.yaml")
+    policies = _read("ops/kubernetes/ha/network-policies.yaml")
+
+    assert workloads.count("replicas: 3") >= 3
+    assert workloads.count("topology.kubernetes.io/zone") >= 3
+    assert workloads.count("automountServiceAccountToken: false") >= 5
+    assert availability.count("kind: PodDisruptionBudget") == 3
+    assert availability.count("kind: HorizontalPodAutoscaler") == 3
+    assert "name: default-deny" in policies
+    assert "controlled-external-egress" in policies
+    assert "0.0.0.0/0" in policies
+    assert "production gate rejects an unmodified target report" in policies
 
 
 def test_frontend_nginx_resolves_backend_dynamically():

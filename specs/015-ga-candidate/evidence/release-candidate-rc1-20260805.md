@@ -98,17 +98,22 @@ All readiness keys passed: database revision, frozen contract, Runtime inventory
 
 ## Regression and supply-chain gates
 
-- Backend final workspace run: `1015 passed, 19 skipped, 3 warnings`, 220.35 seconds, selected core coverage 81.04% (minimum 65%)
-- Clean Python 3.12 hashed-lock run: `1015 passed, 19 skipped`; selected core coverage 81.04%
-- Real MySQL marker lane: `17 passed, 1014 deselected`; exact temporary database dropped afterward
+- Backend Python 3.12 hashed-lock run: `1029` non-MySQL tests passed, `2` skipped; selected core coverage 81.04% (minimum 65%)
+- Real MySQL marker lane: `17 passed, 1031 deselected`; exact temporary database and user dropped afterward
+- Playwright: `3 passed` (auth guard, login form and seeded approve→execute→receipt→verify→completed closed loop)
 - Frontend: npm audit 0; lint 0 warnings; `11` files / `56` tests; production build PASS
 - Python runtime lock: pip-audit found no known vulnerabilities
 - mypy ratchet: 81 errors, ceiling 82
 - OpenAPI drift: clean
 - Alembic drift: clean
-- Backend production image: Docker Scout 0 Critical / 0 High
-- Frontend production image: Docker Scout 0 Critical / 0 High
-- Browser: authenticated Dashboard, Fleet, Packages, Release Control, Operations and Eval Hub rendered; no console warning/error
+- Backend/frontend/TLS gateway/custom Alertmanager production images: Docker Scout 0 Critical / 0 High
+- Browser: authenticated Operations and Release Control rendered in the application browser with no console warning/error; Operations explicitly distinguishes application readiness from target GA authorization
+- Capacity reference: 61,200 Run/Audit/Outbox rows; 60 rps for 900 seconds plus 120 rps for 60 seconds; sustained p95 8.023 ms; post-growth timeline p95 5.187 ms
+- Isolated production infrastructure: 10/10 healthy; TLS 1.2/1.3 only, HSTS/hostname valid, alert firing/resolved receipts; exact project removed with zero containers/volumes/networks remaining
+
+The bundled single-host MySQL/MinIO images are not covered by the clean
+application-image statement and are explicitly excluded from the GA path. The
+GA topology requires independently assessed managed HA MySQL/Redis/S3 services.
 
 ## Cleanup
 

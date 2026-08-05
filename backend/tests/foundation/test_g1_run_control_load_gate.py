@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 
 import pytest
 
@@ -11,6 +12,7 @@ from scripts.g1_run_control_load_gate import (
     PhaseResult,
     build_run_start_request,
     percentile,
+    probe_timeline_queries,
     require_isolated_database,
     run_load_phase,
 )
@@ -154,3 +156,33 @@ async def test_load_scheduler_offers_every_request_and_reports_failures() -> Non
     assert result.failure_count == 1
     assert result.error_codes == {"http_409": 1}
     assert result.passed is False
+
+
+async def test_post_growth_probe_uses_the_supported_31_day_window() -> None:
+    class Response:
+        status_code = 200
+
+    class Client:
+        params: dict | None = None
+
+        async def get(self, path, *, headers, params):
+            assert path == "/api/v2/agent-runs"
+            assert headers["Authorization"].startswith("Bearer ")
+            self.params = params
+            return Response()
+
+    client = Client()
+    result = await probe_timeline_queries(
+        client,  # type: ignore[arg-type]
+        owner_user_id=1,
+        namespace_id=1,
+        sample_count=2,
+        maximum_p95_ms=10_000,
+    )
+
+    assert result.passed is True
+    assert client.params is not None
+    window = datetime.fromisoformat(client.params["started_before"]) - datetime.fromisoformat(
+        client.params["started_after"]
+    )
+    assert window.days == 31

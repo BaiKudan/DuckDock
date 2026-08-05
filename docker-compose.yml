@@ -58,7 +58,7 @@ services:
       retries: 5
 
   redis:
-    image: redis:7.4.9-alpine
+    image: redis:7.4.10-alpine
     volumes:
       - redis_data:/data
     ports:
@@ -251,7 +251,7 @@ services:
   # only route-template labels and numeric status/latency metrics; no tenant,
   # public ID, prompt, trace body or credential enters the Prometheus surface.
   prometheus:
-    image: prom/prometheus:v3.5.0
+    image: prom/prometheus:v3.13.2
     profiles: ["operations"]
     depends_on:
       backend:

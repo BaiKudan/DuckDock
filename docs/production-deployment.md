@@ -1,6 +1,16 @@
 # DuckDock Production Deployment
 
-This runbook covers the Compose + SOPS/age production target.
+This runbook covers the single-host Compose + SOPS/age + bundled TLS production
+baseline. Cross-fault-domain production uses `ops/kubernetes/ha` and the final
+authorization gate described in `docs/ga-production-authorization.zh-CN.md`.
+
+> **GA boundary:** the single-host Compose topology is a hardened staging and
+> recovery reference, not a DuckDock 2.0 GA topology. It cannot satisfy fault-
+> domain or managed-data-service requirements. Production authorization requires
+> the Kubernetes HA overlay, externally operated HA MySQL/Redis/S3/RWX services,
+> target evidence, independent assessment and a `GA_AUTHORIZED` result. Bundled
+> MySQL/MinIO images must not be promoted merely because application images pass
+> the vulnerability gate.
 
 ## First deploy (quick checklist)
 
@@ -10,17 +20,18 @@ Ordered path for a from-zero deploy; each step links to its detailed section bel
 2. **Age key** — `age-keygen` an identity; put its public recipient in `.sops.yaml` (see [Secrets](#secrets)).
 3. **Fill env** — `cp .env.prod.example .env.prod`, set every core `__CHANGE_ME__` (strong, unique; `prod.sh` preflight rejects weak/default values and MinIO key reuse). Leave `DUCKDOCK_ANALYSIS_WORKER_TOKEN` empty for the first core boot unless you already have a valid worker token.
 4. **Seal** — `sops --encrypt .env.prod > .env.prod.enc`; `rm -f .env.prod`; commit/ship only `.env.prod.enc`.
-5. **TLS** — terminate TLS in front of the frontend container; set `BACKEND_BASE_URL` / `CORS_ORIGINS` / `MINIO_PUBLIC_ENDPOINT` to real HTTPS origins (see [Network](#network)).
-6. **Preflight** — `export SOPS_AGE_KEY_FILE=…; bash scripts/prod.sh preflight` (decrypts to a temp file, rejects weak/default values, then exits without starting containers).
-7. **Boot** — `bash scripts/prod.sh up` (decrypts → migrates → starts; hard-fails without the key).
-8. **Verify** —
+5. **TLS** — provide one certificate covering the application and object-store hostnames. The bundled TLS gateway is the only public listener (see [Network](#network)).
+6. **Alerting** — render a real Alertmanager config outside the repo, configure two HTTPS receivers, and exercise firing plus resolved notifications.
+7. **Preflight** — `export SOPS_AGE_KEY_FILE=…; bash scripts/prod.sh preflight` (decrypts to a temp file, validates TLS/key matching, alert receivers, backups and strong settings, then exits without starting containers).
+8. **Boot** — `bash scripts/prod.sh up` (decrypts → migrates → starts TLS/application/monitoring; hard-fails without the key).
+9. **Verify** —
    ```bash
    bash scripts/prod.sh status                      # all services healthy
-   curl -fsS http://127.0.0.1:${HTTP_PORT:-80}/health    # frontend/nginx entry is up
+   curl -fsS https://${DUCKDOCK_PUBLIC_HOST}/health
    ```
    Backend readiness is enforced by the Compose healthcheck against the internal `/readyz`; `scripts/prod.sh status` should show `backend` as healthy.
-9. **Analysis worker** (optional) — create a token in `/analysis`, set `DUCKDOCK_ANALYSIS_WORKER_TOKEN`, then run `bash scripts/prod.sh worker` (see [Analysis Worker](#analysis-worker)).
-10. **Backup + restore drill** — run `bash scripts/prod.sh backup`, rehearse `scripts/restore.sh` in staging, and record the result in the [Restore Drill Log](#restore-drill-log) before production use.
+10. **Analysis worker** (optional) — create a token in `/analysis`, set `DUCKDOCK_ANALYSIS_WORKER_TOKEN`, then run `bash scripts/prod.sh worker` (see [Analysis Worker](#analysis-worker)).
+11. **Backup + restore drill** — run `bash scripts/prod.sh backup`; this age-encrypts, signs and uploads the matched set to the configured offsite S3 URI. Rehearse secure bundle restore in staging before production use.
 
 ## Secrets
 
@@ -56,15 +67,45 @@ bash scripts/prod.sh up
 
 ## Network
 
-Terminate TLS in front of the frontend container and forward HTTP to `${HTTP_PORT:-80}`. The bundled nginx config serves the SPA and reverse proxies `/api/` to backend. It sends HSTS, frame denial, nosniff, referrer policy, and a same-origin CSP. HSTS assumes the public entrypoint is HTTPS.
+`docker-compose.prod.yml` binds frontend, MinIO, Prometheus and Alertmanager to
+`127.0.0.1`; MySQL and Redis have no host binding. `docker-compose.prod-tls.yml`
+adds the only public listener on `${HTTPS_PORT:-443}`. It accepts TLS 1.2/1.3,
+serves the application hostname through frontend/backend and the separate object
+hostname through MinIO. The certificate must cover both names and retain at least
+30 days of validity at preflight.
+
+Application, data and observability services use separate internal Docker
+networks. Only backend/worker/Alertmanager and explicitly external integrations
+join an egress-capable network. Compose remains a single-host baseline; use the
+Kubernetes HA reference for cross-fault-domain commitments.
 
 Set:
 
 ```env
 BACKEND_BASE_URL=https://your-domain.example.com
 CORS_ORIGINS=["https://your-domain.example.com"]
-MINIO_PUBLIC_ENDPOINT=your-minio-domain.example.com
+DUCKDOCK_PUBLIC_HOST=your-domain.example.com
+DUCKDOCK_MINIO_PUBLIC_HOST=objects.your-domain.example.com
+MINIO_PUBLIC_ENDPOINT=objects.your-domain.example.com
+MINIO_SECURE=true
+DUCKDOCK_TLS_CERT_FILE=/etc/duckdock/tls/fullchain.pem
+DUCKDOCK_TLS_KEY_FILE=/etc/duckdock/tls/privkey.pem
 ```
+
+## Alerting and on-call
+
+Copy `ops/alertmanager/alertmanager.example.yml` to a deployment-owned path and
+replace both receiver URLs. Keep that rendered file outside git and point
+`ALERTMANAGER_CONFIG_FILE` at it. Prometheus includes API availability, error
+budget, evidence/timeline/policy latency and Alertmanager delivery meta-alerts.
+The production image is rebuilt from the exact upstream `0.33.1` release commit
+with post-release `x/crypto` and gRPC security fixes, then reduced to a non-root
+scratch runtime; CI generates SBOM/provenance and blocks Critical/High findings.
+
+Before authorization, deliberately fire a test alert, retain the Alertmanager
+notification receipt, resolve it and retain the resolved receipt. Record the
+named on-call schedule in the production authorization bundle. Merely loading
+the rules does not satisfy this gate.
 
 ## Analysis Worker
 
@@ -119,33 +160,44 @@ export SOPS_AGE_KEY_FILE=/etc/duckdock/duckdock-prod-age.txt
 bash scripts/prod.sh backup
 ```
 
-This creates three artifacts with the same timestamp:
+This first creates three temporary artifacts with the same timestamp:
 
 - `duckdock-mysql-<timestamp>.sql.gz`
 - `duckdock-repos-<timestamp>.tar.gz`
 - `duckdock-minio-<timestamp>.tar.gz`
 
-Store the three files together. A DB-only backup is incomplete because skill Git repositories and report/package objects live in separate Docker volumes.
+`scripts/seal-backup.sh` then encrypts every artifact to the deployment age
+recipient, writes plaintext/encrypted SHA-256 digests to a manifest, signs that
+manifest with the backup OpenSSH key, removes the temporary plaintext on exit and
+uploads the bundle to `DUCKDOCK_BACKUP_S3_URI`. A DB-only backup is incomplete
+because skill Git repositories and report/package objects live in separate
+volumes. Configure retention and object lock/immutability on the remote bucket;
+the target receipt must prove those bucket-side controls.
 
 ## Restore
 
-Restore the matched set:
+Restore the signed encrypted bundle:
 
 ```bash
 export SOPS_AGE_KEY_FILE=/etc/duckdock/duckdock-prod-age.txt
 bash scripts/restore.sh \
-  --db duckdock-mysql-<timestamp>.sql.gz \
-  --repos duckdock-repos-<timestamp>.tar.gz \
-  --minio duckdock-minio-<timestamp>.tar.gz
+  --bundle /secure-media/duckdock-backup-<timestamp> \
+  --allowed-signers /etc/duckdock/backup-allowed-signers \
+  --signer-identity backup-operator@example.com \
+  --age-key /etc/duckdock/backup-age-key.txt
 ```
 
-The script stops application services, keeps stateful services available, restores MySQL, replaces `repos_data`, replaces `minio_data`, then starts the full production stack.
+The script verifies the manifest OpenSSH signature, verifies encrypted digests,
+decrypts into a restrictive temporary directory, verifies plaintext digests,
+stops application services, restores MySQL/repos/MinIO, then starts the stack.
+The legacy three-plaintext-file flags remain available only for staging and old
+backup migration; they cannot pass the GA offsite/encryption gate.
 
 After restore:
 
 ```bash
 bash scripts/prod.sh status
-curl -fsS http://127.0.0.1:${HTTP_PORT:-80}/health
+curl -fsS https://${DUCKDOCK_PUBLIC_HOST}/health
 ```
 
 Confirm the backend service is `healthy`; its Compose healthcheck calls the internal backend `/readyz` endpoint. The public nginx entry exposes `/health`, not backend root `/readyz`.

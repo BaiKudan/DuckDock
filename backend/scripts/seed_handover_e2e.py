@@ -260,30 +260,33 @@ async def async_main() -> int:
     args = parse_args()
     engine.echo = False
     logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
-    if not settings.DEBUG:
-        raise SystemExit(
-            "Refusing to seed handover E2E data while DEBUG=false. "
-            "This test utility has no production override."
+    try:
+        if not settings.DEBUG:
+            raise SystemExit(
+                "Refusing to seed handover E2E data while DEBUG=false. "
+                "This test utility has no production override."
+            )
+
+        config = HandoverE2ESeedConfig(
+            admin_username=args.admin_username,
+            admin_password=args.admin_password,
+            reset_admin_password=args.reset_admin_password,
+            preapprove=args.preapprove,
+            run_id=args.run_id,
         )
+        async with AsyncSessionLocal() as db:
+            result = await seed_handover_closed_loop(db, config)
+            await db.commit()
 
-    config = HandoverE2ESeedConfig(
-        admin_username=args.admin_username,
-        admin_password=args.admin_password,
-        reset_admin_password=args.reset_admin_password,
-        preapprove=args.preapprove,
-        run_id=args.run_id,
-    )
-    async with AsyncSessionLocal() as db:
-        result = await seed_handover_closed_loop(db, config)
-        await db.commit()
-
-    if args.shell:
-        print("export E2E_SEEDED=1")
-        print(f"export E2E_CASE_ID={result.case_id}")
-        print(f"export E2E_ADMIN_USER={json.dumps(result.admin_username)}")
-    else:
-        print(json.dumps(asdict(result), ensure_ascii=False, indent=2))
-    return 0
+        if args.shell:
+            print("export E2E_SEEDED=1")
+            print(f"export E2E_CASE_ID={result.case_id}")
+            print(f"export E2E_ADMIN_USER={json.dumps(result.admin_username)}")
+        else:
+            print(json.dumps(asdict(result), ensure_ascii=False, indent=2))
+        return 0
+    finally:
+        await engine.dispose()
 
 
 if __name__ == "__main__":

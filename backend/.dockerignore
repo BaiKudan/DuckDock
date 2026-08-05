@@ -14,6 +14,9 @@ requirements-dev.txt
 requirements-dev.lock
 uv.lock
 scripts/g1_run_control_load_gate.py
+scripts/g2_target_capacity_gate.py
+scripts/probe_ga_target_tls.py
+scripts/verify_ga_production_authorization.py
 scripts/seed_handover_e2e.py
 scripts/verify_*_dev.py
 scripts/verify_langfuse.py

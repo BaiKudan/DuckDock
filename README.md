@@ -283,6 +283,7 @@ Langfuse v4 导出使用独立 `telemetry-langfuse` profile，默认栈均不启
 | [`control-plane-admin-guide.zh-CN.md`](docs/control-plane-admin-guide.zh-CN.md) | 控制平面管理员手册（权限收口 · 凭证 · Push 接入 · 交接生命周期 · reveal · 上线清单）|
 | [`duckdock-handbook.zh-CN.md`](docs/duckdock-handbook.zh-CN.md) | 使用手册：管理员 / 员工 / Reporter 接入 |
 | [`operations-runbook.zh-CN.md`](docs/operations-runbook.zh-CN.md) | 运维手册：单机 Compose · 组件 · 备份 · 排障 |
+| [`ga-production-authorization.zh-CN.md`](docs/ga-production-authorization.zh-CN.md) | 2.0 GA：目标环境证据、独立审计、四方签名与生产授权门禁 |
 | [`dev-operations.zh-CN.md`](docs/dev-operations.zh-CN.md) · [`ci.zh-CN.md`](docs/ci.zh-CN.md) | 本地开发运维 · CI 说明 |
 | [`port-plan.zh-CN.md`](docs/port-plan.zh-CN.md) · [`permission-matrix.zh-CN.md`](docs/permission-matrix.zh-CN.md) | 端口方案 · 权限矩阵 |
 | [`duckdock-runtime-mcp.zh-CN.md`](docs/duckdock-runtime-mcp.zh-CN.md) · [`workbuddy-reporter-validation.zh-CN.md`](docs/workbuddy-reporter-validation.zh-CN.md) | Runtime MCP 接入 · Reporter 集成验收指南 |
@@ -296,14 +297,24 @@ Langfuse v4 导出使用独立 `telemetry-langfuse` profile，默认栈均不启
 
 ## 12. 生产部署清单
 
-`scripts/prod.sh` + [`docker-compose.prod.yml`](docker-compose.prod.yml)（nginx 单端口入口 + `migrate` one-shot + backend/worker 多副本；analysis-worker 为可选 profile）。上线前至少：
+单主机基线使用 `scripts/prod.sh`、[`docker-compose.prod.yml`](docker-compose.prod.yml)
+和强制 TLS overlay [`docker-compose.prod-tls.yml`](docker-compose.prod-tls.yml)；跨故障域
+基线在 [`ops/kubernetes/ha`](ops/kubernetes/ha)。上线前至少：
 
 - [ ] 替换 `.env.prod` 全部默认 secret（`SECRET_KEY` · `MYSQL_*` · `MINIO_ROOT_PASSWORD` · `DUCKDOCK_CREDENTIAL_KEY` · Langfuse 三件套）
-- [ ] MySQL / Redis / MinIO（+ observability 的 PG/ClickHouse）迁托管或加固实例 + 持久化卷 + 备份
-- [ ] 反向代理 + HTTPS;`MINIO_PUBLIC_ENDPOINT` 改对外域名;关 `DEBUG`
+- [ ] MySQL / Redis / S3 / RWX 仓库存储使用目标故障域内的 HA 服务，并收紧默认拒绝 NetworkPolicy 的 egress
+- [ ] TLS 证书覆盖 application/object 两个域名；公网扫描确认只有 443，关 `DEBUG`
+- [ ] Alertmanager firing/resolved 均送达真实 on-call；异地 age 加密、签名、object-lock 备份完成破坏性恢复
+- [ ] 至少 900 秒、声明 RPS 以上且 50,000+ Run 的容量/数据增长门禁通过
 - [ ] 至少一个 Celery worker 常驻;`alembic upgrade head` 对齐 schema
 - [ ] 第一个注册账号用企业管理员邮箱（自动成 admin）
 - [ ] 核心栈启动后在 `/analysis` 创建 Worker token，填入 `.env.prod.enc`，再 `bash scripts/prod.sh worker`
+- [ ] 独立安全机构完成 exact commit/image 评估且 Critical/High 为零
+- [ ] Product、Architecture、Security、Operations 四个不同身份签署相同 release digest；最终门禁输出 `GA_AUTHORIZED`
+
+清单勾选不是机器授权。最终必须执行
+[`docs/ga-production-authorization.zh-CN.md`](docs/ga-production-authorization.zh-CN.md)
+中的内容寻址证据与 OpenSSH 四方签名流程。
 
 ---
 

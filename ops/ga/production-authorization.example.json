@@ -1,0 +1,187 @@
+{
+  "schema_version": "duckdock-ga-production-authorization-v1",
+  "release": {
+    "version": "2.0.0",
+    "git_commit": "__CHANGE_ME_40_HEX_GIT_COMMIT__",
+    "backend_image": "registry.example.invalid/duckdock/backend@sha256:__CHANGE_ME_64_HEX__",
+    "frontend_image": "registry.example.invalid/duckdock/frontend@sha256:__CHANGE_ME_64_HEX__",
+    "contract_digest": "aa260f301acc5c3a8004d14980952a03ce0197f9d70dcdd78cd62e986c3b1a83"
+  },
+  "target": {
+    "target_id": "__CHANGE_ME_TARGET_ID__",
+    "environment": "production",
+    "deployment_mode": "kubernetes-ha",
+    "public_base_url": "https://duckdock.example.invalid",
+    "object_store_url": "https://objects.example.invalid",
+    "fault_domains": ["__CHANGE_ME_ZONE_A__", "__CHANGE_ME_ZONE_B__"],
+    "maximum_rpo_seconds": 900,
+    "maximum_rto_seconds": 14400,
+    "minimum_sustained_rps": 50
+  },
+  "controls": {
+    "application_readiness": {
+      "status": "READY",
+      "pass_count": 14,
+      "block_count": 0,
+      "contract_version": "2.0.0",
+      "contract_digest": "aa260f301acc5c3a8004d14980952a03ce0197f9d70dcdd78cd62e986c3b1a83",
+      "database_revision": "20260804_0062",
+      "expected_database_revision": "20260804_0062",
+      "evidence": {
+        "path": "__CHANGE_ME_EVIDENCE_PATH__",
+        "sha256": "__CHANGE_ME_64_HEX__",
+        "observed_at": "2026-08-05T00:00:00Z"
+      }
+    },
+    "tls": {
+      "status": "PASS",
+      "negotiated_protocols": ["TLSv1.2", "TLSv1.3"],
+      "legacy_protocols_rejected": ["TLSv1", "TLSv1.1"],
+      "certificate_days_remaining": 90,
+      "hostname_verified": true,
+      "hsts_max_age_seconds": 31536000,
+      "evidence": {
+        "path": "__CHANGE_ME_EVIDENCE_PATH__",
+        "sha256": "__CHANGE_ME_64_HEX__",
+        "observed_at": "2026-08-05T00:00:00Z"
+      }
+    },
+    "secrets": {
+      "status": "PASS",
+      "provider": "External Secrets",
+      "plaintext_env_persisted": false,
+      "rotation_tested": true,
+      "evidence": {
+        "path": "__CHANGE_ME_EVIDENCE_PATH__",
+        "sha256": "__CHANGE_ME_64_HEX__",
+        "observed_at": "2026-08-05T00:00:00Z"
+      }
+    },
+    "network": {
+      "status": "PASS",
+      "public_tcp_ports": [443],
+      "database_public": false,
+      "redis_public": false,
+      "object_store_direct_public": false,
+      "default_deny_ingress": true,
+      "egress_allowlist_enforced": true,
+      "evidence": {
+        "path": "__CHANGE_ME_EVIDENCE_PATH__",
+        "sha256": "__CHANGE_ME_64_HEX__",
+        "observed_at": "2026-08-05T00:00:00Z"
+      }
+    },
+    "alerting": {
+      "status": "PASS",
+      "test_notification_delivered": true,
+      "resolved_notification_delivered": true,
+      "oncall_schedule": "__CHANGE_ME_ONCALL_SCHEDULE__",
+      "evidence": {
+        "path": "__CHANGE_ME_EVIDENCE_PATH__",
+        "sha256": "__CHANGE_ME_64_HEX__",
+        "observed_at": "2026-08-05T00:00:00Z"
+      }
+    },
+    "recovery": {
+      "status": "PASSED",
+      "offsite_media": true,
+      "encrypted": true,
+      "immutable_or_object_locked": true,
+      "rpo_seconds": 0,
+      "rto_seconds": 3600,
+      "mysql_rows_verified": 1,
+      "objects_verified": 1,
+      "git_repositories_verified": true,
+      "evidence": {
+        "path": "__CHANGE_ME_EVIDENCE_PATH__",
+        "sha256": "__CHANGE_ME_64_HEX__",
+        "observed_at": "2026-08-05T00:00:00Z"
+      }
+    },
+    "capacity": {
+      "status": "PASSED",
+      "sustained_seconds": 900,
+      "sustained_rps": 50,
+      "materialized_runs": 50000,
+      "error_rate": 0.0,
+      "write_p95_ms": 1000,
+      "timeline_p95_ms": 250,
+      "post_growth_query_passed": true,
+      "evidence": {
+        "path": "__CHANGE_ME_EVIDENCE_PATH__",
+        "sha256": "__CHANGE_ME_64_HEX__",
+        "observed_at": "2026-08-05T00:00:00Z"
+      }
+    },
+    "high_availability": {
+      "status": "PASS",
+      "replica_counts": {"backend": 3, "frontend": 3, "worker": 3, "beat": 1},
+      "fault_domains_exercised": 2,
+      "managed_mysql_ha": true,
+      "managed_redis_ha": true,
+      "object_store_ha": true,
+      "rwx_repository_storage_ha": true,
+      "node_failover_passed": true,
+      "zone_failover_passed": true,
+      "beat_recovery_passed": true,
+      "evidence": {
+        "path": "__CHANGE_ME_EVIDENCE_PATH__",
+        "sha256": "__CHANGE_ME_64_HEX__",
+        "observed_at": "2026-08-05T00:00:00Z"
+      }
+    },
+    "security_assessment": {
+      "status": "PASS",
+      "independent": true,
+      "provider": "__CHANGE_ME_INDEPENDENT_ASSESSOR__",
+      "open_critical": 0,
+      "open_high": 0,
+      "source_commit": "__CHANGE_ME_40_HEX_GIT_COMMIT__",
+      "backend_image": "registry.example.invalid/duckdock/backend@sha256:__CHANGE_ME_64_HEX__",
+      "frontend_image": "registry.example.invalid/duckdock/frontend@sha256:__CHANGE_ME_64_HEX__",
+      "evidence": {
+        "path": "__CHANGE_ME_EVIDENCE_PATH__",
+        "sha256": "__CHANGE_ME_64_HEX__",
+        "observed_at": "2026-08-05T00:00:00Z"
+      }
+    }
+  },
+  "approvals": [
+    {
+      "role": "Product",
+      "identity": "__CHANGE_ME_PRODUCT_SIGNER_IDENTITY__",
+      "decision": "APPROVED",
+      "approved_at": "2026-08-05T00:00:00Z",
+      "signed_digest": "__CHANGE_ME_RELEASE_DIGEST__",
+      "allowed_signers_path": "__CHANGE_ME_ALLOWED_SIGNERS_PATH__",
+      "signature_path": "__CHANGE_ME_SIGNATURE_PATH__"
+    },
+    {
+      "role": "Architecture",
+      "identity": "__CHANGE_ME_ARCHITECTURE_SIGNER_IDENTITY__",
+      "decision": "APPROVED",
+      "approved_at": "2026-08-05T00:00:00Z",
+      "signed_digest": "__CHANGE_ME_RELEASE_DIGEST__",
+      "allowed_signers_path": "__CHANGE_ME_ALLOWED_SIGNERS_PATH__",
+      "signature_path": "__CHANGE_ME_SIGNATURE_PATH__"
+    },
+    {
+      "role": "Security",
+      "identity": "__CHANGE_ME_SECURITY_SIGNER_IDENTITY__",
+      "decision": "APPROVED",
+      "approved_at": "2026-08-05T00:00:00Z",
+      "signed_digest": "__CHANGE_ME_RELEASE_DIGEST__",
+      "allowed_signers_path": "__CHANGE_ME_ALLOWED_SIGNERS_PATH__",
+      "signature_path": "__CHANGE_ME_SIGNATURE_PATH__"
+    },
+    {
+      "role": "Operations",
+      "identity": "__CHANGE_ME_OPERATIONS_SIGNER_IDENTITY__",
+      "decision": "APPROVED",
+      "approved_at": "2026-08-05T00:00:00Z",
+      "signed_digest": "__CHANGE_ME_RELEASE_DIGEST__",
+      "allowed_signers_path": "__CHANGE_ME_ALLOWED_SIGNERS_PATH__",
+      "signature_path": "__CHANGE_ME_SIGNATURE_PATH__"
+    }
+  ]
+}

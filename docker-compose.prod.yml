@@ -5,7 +5,7 @@
 #    - 无源码挂载、无 --reload;镜像不可变(代码在 build 时打入)
 #    - 前端 = 多阶段构建产物 + nginx,单端口入口(静态 SPA + /api 反代后端)
 #    - backend 多 worker;数据库迁移为一次性服务,先于 backend 成功完成
-#    - mysql / redis 不暴露宿主端口(仅内网);MinIO S3 暴露供签名 URL
+#    - mysql / redis 不暴露宿主端口;HTTP / MinIO 只绑定回环并由 TLS overlay 暴露
 #    - analysis-worker 属可选 profile;首次启动核心栈后在 /analysis 创建 token 再启用
 #    - restart: unless-stopped;密钥由 scripts/prod.sh 通过 SOPS/age 解密到临时 .env.prod
 #
@@ -41,7 +41,7 @@ x-app-env: &app-env
 
 services:
   mysql:
-    image: mysql:8.4
+    image: mysql:8.4@sha256:c36050afdca850f23cef85703f84c7531a5ae155a11b5ee1c60acb09937c4084
     restart: unless-stopped
     environment:
       MYSQL_DATABASE: ${MYSQL_DATABASE}
@@ -53,6 +53,7 @@ services:
       - --collation-server=utf8mb4_0900_ai_ci
     volumes:
       - mysql_data:/var/lib/mysql
+    networks: [data_internal]
     deploy:
       resources:
         limits:
@@ -64,10 +65,11 @@ services:
       retries: 20
 
   redis:
-    image: redis:7.4.9-alpine
+    image: redis:7.4.10-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
     restart: unless-stopped
     volumes:
       - redis_data:/data
+    networks: [data_internal]
     deploy:
       resources:
         limits:
@@ -79,7 +81,7 @@ services:
       retries: 5
 
   minio:
-    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
@@ -92,8 +94,9 @@ services:
         limits:
           memory: ${MINIO_MEM_LIMIT:-512m}
     ports:
-      - "9000:9000"                # S3:签名下载 URL 需可达(建议置于 TLS 反代之后)
-      - "127.0.0.1:9001:9001"      # 控制台:仅本机回环
+      - "127.0.0.1:${MINIO_HOST_PORT:-9000}:9000" # 仅供本机 TLS 反代/维护
+      - "127.0.0.1:${MINIO_CONSOLE_HOST_PORT:-9001}:9001" # 控制台:仅本机回环
+    networks: [data_internal, app_internal]
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null"]
       interval: 10s
@@ -113,9 +116,10 @@ services:
       mysql:
         condition: service_healthy
     command: python -m alembic -c alembic.ini upgrade head
+    networks: [data_internal]
 
   minio-init:
-    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
     restart: "no"
     depends_on:
       - minio
@@ -153,6 +157,7 @@ services:
         EOF
         mc admin policy create duckdock duckdock-app /tmp/duckdock-app-policy.json || true
         mc admin policy attach duckdock duckdock-app --user "$$MINIO_ACCESS_KEY"
+    networks: [data_internal]
 
   backend:
     build:
@@ -174,6 +179,7 @@ services:
       minio-init:
         condition: service_completed_successfully
     command: uvicorn app.main:app --host 0.0.0.0 --port 8801 --workers ${BACKEND_WORKERS:-4} --timeout-graceful-shutdown 90
+    networks: [data_internal, app_internal, observability_internal, egress]
     deploy:
       resources:
         limits:
@@ -186,7 +192,7 @@ services:
       start_period: 30s
 
   prometheus:
-    image: prom/prometheus:v3.5.0
+    image: prom/prometheus:v3.13.2@sha256:508729e0e2d18e11fd742a5a5ca70e557b940a93948c3c95fd0123a6fd538b69
     restart: unless-stopped
     depends_on:
       backend:
@@ -200,6 +206,7 @@ services:
       - ./ops/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./ops/prometheus/duckdock-alerts.yml:/etc/prometheus/duckdock-alerts.yml:ro
       - prometheus_data:/prometheus
+    networks: [observability_internal]
     ports:
       - "127.0.0.1:${DUCKDOCK_PROMETHEUS_HOST_PORT:-9090}:9090"
     healthcheck:
@@ -212,6 +219,38 @@ services:
       resources:
         limits:
           memory: ${PROMETHEUS_MEM_LIMIT:-512m}
+
+  alertmanager:
+    build:
+      context: ./ops/alertmanager
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --web.external-url=${ALERTMANAGER_EXTERNAL_URL:?set ALERTMANAGER_EXTERNAL_URL}
+    volumes:
+      - ${ALERTMANAGER_CONFIG_FILE:?set ALERTMANAGER_CONFIG_FILE}:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    ports:
+      - "127.0.0.1:${ALERTMANAGER_HOST_PORT:-9093}:9093"
+    networks: [observability_internal, egress]
+    healthcheck:
+      test:
+        - "CMD"
+        - "/bin/amtool"
+        - "--alertmanager.url=http://127.0.0.1:9093"
+        - "--timeout=3s"
+        - "--no-version-check"
+        - "alert"
+        - "query"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: ${ALERTMANAGER_MEM_LIMIT:-256m}
 
   worker:
     build:
@@ -237,6 +276,7 @@ services:
         limits:
           memory: ${WORKER_MEM_LIMIT:-1g}
     command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=${WORKER_CONCURRENCY:-4}
+    networks: [data_internal, egress]
     healthcheck:
       test: ["CMD-SHELL", "celery -A app.workers.celery_app inspect ping -d celery@$$HOSTNAME >/dev/null 2>&1"]
       interval: 30s
@@ -267,6 +307,7 @@ services:
       minio-init:
         condition: service_completed_successfully
     command: celery -A app.workers.celery_app beat --loglevel=info --schedule=/tmp/celerybeat-schedule
+    networks: [data_internal]
     deploy:
       resources:
         limits:
@@ -320,6 +361,7 @@ services:
         --analysis-mode "$$DUCKDOCK_ANALYSIS_MODE"
         --poll-seconds "$$DUCKDOCK_WORKER_POLL_SECONDS"
         --lease-seconds "$$DUCKDOCK_WORKER_LEASE_SECONDS"
+    networks: [app_internal, egress]
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import pathlib; raise SystemExit(0 if pathlib.Path('/workspace/scripts/duckdock_analysis_worker.py').exists() else 1)\""]
       interval: 30s
@@ -338,7 +380,8 @@ services:
       backend:
         condition: service_healthy
     ports:
-      - "${HTTP_PORT:-80}:8080"    # 非 root 单端口入口:静态 SPA + /api 反代 backend:8801
+      - "127.0.0.1:${HTTP_PORT:-8080}:8080" # 仅供本机 TLS 反代/维护
+    networks: [app_internal]
     deploy:
       resources:
         limits:
@@ -357,3 +400,14 @@ volumes:
   minio_data:
   repos_data:
   prometheus_data:
+  alertmanager_data:
+
+networks:
+  app_internal:
+    internal: true
+  data_internal:
+    internal: true
+  observability_internal:
+    internal: true
+  # Only services that must call approved external providers/receivers attach here.
+  egress:

@@ -3,7 +3,7 @@
 > 评估日期：2026-08-05
 > 候选版本：`2.0.0-rc.1`
 > 分支：`codex/release-2.0-rc1`
-> 结论：**达到工程 RC 发布门槛；尚不构成 GA 或任意生产环境上线授权。**
+> 结论：**达到应用与仓库工程 RC 发布门槛；未达到 2.0 GA 发布门槛，也不构成任意生产环境上线授权。**
 
 ## 1. 发布结论
 
@@ -20,7 +20,7 @@ Runtime/Reporter
   → Prometheus SLO + incident + recovery receipt + 14-item readiness gate
 ```
 
-本候选可用于内部发布、集成验收和受控试点。它不能被描述为“已经完成生产上线审批”，原因不是当前代码门禁失败，而是目标环境的 TLS、密钥托管、容量、HA、备份、监控接管、安全审计和变更审批只能在实际部署环境完成。
+本候选可用于内部发布、集成验收和受控试点。它不能被描述为“2.0 已正式发布”或“已经完成生产上线审批”。仓库已经提供目标 TLS/密钥/网络/告警/备份/HA/容量/授权的实现与 fail-closed 门禁，但真实目标环境的执行回执、独立安全结论和四方签字不能由本地验证替代。
 
 ## 2. 当前验证结果
 
@@ -36,18 +36,21 @@ Runtime/Reporter
 | 恢复演练 | PASS | 独立临时 MySQL dump→drop→restore 3 行；MinIO 对象 backup→delete→restore 1 个；RPO 0 秒、RTO 1 秒 |
 | SLO | PASS | `HEALTHY`；142 个发布窗口请求、0 错误；ingest p95 7.729 ms、timeline p95 12.636 ms、policy p95 54.426 ms |
 | Readiness | PASS | `READY`；14 PASS / 0 WARN / 0 BLOCK |
-| 浏览器 | PASS | 隔离 RC 登录、Dashboard、Fleet、Package Registry、Release Control、Operations、Eval Hub 均渲染；console 0 warning/error |
-| 后端回归 | PASS | 1015 passed / 19 skipped / 3 warnings；核心覆盖率 81.04%（门槛 65%） |
-| Python 3.12 锁定环境 | PASS | hashed dev lock 全量 1015 passed / 19 skipped；runtime lock `pip-audit` 0 已知漏洞 |
-| 真实 MySQL 测试 lane | PASS | 独立临时数据库 17 passed / 1014 deselected；验证后已删除 |
+| 浏览器 | PASS | Playwright 3/3：未登录守卫、登录表单、审批→执行→回执→验证→完成；应用内浏览器复核 Operations/Release Control，console 0 warning/error |
+| 后端回归 | PASS | 1029 个非 MySQL 用例通过、2 skipped；核心覆盖率 81.04%（门槛 65%） |
+| Python 3.12 锁定环境 | PASS | hashed dev lock；runtime lock `pip-audit` 0 已知漏洞；Ruff/compile 通过 |
+| 真实 MySQL 测试 lane | PASS | 独立临时数据库 17/17；验证后数据库与用户均已删除 |
 | 前端 | PASS | npm audit 0；lint 0 warning；11 files / 56 tests；生产 build 最大入口块 569.69 kB（门槛 600 kB） |
 | 类型基线 | PASS with debt | mypy 81 errors，未超过 ratchet ceiling 82；这不是“类型全清零” |
-| 生产镜像 | PASS | backend/frontend 非 root、精确 digest base、provenance/SBOM；Docker Scout 均为 0 Critical / 0 High |
+| 自有生产镜像 | PASS | backend/frontend/TLS gateway/Alertmanager 非 root；Docker Scout 均为 0 Critical / 0 High |
+| 本地生产基础设施 | PASS | 隔离 Compose 10/10 healthy；TLS 1.2/1.3，拒绝 1.0/1.1；hostname/HSTS/告警 firing+resolved 通过，随后零残留清理 |
+| 容量工程基线 | PASS | 60 rps×900s + 120 rps×60s，61,200 Run/Audit/Outbox；持续 p95 8.023 ms，增长后 timeline p95 5.187 ms |
+| GA 生产授权 | BLOCKED | 真实目标 HTTPS 容量/HA/异地恢复/告警回执、独立安全评估与四方签名尚未提供，授权器必须拒绝 |
 | Compose/CI | PASS | dev/prod Compose config clean；CI action 固定 commit SHA，并阻断依赖、契约、测试、镜像 Critical/High 漏洞 |
 
 ## 3. 14 项实时门禁
 
-本次门禁来自独立 Compose project、空业务库和真实本机 Hermes，不读取原开发库的历史 READY 状态。
+本次应用门禁来自独立 Compose project、空业务库和真实本机 Hermes，不读取原开发库的历史 READY 状态。它证明应用闭环，不是目标环境生产授权。普通开发库在 Operations 页面显示 `BLOCKED` 是正确行为。
 
 | Check | Status |
 |---|---:|
@@ -74,23 +77,24 @@ Langfuse 保持可替换的 provider adapter：关闭或不可用时，依赖它
 
 ## 5. RC 后仍存在的风险
 
-1. **独立安全审计未完成。** 当前有代码、依赖和镜像门禁，但没有第三方渗透测试或审计报告。
-2. **默认生产拓扑是单节点 Compose。** 未承诺控制面、MySQL、Redis、MinIO、Prometheus 的 HA 或跨故障域恢复。
-3. **容量只完成工程门禁。** 目标并发、数据保留量、对象存储增长和长时间稳定性需要按部署方负载重新压测。
-4. **目标环境控制未签字。** TLS、网络隔离、SOPS/age 或外部 Secret Manager、备份介质、告警接收人和变更审批仍是上线前硬门槛。
-5. **类型债务仍有 81 项。** ratchet 阻止恶化，但后续版本应持续清零。
-6. **外部 Provider 兼容性是持续门禁。** Langfuse、Hermes、OTel Collector 或其他 Harness 升级后必须重跑对应 compatibility gate。
-7. **RC 不是 GA。** 发现阻断级缺陷时允许调整契约或迁移；GA 前必须冻结最终版本号并在目标环境重跑门禁。
+1. **独立安全审计未完成。** 当前有代码、依赖和镜像门禁，但没有与最终 commit/镜像摘要绑定的第三方渗透测试或审计报告。
+2. **HA 只完成仓库基线。** `ops/kubernetes/ha` 已提供三副本、PDB/HPA、拓扑分散和默认拒绝网络策略；真实节点/zone 故障注入以及托管 MySQL/Redis/S3/RWX 恢复仍未执行。
+3. **目标容量尚未证明。** 本地真实 MySQL 工程基线通过，300 rps 边界探针也能 fail closed；仍需通过真实目标 HTTPS、负载均衡器和目标数据服务重跑 G2。
+4. **目标运维回执缺失。** 生产 Secret Manager/轮换、双告警接收人、异地不可变备份恢复、RPO/RTO 和 on-call 尚未绑定到最终目标。
+5. **随 Compose 打包的第三方数据镜像不属于 GA 路径。** 本地扫描发现 MySQL/MinIO 官方镜像仍含 Critical/High；单机 Compose 仅作加固参考，GA 强制使用经独立评估的外部 HA MySQL/Redis/S3。Prometheus 的 1 个 High 需要独立评估/VEX 确认，项目不得自行豁免。
+6. **类型债务仍有 81 项。** ratchet 阻止恶化，但后续版本应持续清零。
+7. **外部 Provider 兼容性是持续门禁。** Langfuse、Hermes、OTel Collector 或其他 Harness 升级后必须重跑对应 compatibility gate。
+8. **RC 不是 GA。** 最终版本必须改为 `2.0.0`，使用 registry `@sha256` 镜像，在同一 commit 上重跑全部门禁并取得 `GA_AUTHORIZED`。
 
 ## 6. GA 前必须完成
 
-- 在目标生产等价环境填写并签署 README 第 12 节部署清单；
-- 完成独立安全评审，至少覆盖身份、凭证、对象签名 URL、租户边界、SSRF、Pack archive 与供应链；
-- 用真实生产密钥/TLS/域名完成部署，证明弱密钥会 fail closed；
-- 按目标容量完成持续负载和存储增长测试；
-- 完成生产备份介质的恢复演练，并把 RPO/RTO receipt 保存在受控证据系统；
-- 接管 Prometheus/告警并明确 on-call；
-- 在最终 GA commit 和生产镜像上重新执行本文件全部门禁；
-- 由 Product、Architecture、Security、Operations owner 完成变更审批。
+- 用真实生产密钥、域名和 TLS 部署 `ops/kubernetes/ha` 目标 overlay，替换所有占位镜像/域名/egress；
+- 在真实目标 HTTPS 上执行 G2 容量与数据增长门禁，并完成节点/zone/Beat/托管数据服务故障注入；
+- 从异地、加密、不可变介质做破坏性 staging 恢复，保留 MySQL/Git/S3 与 RPO/RTO 回执；
+- 触发和恢复告警，证明两个实际接收人及 on-call schedule；
+- 完成独立安全评审/VEX，关闭最终应用镜像和依赖中的全部 Critical/High；
+- 将版本冻结为 `2.0.0`，使用 registry `@sha256` 镜像，在最终 commit 上重跑全部门禁；
+- 由 Product、Architecture、Security、Operations 四个不同身份签署同一证据摘要；
+- 运行生产授权器并取得唯一可接受结果 `GA_AUTHORIZED`。
 
-机器级详细结果见 [`release-candidate-rc1-20260805.md`](../specs/015-ga-candidate/evidence/release-candidate-rc1-20260805.md)。历史 `2.0.0-ga` 文档不再作为当前版本事实源。
+机器级详细结果见 [`release-candidate-rc1-20260805.md`](../specs/015-ga-candidate/evidence/release-candidate-rc1-20260805.md)、[`capacity-reference-small-pass-20260805.json`](../specs/016-ga-production-authorization/evidence/capacity-reference-small-pass-20260805.json) 和 [`local-infrastructure-20260805.json`](../specs/016-ga-production-authorization/evidence/local-infrastructure-20260805.json)。目标授权流程见 [`ga-production-authorization.zh-CN.md`](ga-production-authorization.zh-CN.md)。历史 `2.0.0-ga` 文档不再作为当前版本事实源。

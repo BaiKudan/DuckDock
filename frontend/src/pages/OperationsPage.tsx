@@ -159,12 +159,15 @@ export default function OperationsPage() {
       ) : null}
 
       <Card
-        title="Release Readiness"
-        description="汇总迁移、API 契约、Runtime、发布、交接、身份、对账、SLO 与恢复证据；结果只用于辅助发布决策。"
+        title="Application Release Readiness"
+        description="汇总应用级迁移、API 契约、Runtime、发布、交接、身份、对账、SLO 与恢复证据。READY 不代表目标环境 GA 或生产授权。"
         padded
       >
         {readiness ? (
           <div className="space-y-5">
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-800">
+              正式 GA 还必须通过目标 TLS、Secrets、网络、告警、异地恢复、容量、跨故障域、独立安全评估及四方签名门禁。
+            </div>
             <div className="flex flex-wrap items-center justify-between gap-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-4">
               <div className="flex flex-wrap items-center gap-3">
                 <Badge tone={statusTone(readiness.status)}>{readiness.status}</Badge>

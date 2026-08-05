@@ -71,7 +71,7 @@ jobs:
 
       - name: Lint (ruff)
         working-directory: backend
-        run: python -m ruff check app alembic
+        run: python -m ruff check app alembic scripts
 
       - name: Type check (mypy, baseline ratchet)
         working-directory: backend
@@ -82,6 +82,10 @@ jobs:
           status=$?
           echo "$output" | tail -2
           count=$(echo "$output" | sed -n 's/^Found \([0-9][0-9]*\) error.*/\1/p')
+          if [ "$status" -ne 0 ] && [ -z "$count" ]; then
+            echo "::error::mypy failed without a parseable error count."
+            exit "$status"
+          fi
           count=${count:-0}
           [ "$status" -eq 0 ] && count=0
           baseline=$(cat .mypy-baseline)
@@ -93,7 +97,7 @@ jobs:
 
       - name: Compile backend modules
         working-directory: backend
-        run: python -m compileall app alembic
+        run: python -m compileall app alembic scripts
 
       - name: Run backend tests (+ core-module coverage gate)
         working-directory: backend
@@ -273,8 +277,48 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cp .env.prod.example .env.prod
-          docker compose --env-file .env.prod -f docker-compose.prod.yml config --quiet
+          DUCKDOCK_PROD_ENV_FILE=.env.prod.example docker compose \
+            --env-file .env.prod.example \
+            -f docker-compose.prod.yml \
+            -f docker-compose.prod-tls.yml \
+            config --quiet
+
+      - name: Verify production network and HA baseline
+        run: python3 scripts/verify-production-baseline.py
+
+      - name: Validate GA authorization contract
+        run: >-
+          python3 backend/scripts/verify_ga_production_authorization.py
+          ops/ga/production-authorization.example.json
+          --lint
+
+      - name: Validate production operations scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/prod.sh
+          bash -n scripts/restore.sh
+          bash -n scripts/seal-backup.sh
+          bash -n scripts/sign-ga-approval.sh
+          bash -n scripts/verify-ga-infrastructure-dev.sh
+          sh -n ops/tls-gateway/entrypoint.sh
+
+      - name: Validate Prometheus and Alertmanager configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build -t duckdock-alertmanager:ci ops/alertmanager
+          docker run --rm \
+            -v "$PWD/ops/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro" \
+            -v "$PWD/ops/prometheus/duckdock-alerts.yml:/etc/prometheus/duckdock-alerts.yml:ro" \
+            --entrypoint /bin/promtool \
+            prom/prometheus:v3.13.2@sha256:508729e0e2d18e11fd742a5a5ca70e557b940a93948c3c95fd0123a6fd538b69 \
+            check config /etc/prometheus/prometheus.yml
+          docker run --rm \
+            -v "$PWD/ops/alertmanager/alertmanager.example.yml:/etc/alertmanager/alertmanager.yml:ro" \
+            --entrypoint /bin/amtool \
+            duckdock-alertmanager:ci \
+            check-config /etc/alertmanager/alertmanager.yml
 
   release-images:
     name: Release images and vulnerability gate
@@ -321,5 +365,41 @@ jobs:
         with:
           command: cves
           image: local://duckdock-frontend:2.0.0-rc.1
+          only-severities: critical,high
+          exit-code: true
+
+      - name: Build TLS gateway with provenance and SBOM
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ops/tls-gateway
+          file: ops/tls-gateway/Dockerfile
+          load: true
+          tags: duckdock-tls-gateway:2.0.0-rc.1
+          provenance: mode=max
+          sbom: true
+
+      - name: Scan TLS gateway
+        uses: docker/scout-action@481412c8b8de36d0f79e85aa382c60397466feb6 # v1
+        with:
+          command: cves
+          image: local://duckdock-tls-gateway:2.0.0-rc.1
+          only-severities: critical,high
+          exit-code: true
+
+      - name: Build patched Alertmanager with provenance and SBOM
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ops/alertmanager
+          file: ops/alertmanager/Dockerfile
+          load: true
+          tags: duckdock-alertmanager:0.33.1-duckdock.1
+          provenance: mode=max
+          sbom: true
+
+      - name: Scan patched Alertmanager
+        uses: docker/scout-action@481412c8b8de36d0f79e85aa382c60397466feb6 # v1
+        with:
+          command: cves
+          image: local://duckdock-alertmanager:0.33.1-duckdock.1
           only-severities: critical,high
           exit-code: true

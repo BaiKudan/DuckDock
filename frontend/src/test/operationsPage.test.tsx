@@ -158,7 +158,8 @@ describe("OperationsPage", () => {
     render(<OperationsPage />);
 
     expect(await screen.findByText("Operations & SLO")).toBeInTheDocument();
-    expect(screen.getByText("Release Readiness")).toBeInTheDocument();
+    expect(screen.getByText("Application Release Readiness")).toBeInTheDocument();
+    expect(screen.getByText(/READY 不代表目标环境 GA/)).toBeInTheDocument();
     expect(screen.getByText("READY_WITH_GAPS")).toBeInTheDocument();
     expect(screen.getByText("Database migration head")).toBeInTheDocument();
     expect(screen.getByText("duckdock-ga-slo-v1")).toBeInTheDocument();

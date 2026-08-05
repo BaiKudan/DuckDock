@@ -9,7 +9,7 @@ DuckDock 管理 Agent 资产、凭证、审计与交接证据。请负责任地�
 | `main` 与最新正式发布 | 支持 |
 | 更早的提交、分支或自行修改的版本 | 不保证 |
 
-当前候选版本为 `2.0.0-rc.1`，尚未完成独立第三方安全审计；RC 不构成生产部署授权。生产部署方仍需自行完成网络隔离、TLS、密钥管理、备份恢复、依赖更新、容量验证和权限复核。
+当前候选版本为 `2.0.0-rc.1`，尚未完成独立第三方安全审计；RC 不构成生产部署授权。仓库已提供 TLS/分网/告警/异地加密备份/HA 参考实现和机器授权门禁，但部署方仍必须在目标环境产生证据。独立评估范围见 [`docs/security/2.0-independent-assessment-brief.zh-CN.md`](docs/security/2.0-independent-assessment-brief.zh-CN.md)，最终授权流程见 [`docs/ga-production-authorization.zh-CN.md`](docs/ga-production-authorization.zh-CN.md)。
 
 ## 报告漏洞
 

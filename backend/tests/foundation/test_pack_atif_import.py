@@ -435,9 +435,10 @@ async def test_pat001_valid_atif_creates_verified_artifact(
         await async_session.execute(select(AgentRunArtifact))
     ).scalar_one()
     assert artifact.sha256 == hashlib.sha256(payload).hexdigest()
-    assert artifact.object_uri.startswith("s3://duckdock/")
+    storage_prefix = f"s3://{artifact_service.bucket}/"
+    assert artifact.object_uri.startswith(storage_prefix)
     assert artifact_store.objects[
-        artifact.object_uri.removeprefix("s3://duckdock/")
+        artifact.object_uri.removeprefix(storage_prefix)
     ] == payload
 
 
@@ -1279,7 +1280,7 @@ async def test_next003_evaluation_replay_has_one_durable_outbox_event(
         kind=AgentRunArtifactKind.EVALUATION,
         schema_name="DuckDockEvaluationResult",
         schema_version="1.0",
-        object_uri=f"s3://duckdock/{evaluation_key}",
+        object_uri=f"s3://{artifact_service.bucket}/{evaluation_key}",
         sha256=evaluation_sha256,
         size_bytes=len(evaluation_payload),
         sensitivity=Sensitivity.RESTRICTED,

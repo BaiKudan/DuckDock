@@ -1,0 +1,65 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: backend, labels: {app.kubernetes.io/name: duckdock}}
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels: {app.kubernetes.io/name: duckdock, app.kubernetes.io/component: backend}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: frontend, labels: {app.kubernetes.io/name: duckdock}}
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels: {app.kubernetes.io/name: duckdock, app.kubernetes.io/component: frontend}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: worker, labels: {app.kubernetes.io/name: duckdock}}
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels: {app.kubernetes.io/name: duckdock, app.kubernetes.io/component: worker}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: {name: backend, labels: {app.kubernetes.io/name: duckdock}}
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: backend}
+  minReplicas: 3
+  maxReplicas: 12
+  behavior:
+    scaleDown: {stabilizationWindowSeconds: 300}
+    scaleUp: {stabilizationWindowSeconds: 30}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: {type: Utilization, averageUtilization: 65}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: {name: frontend, labels: {app.kubernetes.io/name: duckdock}}
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: frontend}
+  minReplicas: 3
+  maxReplicas: 9
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: {type: Utilization, averageUtilization: 70}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: {name: worker, labels: {app.kubernetes.io/name: duckdock}}
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: worker}
+  minReplicas: 3
+  maxReplicas: 12
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: {type: Utilization, averageUtilization: 70}

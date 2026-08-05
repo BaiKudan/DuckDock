@@ -97,7 +97,7 @@ def test_langfuse_runtime_dependencies_are_exactly_pinned() -> None:
     assert compose["services"]["postgres"]["image"] == (
         "pgvector/pgvector:0.8.6-pg16"
     )
-    assert compose["services"]["redis"]["image"] == "redis:7.4.9-alpine"
+    assert compose["services"]["redis"]["image"] == "redis:7.4.10-alpine"
     assert compose["services"]["minio"]["image"] == (
         "minio/minio:RELEASE.2025-09-07T16-13-09Z"
     )
@@ -111,13 +111,16 @@ def test_langfuse_runtime_dependencies_are_exactly_pinned() -> None:
         )
     )
     assert production_compose["services"]["redis"]["image"] == (
-        "redis:7.4.9-alpine"
+        "redis:7.4.10-alpine@sha256:"
+        "e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2"
     )
     assert production_compose["services"]["minio"]["image"] == (
-        "minio/minio:RELEASE.2025-09-07T16-13-09Z"
+        "minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:"
+        "14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e"
     )
     assert production_compose["services"]["minio-init"]["image"] == (
-        "minio/mc:RELEASE.2025-08-13T08-35-41Z"
+        "minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:"
+        "a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727"
     )
 
 

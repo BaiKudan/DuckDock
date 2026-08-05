@@ -1,0 +1,63 @@
+{
+  "schema_version": "duckdock-local-release-image-scan-v1",
+  "observed_at": "2026-08-05T06:05:00Z",
+  "candidate_version": "2.0.0-rc.1",
+  "scanner": "Docker Scout 1.21.0",
+  "authorization_scope": "local engineering evidence only; not an independent production security assessment",
+  "status": "BLOCKED_FOR_GA",
+  "application_images": [
+    {
+      "image": "duckdock-backend:2.0.0-rc.1",
+      "local_image_id": "sha256:e62c54fb291fde2a46bda95f0d1b28a8f15c3ba5973459a95be8abb681d33467",
+      "critical": 0,
+      "high": 0
+    },
+    {
+      "image": "duckdock-frontend:2.0.0-rc.1",
+      "local_image_id": "sha256:7878044773a6afc14b08d388aee486147dfda78adbac087244a385e738d81a3c",
+      "critical": 0,
+      "high": 0
+    },
+    {
+      "image": "duckdock-tls-gateway:2.0.0-rc.1",
+      "local_image_id": "sha256:514fa2aa4fc5049404e13459e4107c678e65110b17f4b0a747ddada36a7bb42a",
+      "critical": 0,
+      "high": 0
+    },
+    {
+      "image": "duckdock-alertmanager:0.33.1-duckdock.1",
+      "local_image_id": "sha256:46be1e7b516ee80a0f8a9baff46ad84ecaddccc8f40431050672f5e0a3fe3ac2",
+      "critical": 0,
+      "high": 0
+    }
+  ],
+  "reference_infrastructure_images": [
+    {
+      "image": "redis:7.4.10-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2",
+      "critical": 0,
+      "high": 0
+    },
+    {
+      "image": "prom/prometheus:v3.13.2@sha256:508729e0e2d18e11fd742a5a5ca70e557b940a93948c3c95fd0123a6fd538b69",
+      "critical": 0,
+      "high": 1,
+      "disposition": "unwaived; independent assessor must confirm or issue a VEX for CVE-2026-42154"
+    },
+    {
+      "image": "mysql:8.4@sha256:c36050afdca850f23cef85703f84c7531a5ae155a11b5ee1c60acb09937c4084",
+      "critical": 1,
+      "high": 71
+    },
+    {
+      "image": "minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e",
+      "critical": 21,
+      "high": 43
+    },
+    {
+      "image": "minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727",
+      "critical": 10,
+      "high": 27
+    }
+  ],
+  "decision": "Self-built application images satisfy the local Critical/High gate. Bundled single-host data images do not satisfy the GA gate and are excluded from the authorized topology; GA requires independently assessed managed HA MySQL, Redis and S3 services plus a final exact-image assessment."
+}

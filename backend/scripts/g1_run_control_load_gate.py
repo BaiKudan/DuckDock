@@ -19,7 +19,7 @@ import uuid
 from collections import Counter
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -29,13 +29,14 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 import httpx
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.engine import make_url
 
 import app.models  # noqa: F401 - register complete SQLAlchemy metadata
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal, Base, engine
 from app.core.api_token_security import hash_reporter_token_secret
+from app.core.security import create_access_token
 from app.main import app
 from app.models.audit import AuditLog
 from app.models.control_plane import (
@@ -45,7 +46,7 @@ from app.models.control_plane import (
     RuntimeProvider,
 )
 from app.models.execution import AgentRun
-from app.models.namespace import Namespace
+from app.models.namespace import Namespace, NamespaceMember, NamespaceRole
 from app.models.outbox import OutboxEvent
 from app.models.user import SystemRole, User
 from app.services.outbox_event_service import AGENT_RUN_REGISTERED
@@ -110,6 +111,35 @@ class PhaseResult:
 class RunStartRequest:
     idempotency_key: str
     body: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class SeededReporter:
+    token: str
+    owner_user_id: int
+    namespace_id: int
+
+
+@dataclass(frozen=True, slots=True)
+class QueryProbeResult:
+    sample_count: int
+    success_count: int
+    p50_ms: float
+    p95_ms: float
+    p99_ms: float
+    maximum_p95_ms: float
+    error_codes: dict[str, int]
+
+    @property
+    def passed(self) -> bool:
+        return (
+            self.sample_count > 0
+            and self.success_count == self.sample_count
+            and self.p95_ms <= self.maximum_p95_ms
+        )
+
+    def as_dict(self) -> dict[str, Any]:
+        return {**asdict(self), "passed": self.passed}
 
 
 def require_isolated_database(database_url: str) -> str:
@@ -234,7 +264,7 @@ async def drop_database_tables() -> None:
         await connection.run_sync(Base.metadata.drop_all)
 
 
-async def seed_reporter() -> str:
+async def seed_reporter() -> SeededReporter:
     prefix, secret, token = generate_runtime_report_token()
     async with AsyncSessionLocal() as db:
         user = User(
@@ -251,6 +281,13 @@ async def seed_reporter() -> str:
         )
         db.add(namespace)
         await db.flush()
+        db.add(
+            NamespaceMember(
+                namespace_id=namespace.id,
+                user_id=user.id,
+                role=NamespaceRole.ADMIN,
+            )
+        )
         runtime = RuntimeInstance(
             namespace_id=namespace.id,
             provider=RuntimeProvider.CUSTOM,
@@ -271,12 +308,16 @@ async def seed_reporter() -> str:
             )
         )
         await db.commit()
-    return token
+    return SeededReporter(
+        token=token,
+        owner_user_id=user.id,
+        namespace_id=namespace.id,
+    )
 
 
 async def verify_materialization(expected_count: int) -> dict[str, int]:
     async with AsyncSessionLocal() as db:
-        return {
+        materialization = {
             "agent_runs": int(
                 await db.scalar(select(func.count(AgentRun.id))) or 0
             ),
@@ -298,6 +339,64 @@ async def verify_materialization(expected_count: int) -> dict[str, int]:
             ),
             "expected": expected_count,
         }
+        database_size_bytes = await db.scalar(
+            text(
+                "SELECT COALESCE(SUM(data_length + index_length), 0) "
+                "FROM information_schema.tables WHERE table_schema = DATABASE()"
+            )
+        )
+        materialization["database_size_bytes"] = int(database_size_bytes or 0)
+        return materialization
+
+
+async def probe_timeline_queries(
+    client: httpx.AsyncClient,
+    *,
+    owner_user_id: int,
+    namespace_id: int,
+    sample_count: int,
+    maximum_p95_ms: float,
+) -> QueryProbeResult:
+    headers = {
+        "Authorization": f"Bearer {create_access_token(owner_user_id)}",
+    }
+    end = datetime.now(timezone.utc) + timedelta(minutes=1)
+    # The management API intentionally caps queries at 31 days; exercising an
+    # invalid wider window would benchmark validation errors instead of the
+    # indexed timeline projection.
+    start = end - timedelta(days=31)
+    latencies_ms: list[float] = []
+    statuses: list[int] = []
+    success_count = 0
+    for _ in range(sample_count):
+        started = perf_counter()
+        response = await client.get(
+            "/api/v2/agent-runs",
+            headers=headers,
+            params={
+                "namespace_id": namespace_id,
+                "started_after": start.isoformat(),
+                "started_before": end.isoformat(),
+                "limit": 50,
+            },
+        )
+        latencies_ms.append((perf_counter() - started) * 1000)
+        statuses.append(response.status_code)
+        if response.status_code == 200:
+            success_count += 1
+    return QueryProbeResult(
+        sample_count=sample_count,
+        success_count=success_count,
+        p50_ms=round(percentile(latencies_ms, 50), 3),
+        p95_ms=round(percentile(latencies_ms, 95), 3),
+        p99_ms=round(percentile(latencies_ms, 99), 3),
+        maximum_p95_ms=maximum_p95_ms,
+        error_codes={
+            f"http_{status}": count
+            for status, count in sorted(Counter(statuses).items())
+            if status != 200
+        },
+    )
 
 
 def _phase_payload(result: PhaseResult) -> dict[str, Any]:
@@ -309,8 +408,9 @@ async def run_gate(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     if not args.reset_test_database:
         raise ValueError("--reset-test-database is required")
 
+    gate_started_at = datetime.now(timezone.utc)
     await reset_database()
-    token = await seed_reporter()
+    reporter = await seed_reporter()
     run_tag = uuid.uuid4().hex[:8]
     requests: dict[tuple[str, int], RunStartRequest] = {}
     phases = (
@@ -334,7 +434,7 @@ async def run_gate(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         ),
     )
 
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Authorization": f"Bearer {reporter.token}"}
     results: list[PhaseResult] = []
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
@@ -387,6 +487,13 @@ async def run_gate(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             },
             json=conflict_body,
         )
+        query_probe = await probe_timeline_queries(
+            client,
+            owner_user_id=reporter.owner_user_id,
+            namespace_id=reporter.namespace_id,
+            sample_count=args.timeline_query_samples,
+            maximum_p95_ms=args.timeline_maximum_p95_ms,
+        )
 
     expected_count = sum(phase.request_count for phase in phases)
     materialized = await verify_materialization(expected_count)
@@ -394,6 +501,7 @@ async def run_gate(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         materialized["agent_runs"] == expected_count
         and materialized["agent_run_registered_events"] == expected_count
         and materialized["agent_run_started_audits"] == expected_count
+        and expected_count >= args.minimum_materialized_runs
     )
     idempotency_passed = (
         replay.status_code == 201
@@ -403,16 +511,23 @@ async def run_gate(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         all(result.passed for result in results)
         and materialization_passed
         and idempotency_passed
+        and query_probe.passed
     )
     payload = {
+        "schema_version": "duckdock-capacity-gate-v1",
         "gate": "G1 Run control envelope",
+        "profile": args.profile_name,
         "database": database,
         "transport": "FastAPI ASGI HTTP with real MySQL",
+        "started_at": gate_started_at.isoformat(),
+        "finished_at": datetime.now(timezone.utc).isoformat(),
         "phases": [_phase_payload(result) for result in results],
         "materialization": {
             **materialized,
+            "minimum_materialized_runs": args.minimum_materialized_runs,
             "passed": materialization_passed,
         },
+        "post_growth_timeline_query": query_probe.as_dict(),
         "idempotency": {
             "same_key_same_payload_status": replay.status_code,
             "same_key_different_payload_status": conflict.status_code,
@@ -433,6 +548,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--reset-test-database", action="store_true")
     parser.add_argument("--keep-database", action="store_true")
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--profile-name", default="custom")
     parser.add_argument("--sustained-rate", type=float, default=100)
     parser.add_argument("--sustained-seconds", type=float, default=5)
     parser.add_argument("--burst-rate", type=float, default=500)
@@ -472,6 +589,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         type=float,
         default=100,
     )
+    parser.add_argument("--minimum-materialized-runs", type=int, default=0)
+    parser.add_argument("--timeline-query-samples", type=int, default=25)
+    parser.add_argument("--timeline-maximum-p95-ms", type=float, default=250)
     args = parser.parse_args(argv)
     if args.sustained_rate <= 0 or args.burst_rate <= 0:
         parser.error("rates must be positive")
@@ -479,6 +599,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("durations must be positive")
     if not 0 < args.minimum_completion_ratio <= 1:
         parser.error("minimum completion ratio must be in (0, 1]")
+    if args.minimum_materialized_runs < 0:
+        parser.error("minimum materialized runs must be non-negative")
+    if args.timeline_query_samples <= 0:
+        parser.error("timeline query samples must be positive")
+    if args.timeline_maximum_p95_ms <= 0:
+        parser.error("timeline maximum p95 must be positive")
     return args
 
 
@@ -495,6 +621,12 @@ async def async_main(
     payload: dict[str, Any] = {}
     try:
         exit_code, payload = await run_gate(args)
+        if args.output:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(
+                json.dumps(payload, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
         if args.json:
             print(json.dumps(payload, sort_keys=True))
         else:
@@ -514,6 +646,12 @@ async def async_main(
             )
             print(
                 f"idempotency: passed={payload['idempotency']['passed']}"
+            )
+            print(
+                "post-growth timeline query: "
+                f"passed={payload['post_growth_timeline_query']['passed']} "
+                f"samples={payload['post_growth_timeline_query']['sample_count']} "
+                f"p95={payload['post_growth_timeline_query']['p95_ms']} ms"
             )
             print(f"G1 Run control envelope: passed={payload['passed']}")
         return exit_code

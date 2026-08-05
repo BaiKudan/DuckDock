@@ -13,7 +13,7 @@ DuckDock 的治理数据模型与 Langfuse 数据库解耦，但 Dataset 同步�
 | Python SDK | `4.14.2` |
 | ClickHouse | `25.12.11.4` |
 | PostgreSQL / pgvector image | PostgreSQL `16.14` / pgvector image `0.8.6-pg16` |
-| Redis | `7.4.9-alpine` |
+| Redis | `7.4.10-alpine` |
 | MinIO / mc | `RELEASE.2025-09-07T16-13-09Z` / `RELEASE.2025-08-13T08-35-41Z` |
 | OTLP ingestion header | `x-langfuse-ingestion-version: 4` |
 | Trace 查询 | Observations API v2，确认 `core,basic,metadata`；候选 `core,basic,time`；物化 `core,basic,time,io` |
