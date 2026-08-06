@@ -17,6 +17,15 @@ from scripts.verify_ga_production_authorization import (
     APPROVAL_POLICY_SCHEMA_VERSION,
     ONCALL_ACK_SCHEMA_VERSION,
     ONCALL_ACK_SIGNATURE_NAMESPACE,
+    BACKUP_MEDIA_SCHEMA_VERSION,
+    BACKUP_MEDIA_SIGNATURE_NAMESPACE,
+    RECOVERY_MINIMUM_RETENTION,
+    RECOVERY_POLICY_SCHEMA_VERSION,
+    RECOVERY_REQUIRED_ARTIFACTS,
+    RECOVERY_REQUIRED_STAGES,
+    RECOVERY_SCHEMA_VERSION,
+    RECOVERY_VERIFICATION_SCHEMA_VERSION,
+    RECOVERY_VERIFICATION_SIGNATURE_NAMESPACE,
     REQUIRED_APPROVAL_ROLES,
     REQUIRED_SECRET_CLASSES,
     SCHEMA_VERSION,
@@ -27,6 +36,8 @@ from scripts.verify_ga_production_authorization import (
     SECRET_VERIFICATION_SCHEMA_VERSION,
     SECRET_VERIFICATION_SIGNATURE_NAMESPACE,
     SECRET_WORKLOAD_COMPONENTS,
+    RESTORE_EXECUTION_SCHEMA_VERSION,
+    RESTORE_EXECUTION_SIGNATURE_NAMESPACE,
     _approval_statement,
     _release_digest,
     _verify_ssh_signature,
@@ -99,7 +110,7 @@ def _document(tmp_path: Path, now: datetime) -> dict:
             "offsite_media": True,
             "encrypted": True,
             "immutable_or_object_locked": True,
-            "rpo_seconds": 0,
+            "rpo_seconds": 600,
             "rto_seconds": 600,
             "mysql_rows_verified": 10,
             "objects_verified": 3,
@@ -1080,7 +1091,7 @@ def _document(tmp_path: Path, now: datetime) -> dict:
         json.dumps(
             {
                 "schema_version": "duckdock-secure-backup-v1",
-                "created_at": (now - timedelta(hours=2)).isoformat(),
+                "created_at": (now - timedelta(minutes=29)).isoformat(),
                 "timestamp": "20260805-080000",
                 "release_commit": commit,
                 "encryption": "age-x25519",
@@ -1140,13 +1151,199 @@ def _document(tmp_path: Path, now: datetime) -> dict:
     )
     backup_signature_path = Path(f"{backup_manifest_path}.sig")
 
-    recovery_report = target_report("duckdock-ga-recovery-evidence-v1", "PASSED")
+    recovery_storage_identity = "backup-storage@example.com"
+    recovery_restore_identity = "restore-executor@example.com"
+    recovery_verifier_identity = "recovery-verifier@example.com"
+    recovery_storage_key = tmp_path / "recovery_storage_key"
+    recovery_restore_key = tmp_path / "recovery_restore_key"
+    recovery_verifier_key = tmp_path / "recovery_verifier_key"
+    for key in (recovery_storage_key, recovery_restore_key, recovery_verifier_key):
+        subprocess.run(
+            ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)],
+            check=True,
+        )
+    recovery_allowed_signers = tmp_path / "recovery_allowed_signers"
+    recovery_allowed_signers.write_text(
+        "".join(
+            f"{identity} {key.with_suffix('.pub').read_text(encoding='utf-8').strip()}\n"
+            for identity, key in (
+                (recovery_storage_identity, recovery_storage_key),
+                (recovery_restore_identity, recovery_restore_key),
+                (recovery_verifier_identity, recovery_verifier_key),
+            )
+        ),
+        encoding="utf-8",
+    )
+    recovery_policy_path = tmp_path / "recovery-policy.json"
+    recovery_policy = {
+        "schema_version": RECOVERY_POLICY_SCHEMA_VERSION,
+        "policy_id": "duckdock-target-recovery-authority",
+        "organization": "DuckDock Test Operations",
+        "allowed_signers_path": str(recovery_allowed_signers),
+        "allowed_signers_sha256": hashlib.sha256(
+            recovery_allowed_signers.read_bytes()
+        ).hexdigest(),
+        "approved_storage_providers": ["AWS S3"],
+        "storage_identities": [recovery_storage_identity],
+        "restore_executor_identities": [recovery_restore_identity],
+        "verification_identities": [recovery_verifier_identity],
+        "required_artifacts": list(RECOVERY_REQUIRED_ARTIFACTS),
+        "required_restore_stages": list(RECOVERY_REQUIRED_STAGES),
+        "minimum_retention_days": RECOVERY_MINIMUM_RETENTION.days,
+    }
+    recovery_policy_path.write_text(
+        json.dumps(recovery_policy, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    recovery_exercise_id = "ga-recovery-20260806"
+    restore_target = "customer-recovery-staging"
+    recovery_point = now - timedelta(minutes=30)
+    media_completed = now - timedelta(minutes=21)
+    failure_injected = now - timedelta(minutes=20)
+    restore_started = now - timedelta(minutes=19)
+    restore_completed = now - timedelta(minutes=15)
+    verification_started = now - timedelta(minutes=14)
+    verification_completed = now - timedelta(minutes=10)
+    recovery_exercise_started = now - timedelta(minutes=25)
+    recovery_exercise_completed = now - timedelta(minutes=9)
+    manifest_digest = hashlib.sha256(backup_manifest_path.read_bytes()).hexdigest()
+    manifest = json.loads(backup_manifest_path.read_text(encoding="utf-8"))
+
+    def signed_recovery_receipt(
+        filename: str,
+        payload: dict,
+        key: Path,
+        namespace: str,
+        identity: str,
+    ) -> dict:
+        path = tmp_path / filename
+        path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+        subprocess.run(
+            [
+                "ssh-keygen",
+                "-q",
+                "-Y",
+                "sign",
+                "-f",
+                str(key),
+                "-n",
+                namespace,
+                str(path),
+            ],
+            check=True,
+        )
+        return {
+            **payload,
+            "signed_evidence": {
+                "path": str(path),
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "signature_path": f"{path}.sig",
+                "signer_identity": identity,
+            },
+        }
+
+    retention_until = now + timedelta(days=40)
+    media_receipt = signed_recovery_receipt(
+        "backup-media-receipt.json",
+        {
+            "schema_version": BACKUP_MEDIA_SCHEMA_VERSION,
+            "exercise_id": recovery_exercise_id,
+            "target_environment": "customer-production",
+            "storage_provider": "AWS S3",
+            "backup_manifest_sha256": manifest_digest,
+            "backup_set_id": "backup-set-20260806-001",
+            "remote_uri": "s3://duckdock-archive/customer-production/backup-set-20260806-001",
+            "recovery_point_at": recovery_point.isoformat(),
+            "artifact_versions": [
+                {
+                    "name": name,
+                    "version_id": f"version-{index}",
+                    "etag": f"etag-{index}",
+                    "sha256": manifest["artifacts"][name]["encrypted_sha256"],
+                    "size_bytes": manifest["artifacts"][name]["encrypted_size_bytes"],
+                    "retained_until": retention_until.isoformat(),
+                }
+                for index, name in enumerate(RECOVERY_REQUIRED_ARTIFACTS, start=1)
+            ],
+            "object_lock": {
+                "enabled": True,
+                "mode": "COMPLIANCE",
+                "retention_until": retention_until.isoformat(),
+                "provider_receipt_id": "storage-lock-receipt-001",
+                "observed_at": media_completed.isoformat(),
+            },
+            "completed_at": media_completed.isoformat(),
+        },
+        recovery_storage_key,
+        BACKUP_MEDIA_SIGNATURE_NAMESPACE,
+        recovery_storage_identity,
+    )
+    restore_receipt = signed_recovery_receipt(
+        "restore-execution-receipt.json",
+        {
+            "schema_version": RESTORE_EXECUTION_SCHEMA_VERSION,
+            "exercise_id": recovery_exercise_id,
+            "production_target_environment": "customer-production",
+            "restore_target_environment": restore_target,
+            "environment_class": "recovery",
+            "backup_manifest_sha256": manifest_digest,
+            "restore_receipt_id": "restore-execution-001",
+            "destructive_restore": True,
+            "production_data_overwrite": False,
+            "failure_injected_at": failure_injected.isoformat(),
+            "started_at": restore_started.isoformat(),
+            "completed_at": restore_completed.isoformat(),
+            "stages": [
+                {
+                    "name": name,
+                    "command_id": f"restore-{name}-001",
+                    "exit_code": 0,
+                    "log_sha256": str(index + 6) * 64,
+                    "completed_at": (
+                        restore_started + timedelta(minutes=index)
+                    ).isoformat(),
+                }
+                for index, name in enumerate(RECOVERY_REQUIRED_STAGES, start=1)
+            ],
+        },
+        recovery_restore_key,
+        RESTORE_EXECUTION_SIGNATURE_NAMESPACE,
+        recovery_restore_identity,
+    )
+    recovery_verification_receipt = signed_recovery_receipt(
+        "recovery-verification-receipt.json",
+        {
+            "schema_version": RECOVERY_VERIFICATION_SCHEMA_VERSION,
+            "exercise_id": recovery_exercise_id,
+            "restore_target_environment": restore_target,
+            "environment_class": "recovery",
+            "backup_manifest_sha256": manifest_digest,
+            "verification_receipt_id": "recovery-verification-001",
+            "started_at": verification_started.isoformat(),
+            "completed_at": verification_completed.isoformat(),
+            "mysql": {"rows_verified": 10, "dataset_sha256": "a" * 64},
+            "object_store": {"objects_verified": 3, "inventory_sha256": "b" * 64},
+            "git": {"repositories_verified": 2, "refs_sha256": "c" * 64},
+            "service_readiness": {
+                "https_probe_passed": True,
+                "background_worker_ready": True,
+            },
+            "passed": True,
+        },
+        recovery_verifier_key,
+        RECOVERY_VERIFICATION_SIGNATURE_NAMESPACE,
+        recovery_verifier_identity,
+    )
+
+    recovery_report = target_report(RECOVERY_SCHEMA_VERSION, "PASSED")
     recovery_report.update(
         {
             "offsite_media": True,
             "encrypted": True,
             "immutable_or_object_locked": True,
-            "rpo_seconds": 0,
+            "storage_provider": "AWS S3",
+            "rpo_seconds": 600,
             "rto_seconds": 600,
             "mysql_rows_verified": 10,
             "objects_verified": 3,
@@ -1160,20 +1357,27 @@ def _document(tmp_path: Path, now: datetime) -> dict:
                 "signature_path": str(backup_signature_path),
                 "decryption_key_external": True,
             },
-            "restore": {
-                "destructive_restore": True,
-                "target_environment": "customer-recovery-staging",
-                "production_data_overwrite": False,
-                "integrity_digest_verified": True,
-                "started_at": (now - timedelta(minutes=30)).isoformat(),
-                "completed_at": (now - timedelta(minutes=10)).isoformat(),
+            "recovery_policy": {
+                "path": str(recovery_policy_path),
+                "sha256": hashlib.sha256(recovery_policy_path.read_bytes()).hexdigest(),
+                "policy_id": recovery_policy["policy_id"],
+                "allowed_signers_path": str(recovery_allowed_signers),
+                "allowed_signers_sha256": hashlib.sha256(
+                    recovery_allowed_signers.read_bytes()
+                ).hexdigest(),
             },
-            "verification": {
-                "mysql_rows_verified": 10,
-                "objects_verified": 3,
-                "git_repositories_verified": True,
-                "passed": True,
+            "exercise": {
+                "exercise_id": recovery_exercise_id,
+                "production_target_environment": "customer-production",
+                "restore_target_environment": restore_target,
+                "started_at": recovery_exercise_started.isoformat(),
+                "completed_at": recovery_exercise_completed.isoformat(),
+                "maximum_rpo_seconds": 900,
+                "maximum_rto_seconds": 14_400,
             },
+            "media_receipt": media_receipt,
+            "restore_receipt": restore_receipt,
+            "verification_receipt": recovery_verification_receipt,
         }
     )
     write_target_report("recovery", recovery_report)
@@ -2080,6 +2284,122 @@ def test_tampered_backup_manifest_fails_even_when_digest_claim_is_updated(
     assert result["status"] == "BLOCKED"
     signature_check = next(item for item in result["checks"] if item["key"] == "recovery_backup_signature")
     assert signature_check["status"] == "BLOCK"
+
+
+def test_tampered_signed_restore_receipt_fails_after_projection_digest_update(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    evidence = document["controls"]["recovery"]["evidence"]
+    report_path = Path(evidence["path"])
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    embedded = report["restore_receipt"]
+    receipt_path = Path(embedded["signed_evidence"]["path"])
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt["stages"][0]["log_sha256"] = "f" * 64
+    receipt_path.write_text(json.dumps(receipt, sort_keys=True) + "\n", encoding="utf-8")
+    report["restore_receipt"] = {
+        **receipt,
+        "signed_evidence": {
+            **embedded["signed_evidence"],
+            "sha256": hashlib.sha256(receipt_path.read_bytes()).hexdigest(),
+        },
+    }
+    report_path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+    evidence["sha256"] = hashlib.sha256(report_path.read_bytes()).hexdigest()
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    assert result["status"] == "BLOCKED"
+    check = next(item for item in result["checks"] if item["key"] == "recovery")
+    assert check["status"] == "BLOCK"
+
+
+def test_recovery_rpo_is_recomputed_from_signed_timeline(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    control = document["controls"]["recovery"]
+    evidence = control["evidence"]
+    report_path = Path(evidence["path"])
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    control["rpo_seconds"] = 1
+    report["rpo_seconds"] = 1
+    report_path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+    evidence["sha256"] = hashlib.sha256(report_path.read_bytes()).hexdigest()
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    assert result["status"] == "BLOCKED"
+    check = next(item for item in result["checks"] if item["key"] == "recovery")
+    assert check["status"] == "BLOCK"
+
+
+def test_recovery_rejects_validly_resigned_short_object_lock_retention(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    evidence = document["controls"]["recovery"]["evidence"]
+    report_path = Path(evidence["path"])
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    embedded = report["media_receipt"]
+    receipt_path = Path(embedded["signed_evidence"]["path"])
+    signature_path = Path(embedded["signed_evidence"]["signature_path"])
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    short_retention = (now + timedelta(days=1)).isoformat()
+    receipt["object_lock"]["retention_until"] = short_retention
+    for artifact in receipt["artifact_versions"]:
+        artifact["retained_until"] = short_retention
+    receipt_path.write_text(json.dumps(receipt, sort_keys=True) + "\n", encoding="utf-8")
+    signature_path.unlink()
+    subprocess.run(
+        [
+            "ssh-keygen",
+            "-q",
+            "-Y",
+            "sign",
+            "-f",
+            str(tmp_path / "recovery_storage_key"),
+            "-n",
+            BACKUP_MEDIA_SIGNATURE_NAMESPACE,
+            str(receipt_path),
+        ],
+        check=True,
+    )
+    report["media_receipt"] = {
+        **receipt,
+        "signed_evidence": {
+            **embedded["signed_evidence"],
+            "sha256": hashlib.sha256(receipt_path.read_bytes()).hexdigest(),
+        },
+    }
+    report_path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+    evidence["sha256"] = hashlib.sha256(report_path.read_bytes()).hexdigest()
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    assert result["status"] == "BLOCKED"
+    check = next(item for item in result["checks"] if item["key"] == "recovery")
+    assert check["status"] == "BLOCK"
 
 
 def test_tampered_assessor_report_fails_even_when_digest_claim_is_updated(

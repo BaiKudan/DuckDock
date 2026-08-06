@@ -1,0 +1,15 @@
+{
+  "schema_version": "duckdock-ga-recovery-verification-receipt-v1",
+  "exercise_id": "ga-recovery-20260806",
+  "restore_target_environment": "__CHANGE_ME_NON_PRODUCTION_RESTORE_TARGET__",
+  "environment_class": "recovery",
+  "backup_manifest_sha256": "__CHANGE_ME_64_HEX__",
+  "verification_receipt_id": "__CHANGE_ME_VERIFICATION_RECEIPT_ID__",
+  "started_at": "2026-08-06T00:26:00Z",
+  "completed_at": "2026-08-06T00:30:00Z",
+  "mysql": {"rows_verified": 1, "dataset_sha256": "__CHANGE_ME_64_HEX__"},
+  "object_store": {"objects_verified": 1, "inventory_sha256": "__CHANGE_ME_64_HEX__"},
+  "git": {"repositories_verified": 1, "refs_sha256": "__CHANGE_ME_64_HEX__"},
+  "service_readiness": {"https_probe_passed": true, "background_worker_ready": true},
+  "passed": true
+}

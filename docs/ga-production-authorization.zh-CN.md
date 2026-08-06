@@ -240,13 +240,69 @@ python backend/scripts/collect_ga_target_network.py \
    任意 `0.0.0.0/0`/`::/0` egress，即使汇总字段仍自报 PASS。该文件必须先于第 6
    步的目标 HA disruption 生成，并由 HA v2 报告内容寻址绑定。配置文件、server
    dry-run、本地 kind 回执或旧 v1 报告都不是目标运行证据。
-9. 按 `ops/ga/recovery-evidence.example.json` 从异地、加密、不可变备份介质对
-   非生产恢复目标进行破坏性恢复。验证备份签名、manifest 摘要、外部解密密钥、
-   MySQL 行、对象和 Git 仓库，并记录 RPO/RTO；禁止覆盖生产数据。`backup` 必须
-   引用 `seal-backup.sh` 生成的原始 `manifest.json`、`.sig`、备份 signer identity
-   与 allowed-signers。生产门禁会在 namespace `duckdock-backup` 实际验签，并解析
-   manifest 的 release commit、age 加密方式和三类 artifact digest/size；不接受
-   `signature_verified: true` 自报字段。
+9. 使用 `collect_ga_target_recovery.py` 从异地、加密、不可变备份介质对明确命名的
+   非生产恢复目标做破坏性恢复，输出 `duckdock-ga-recovery-evidence-v2`。`backup`
+   必须引用 `seal-backup.sh` 生成的原始 `manifest.json`、`.sig`、备份 signer identity
+   与 allowed-signers；采集器和生产门禁都会在 namespace `duckdock-backup` 实际验签，
+   解析 release commit、age 加密方式及三类 artifact digest/size。
+
+   发布机构先从 `ops/ga/recovery-trust-policy.example.json` 建立只读、内容寻址的
+   恢复策略，分别授权存储服务、恢复执行人和独立验证人。三类精确 identity 与公钥
+   必须互不重合；策略固定 `minio/mysql/repos` 三个加密 artifact、
+   `mysql/repositories/object-store` 三个恢复阶段和至少 30 天保留期。采集器启动前
+   六个 receipt/signature 路径必须不存在：
+
+   - 存储集成从供应商 API 取得对象 version ID、digest、size、Object Lock mode 与
+     retained-until，写入 `duckdock-ga-backup-media-receipt-v1` 并由服务身份签名；
+   - 恢复执行工作流只在已确认的 `recovery`/`staging` 环境执行，记录三个阶段的
+     command ID、exit code 和脱敏日志 SHA-256，写入
+     `duckdock-ga-restore-execution-receipt-v1` 并由执行人签名；
+   - 与执行人独立的验证方核对 MySQL 行集摘要、对象清单摘要、Git refs 摘要、HTTPS
+     与后台 worker 就绪，写入 `duckdock-ga-recovery-verification-receipt-v1` 并签名。
+
+```bash
+ssh-keygen -Y sign -f /release-authority/storage-key \
+  -n duckdock-backup-media-receipt /secure/evidence/backup-media.json
+ssh-keygen -Y sign -f /release-authority/restore-executor-key \
+  -n duckdock-restore-execution-receipt /secure/evidence/restore-execution.json
+ssh-keygen -Y sign -f /release-authority/recovery-verifier-key \
+  -n duckdock-recovery-verification-receipt /secure/evidence/recovery-verification.json
+```
+
+```bash
+python backend/scripts/collect_ga_target_recovery.py \
+  --target-environment customer-production \
+  --restore-target-environment customer-recovery-staging \
+  --acknowledge-destructive-restore customer-recovery-staging \
+  --source-commit "$DUCKDOCK_GA_SOURCE_COMMIT" \
+  --backend-image "$DUCKDOCK_GA_BACKEND_IMAGE" \
+  --frontend-image "$DUCKDOCK_GA_FRONTEND_IMAGE" \
+  --exercise-id ga-recovery-20260806 \
+  --maximum-rpo-seconds 900 \
+  --maximum-rto-seconds 14400 \
+  --storage-provider "AWS S3" \
+  --backup-manifest /secure/evidence/manifest.json \
+  --backup-signature /secure/evidence/manifest.json.sig \
+  --backup-allowed-signers /release-authority/backup-allowed-signers \
+  --backup-signer-identity backup-operator@example.com \
+  --recovery-policy /release-authority/duckdock-recovery-policy.json \
+  --storage-signer-identity backup-storage@example.com \
+  --restore-signer-identity restore-executor@example.com \
+  --verifier-signer-identity recovery-verifier@example.com \
+  --media-receipt /secure/evidence/backup-media.json \
+  --media-signature /secure/evidence/backup-media.json.sig \
+  --restore-receipt /secure/evidence/restore-execution.json \
+  --restore-signature /secure/evidence/restore-execution.json.sig \
+  --verification-receipt /secure/evidence/recovery-verification.json \
+  --verification-signature /secure/evidence/recovery-verification.json.sig \
+  --output /secure/evidence/target-recovery.json
+```
+
+   采集器不接收解密密钥、数据库密码或对象存储 credential。它会核对异地对象摘要/
+   大小与已签 manifest 完全一致，并从 `recovery_point_at → failure_injected_at →
+   independent verification completed_at` 重算 RPO/RTO。旧 v1、手填 RPO/RTO、短于
+   30 天的 Object Lock、生产/恢复 target 相同、角色/公钥复用、预先存在的 receipt、
+   自报 `signature_verified` 或修改签名后内容都不能通过。
 10. 使用 `collect_ga_target_alerting.py` 主动触发并恢复唯一的目标 Alertmanager
     告警。发布机构先从 `ops/ga/alerting-trust-policy.example.json` 建立独立、只读、
     内容寻址的告警信任策略：`delivery_identities` 是能从通知供应商取得真实投递回执

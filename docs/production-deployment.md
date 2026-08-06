@@ -208,6 +208,16 @@ a copied `signature_verified` boolean is rejected.
 The legacy three-plaintext-file flags remain available only for staging and old
 backup migration; they cannot pass the GA offsite/encryption gate.
 
+For the GA target exercise, start
+`backend/scripts/collect_ga_target_recovery.py` before running the destructive
+restore. It requires an explicitly different non-production target and three
+role-separated signed receipts: storage-side object versions/Object Lock,
+restore-stage exit codes/log digests, and independent MySQL/object/Git/service
+verification. The collector never accepts the age key, database password or
+object-store credentials. It matches every offsite object digest/size back to
+the signed manifest and derives RPO/RTO from the signed timeline. See
+`docs/ga-production-authorization.zh-CN.md` for the command and receipt schemas.
+
 After restore:
 
 ```bash

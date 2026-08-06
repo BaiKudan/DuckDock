@@ -293,8 +293,8 @@ jobs:
           python3 backend/scripts/verify_ga_production_authorization.py \
             ops/ga/production-authorization.example.json \
             --lint
-          for evidence_template in ops/ga/*-evidence.example.json; do
-            python3 -m json.tool "$evidence_template" >/dev/null
+          for ga_template in ops/ga/*.example.json; do
+            python3 -m json.tool "$ga_template" >/dev/null
           done
 
       - name: Validate production operations scripts

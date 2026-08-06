@@ -39,7 +39,13 @@ python backend/scripts/verify_ga_production_authorization.py \
 - `alert-delivery-receipt.example.json`、`oncall-acknowledgement.example.json`：
   通知集成与实际值班人员在演练期间分别写入并签名的精确原始协议；每个 delivery
   receipt 至少包含两个不同 channel/receiver/provider receipt；
-- `recovery-evidence.example.json`：签名备份与非生产破坏性恢复；
+- `recovery-evidence.example.json`：`collect_ga_target_recovery.py` 输出的 v2 异地
+  不可变介质与非生产破坏性恢复报告；RPO/RTO 从签名时间线重算，禁止手填；
+- `recovery-trust-policy.example.json`：存储服务、恢复执行人和独立验证人三类互斥
+  身份及公钥的内容寻址策略，并固定三类 artifact/stage 与至少 30 天保留期；
+- `backup-media-receipt.example.json`、`restore-execution-receipt.example.json`、
+  `recovery-verification-receipt.example.json`：分别保留对象版本/Object Lock、实际
+  恢复阶段 exit code/日志摘要，以及 MySQL/对象/Git/服务就绪的独立验证结果；
 - `independent-security-evidence.example.json`：独立渗透/代码审查和签名报告；
 - `high-availability-evidence.example.json`：目标多故障域故障注入。
 - `state-services-ha-evidence.example.json`：托管 MySQL、Redis、对象存储与 RWX

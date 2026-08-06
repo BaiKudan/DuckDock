@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import ipaddress
 import json
+import math
 import re
 import subprocess
 import sys
@@ -41,6 +42,18 @@ SECRET_ROTATION_SIGNATURE_NAMESPACE = "duckdock-secret-rotation-receipt"
 SECRET_VERIFICATION_SIGNATURE_NAMESPACE = "duckdock-secret-verification-receipt"
 SECRET_WORKLOAD_COMPONENTS = ("backend", "worker", "beat")
 REQUIRED_SECRET_CLASSES = ("application-signing", "database", "object-store")
+RECOVERY_SCHEMA_VERSION = "duckdock-ga-recovery-evidence-v2"
+RECOVERY_POLICY_SCHEMA_VERSION = "duckdock-ga-recovery-trust-policy-v1"
+BACKUP_MEDIA_SCHEMA_VERSION = "duckdock-ga-backup-media-receipt-v1"
+RESTORE_EXECUTION_SCHEMA_VERSION = "duckdock-ga-restore-execution-receipt-v1"
+RECOVERY_VERIFICATION_SCHEMA_VERSION = "duckdock-ga-recovery-verification-receipt-v1"
+BACKUP_MEDIA_SIGNATURE_NAMESPACE = "duckdock-backup-media-receipt"
+RESTORE_EXECUTION_SIGNATURE_NAMESPACE = "duckdock-restore-execution-receipt"
+RECOVERY_VERIFICATION_SIGNATURE_NAMESPACE = "duckdock-recovery-verification-receipt"
+RECOVERY_REQUIRED_ARTIFACTS = ("minio.tar.gz.age", "mysql.sql.gz.age", "repos.tar.gz.age")
+RECOVERY_REQUIRED_STAGES = ("mysql", "repositories", "object-store")
+RECOVERY_ENVIRONMENT_CLASSES = {"recovery", "staging"}
+RECOVERY_MINIMUM_RETENTION = timedelta(days=30)
 REQUIRED_CONTROLS = {
     "application_readiness",
     "tls",
@@ -275,6 +288,7 @@ def _contains_secret_material_key(value: Any) -> bool:
         "client_secret",
         "credential",
         "credential_value",
+        "decryption_key",
         "password",
         "password_value",
         "plaintext",
@@ -283,6 +297,7 @@ def _contains_secret_material_key(value: Any) -> bool:
         "raw_secret",
         "secret_value",
         "secret_values",
+        "session_token",
         "token",
         "token_value",
     }
@@ -1438,6 +1453,374 @@ def _secret_kubernetes_rotation_valid(value: Any, *, secret_name: Any) -> bool:
     )
 
 
+def _safe_offsite_uri(value: Any) -> bool:
+    if not _meaningful_string(value):
+        return False
+    parsed = urlparse(value)
+    return (
+        parsed.scheme == "s3"
+        and bool(parsed.netloc)
+        and bool(parsed.path.strip("/"))
+        and parsed.username is None
+        and parsed.password is None
+        and not parsed.query
+        and not parsed.fragment
+        and "@" not in value
+    )
+
+
+def _recovery_policy_context(
+    reference: Any,
+    *,
+    authorization_path: Path,
+    storage_provider: Any,
+) -> tuple[bool, Path | None, set[str], set[str], set[str], str]:
+    if not isinstance(reference, dict):
+        return False, None, set(), set(), set(), "missing recovery trust policy reference"
+    policy_path = _resolve_file(reference.get("path"), authorization_path)
+    trust_path_from_reference = _resolve_file(
+        reference.get("allowed_signers_path"), authorization_path
+    )
+    policy: dict[str, Any] = {}
+    if policy_path is not None and policy_path.is_file():
+        try:
+            loaded = json.loads(policy_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            loaded = None
+        if isinstance(loaded, dict):
+            policy = loaded
+    expected_policy_keys = {
+        "schema_version",
+        "policy_id",
+        "organization",
+        "allowed_signers_path",
+        "allowed_signers_sha256",
+        "approved_storage_providers",
+        "storage_identities",
+        "restore_executor_identities",
+        "verification_identities",
+        "required_artifacts",
+        "required_restore_stages",
+        "minimum_retention_days",
+    }
+    expected_reference_keys = {
+        "path",
+        "sha256",
+        "policy_id",
+        "allowed_signers_path",
+        "allowed_signers_sha256",
+    }
+
+    def exact_identity_set(value: Any) -> set[str]:
+        if not (
+            isinstance(value, list)
+            and bool(value)
+            and all(_meaningful_string(item) for item in value)
+            and len(value) == len(set(value))
+        ):
+            return set()
+        return {str(item) for item in value}
+
+    storage_identities = exact_identity_set(policy.get("storage_identities"))
+    restore_identities = exact_identity_set(policy.get("restore_executor_identities"))
+    verification_identities = exact_identity_set(policy.get("verification_identities"))
+    identity_sets = (storage_identities, restore_identities, verification_identities)
+    identities_disjoint = all(
+        not identity_sets[left].intersection(identity_sets[right])
+        for left in range(len(identity_sets))
+        for right in range(left + 1, len(identity_sets))
+    )
+    providers = policy.get("approved_storage_providers")
+    providers_valid = (
+        isinstance(providers, list)
+        and bool(providers)
+        and all(_meaningful_string(item) for item in providers)
+        and len(providers) == len(set(providers))
+        and storage_provider in providers
+    )
+    policy_digest = (
+        _sha256(policy_path) if policy_path is not None and policy_path.is_file() else "missing"
+    )
+    policy_trust_path = (
+        _resolve_file(policy.get("allowed_signers_path"), policy_path)
+        if policy_path is not None
+        else None
+    )
+    trust_digest = (
+        _sha256(policy_trust_path)
+        if policy_trust_path is not None and policy_trust_path.is_file()
+        else "missing"
+    )
+    signer_bindings: dict[str, set[str]] | None = None
+    signer_detail = "missing trust store"
+    if policy_trust_path is not None and policy_trust_path.is_file():
+        signer_bindings, signer_detail = _allowed_signer_bindings(policy_trust_path)
+    configured_identities = set().union(*identity_sets)
+    valid = (
+        set(reference) == expected_reference_keys
+        and bool(DIGEST_RE.fullmatch(str(reference.get("sha256", ""))))
+        and policy_digest == reference.get("sha256")
+        and set(policy) == expected_policy_keys
+        and policy.get("schema_version") == RECOVERY_POLICY_SCHEMA_VERSION
+        and _meaningful_string(policy.get("policy_id"))
+        and policy.get("policy_id") == reference.get("policy_id")
+        and _meaningful_string(policy.get("organization"))
+        and providers_valid
+        and all(identity_sets)
+        and identities_disjoint
+        and policy.get("required_artifacts") == list(RECOVERY_REQUIRED_ARTIFACTS)
+        and policy.get("required_restore_stages") == list(RECOVERY_REQUIRED_STAGES)
+        and policy.get("minimum_retention_days") == RECOVERY_MINIMUM_RETENTION.days
+        and policy_trust_path is not None
+        and trust_path_from_reference == policy_trust_path
+        and bool(DIGEST_RE.fullmatch(str(reference.get("allowed_signers_sha256", ""))))
+        and trust_digest == reference.get("allowed_signers_sha256")
+        and trust_digest == policy.get("allowed_signers_sha256")
+        and signer_bindings is not None
+        and set(signer_bindings) == configured_identities
+    )
+    detail = (
+        f"policy={policy_path or 'missing'}, digest={policy_digest}, "
+        f"trust={policy_trust_path or 'missing'}, trust_digest={trust_digest}, {signer_detail}"
+    )
+    return (
+        valid,
+        policy_trust_path,
+        storage_identities,
+        restore_identities,
+        verification_identities,
+        detail,
+    )
+
+
+def _backup_media_receipt_valid(
+    value: Any,
+    *,
+    exercise_id: Any,
+    target_environment: Any,
+    storage_provider: Any,
+    manifest_sha256: Any,
+) -> bool:
+    expected_keys = {
+        "schema_version",
+        "exercise_id",
+        "target_environment",
+        "storage_provider",
+        "backup_manifest_sha256",
+        "backup_set_id",
+        "remote_uri",
+        "recovery_point_at",
+        "artifact_versions",
+        "object_lock",
+        "completed_at",
+    }
+    if not isinstance(value, dict):
+        return False
+    completed = _parse_time(value.get("completed_at"))
+    recovery_point = _parse_time(value.get("recovery_point_at"))
+    artifacts = value.get("artifact_versions")
+    artifact_names = [
+        item.get("name") for item in artifacts or [] if isinstance(item, dict)
+    ]
+    version_ids = [
+        item.get("version_id") for item in artifacts or [] if isinstance(item, dict)
+    ]
+    artifact_retention = [
+        _parse_time(item.get("retained_until"))
+        for item in artifacts or []
+        if isinstance(item, dict)
+    ]
+    lock = value.get("object_lock")
+    lock_observed = _parse_time(lock.get("observed_at")) if isinstance(lock, dict) else None
+    retention_until = (
+        _parse_time(lock.get("retention_until")) if isinstance(lock, dict) else None
+    )
+    return (
+        set(value) == expected_keys
+        and value.get("schema_version") == BACKUP_MEDIA_SCHEMA_VERSION
+        and value.get("exercise_id") == exercise_id
+        and value.get("target_environment") == target_environment
+        and value.get("storage_provider") == storage_provider
+        and value.get("backup_manifest_sha256") == manifest_sha256
+        and _meaningful_string(value.get("backup_set_id"))
+        and _safe_offsite_uri(value.get("remote_uri"))
+        and recovery_point is not None
+        and completed is not None
+        and recovery_point <= completed
+        and isinstance(artifacts, list)
+        and len(artifacts) == len(RECOVERY_REQUIRED_ARTIFACTS)
+        and artifact_names == list(RECOVERY_REQUIRED_ARTIFACTS)
+        and len(version_ids) == len(set(version_ids))
+        and all(
+            isinstance(item, dict)
+            and set(item)
+            == {"name", "version_id", "etag", "sha256", "size_bytes", "retained_until"}
+            and _meaningful_string(item.get("version_id"))
+            and _meaningful_string(item.get("etag"))
+            and bool(DIGEST_RE.fullmatch(str(item.get("sha256", ""))))
+            and isinstance(item.get("size_bytes"), int)
+            and not isinstance(item.get("size_bytes"), bool)
+            and item["size_bytes"] > 0
+            for item in artifacts
+        )
+        and len(artifact_retention) == len(RECOVERY_REQUIRED_ARTIFACTS)
+        and all(item is not None for item in artifact_retention)
+        and isinstance(lock, dict)
+        and set(lock)
+        == {"enabled", "mode", "retention_until", "provider_receipt_id", "observed_at"}
+        and lock.get("enabled") is True
+        and lock.get("mode") in {"COMPLIANCE", "GOVERNANCE"}
+        and _meaningful_string(lock.get("provider_receipt_id"))
+        and lock_observed is not None
+        and retention_until is not None
+        and lock_observed <= completed
+        and retention_until >= completed + RECOVERY_MINIMUM_RETENTION
+        and all(item >= retention_until for item in artifact_retention if item is not None)
+        and not _contains_secret_material_key(value)
+    )
+
+
+def _restore_execution_receipt_valid(
+    value: Any,
+    *,
+    exercise_id: Any,
+    production_target_environment: Any,
+    restore_target_environment: Any,
+    manifest_sha256: Any,
+) -> bool:
+    expected_keys = {
+        "schema_version",
+        "exercise_id",
+        "production_target_environment",
+        "restore_target_environment",
+        "environment_class",
+        "backup_manifest_sha256",
+        "restore_receipt_id",
+        "destructive_restore",
+        "production_data_overwrite",
+        "failure_injected_at",
+        "started_at",
+        "completed_at",
+        "stages",
+    }
+    if not isinstance(value, dict):
+        return False
+    failure_at = _parse_time(value.get("failure_injected_at"))
+    started = _parse_time(value.get("started_at"))
+    completed = _parse_time(value.get("completed_at"))
+    stages = value.get("stages")
+    stage_names = [item.get("name") for item in stages or [] if isinstance(item, dict)]
+    stage_times = [
+        _parse_time(item.get("completed_at"))
+        for item in stages or []
+        if isinstance(item, dict)
+    ]
+    command_ids = [
+        item.get("command_id") for item in stages or [] if isinstance(item, dict)
+    ]
+    return (
+        set(value) == expected_keys
+        and value.get("schema_version") == RESTORE_EXECUTION_SCHEMA_VERSION
+        and value.get("exercise_id") == exercise_id
+        and value.get("production_target_environment") == production_target_environment
+        and value.get("restore_target_environment") == restore_target_environment
+        and restore_target_environment != production_target_environment
+        and value.get("environment_class") in RECOVERY_ENVIRONMENT_CLASSES
+        and value.get("backup_manifest_sha256") == manifest_sha256
+        and _meaningful_string(value.get("restore_receipt_id"))
+        and value.get("destructive_restore") is True
+        and value.get("production_data_overwrite") is False
+        and failure_at is not None
+        and started is not None
+        and completed is not None
+        and failure_at <= started <= completed
+        and isinstance(stages, list)
+        and len(stages) == len(RECOVERY_REQUIRED_STAGES)
+        and stage_names == list(RECOVERY_REQUIRED_STAGES)
+        and len(command_ids) == len(set(command_ids))
+        and all(
+            isinstance(item, dict)
+            and set(item) == {"name", "command_id", "exit_code", "log_sha256", "completed_at"}
+            and _meaningful_string(item.get("command_id"))
+            and item.get("exit_code") == 0
+            and bool(DIGEST_RE.fullmatch(str(item.get("log_sha256", ""))))
+            for item in stages
+        )
+        and len(stage_times) == len(RECOVERY_REQUIRED_STAGES)
+        and all(item is not None and started <= item <= completed for item in stage_times)
+        and stage_times == sorted(stage_times)
+        and not _contains_secret_material_key(value)
+    )
+
+
+def _recovery_verification_receipt_valid(
+    value: Any,
+    *,
+    exercise_id: Any,
+    restore_target_environment: Any,
+    manifest_sha256: Any,
+) -> bool:
+    expected_keys = {
+        "schema_version",
+        "exercise_id",
+        "restore_target_environment",
+        "environment_class",
+        "backup_manifest_sha256",
+        "verification_receipt_id",
+        "started_at",
+        "completed_at",
+        "mysql",
+        "object_store",
+        "git",
+        "service_readiness",
+        "passed",
+    }
+    if not isinstance(value, dict):
+        return False
+    started = _parse_time(value.get("started_at"))
+    completed = _parse_time(value.get("completed_at"))
+    mysql = value.get("mysql")
+    object_store = value.get("object_store")
+    git = value.get("git")
+    readiness = value.get("service_readiness")
+    return (
+        set(value) == expected_keys
+        and value.get("schema_version") == RECOVERY_VERIFICATION_SCHEMA_VERSION
+        and value.get("exercise_id") == exercise_id
+        and value.get("restore_target_environment") == restore_target_environment
+        and value.get("environment_class") in RECOVERY_ENVIRONMENT_CLASSES
+        and value.get("backup_manifest_sha256") == manifest_sha256
+        and _meaningful_string(value.get("verification_receipt_id"))
+        and started is not None
+        and completed is not None
+        and started <= completed
+        and isinstance(mysql, dict)
+        and set(mysql) == {"rows_verified", "dataset_sha256"}
+        and isinstance(mysql.get("rows_verified"), int)
+        and not isinstance(mysql.get("rows_verified"), bool)
+        and mysql["rows_verified"] > 0
+        and bool(DIGEST_RE.fullmatch(str(mysql.get("dataset_sha256", ""))))
+        and isinstance(object_store, dict)
+        and set(object_store) == {"objects_verified", "inventory_sha256"}
+        and isinstance(object_store.get("objects_verified"), int)
+        and not isinstance(object_store.get("objects_verified"), bool)
+        and object_store["objects_verified"] > 0
+        and bool(DIGEST_RE.fullmatch(str(object_store.get("inventory_sha256", ""))))
+        and isinstance(git, dict)
+        and set(git) == {"repositories_verified", "refs_sha256"}
+        and isinstance(git.get("repositories_verified"), int)
+        and not isinstance(git.get("repositories_verified"), bool)
+        and git["repositories_verified"] > 0
+        and bool(DIGEST_RE.fullmatch(str(git.get("refs_sha256", ""))))
+        and isinstance(readiness, dict)
+        and set(readiness) == {"https_probe_passed", "background_worker_ready"}
+        and readiness.get("https_probe_passed") is True
+        and readiness.get("background_worker_ready") is True
+        and value.get("passed") is True
+        and not _contains_secret_material_key(value)
+    )
+
+
 def _alertmanager_api_observation(
     value: Any,
     *,
@@ -1666,18 +2049,34 @@ def _backup_manifest_matches_release(
     if not isinstance(artifacts, dict) or set(artifacts) != expected_names:
         return False
     return (
-        manifest.get("schema_version") == "duckdock-secure-backup-v1"
+        set(manifest)
+        == {"schema_version", "created_at", "timestamp", "release_commit", "encryption", "artifacts"}
+        and manifest.get("schema_version") == "duckdock-secure-backup-v1"
         and manifest.get("release_commit") == release_commit
         and manifest.get("encryption") == "age-x25519"
         and _parse_time(manifest.get("created_at")) is not None
+        and isinstance(manifest.get("timestamp"), str)
+        and bool(re.fullmatch(r"[0-9]{8}-[0-9]{6}", manifest["timestamp"]))
         and all(
             isinstance(artifacts.get(name), dict)
+            and set(artifacts[name])
+            == {
+                "encrypted_sha256",
+                "encrypted_size_bytes",
+                "plaintext_sha256",
+                "plaintext_size_bytes",
+            }
             and bool(DIGEST_RE.fullmatch(str(artifacts[name].get("encrypted_sha256", ""))))
             and bool(DIGEST_RE.fullmatch(str(artifacts[name].get("plaintext_sha256", ""))))
-            and _positive_int(artifacts[name].get("encrypted_size_bytes"))
-            and _positive_int(artifacts[name].get("plaintext_size_bytes"))
+            and isinstance(artifacts[name].get("encrypted_size_bytes"), int)
+            and not isinstance(artifacts[name].get("encrypted_size_bytes"), bool)
+            and artifacts[name]["encrypted_size_bytes"] > 0
+            and isinstance(artifacts[name].get("plaintext_size_bytes"), int)
+            and not isinstance(artifacts[name].get("plaintext_size_bytes"), bool)
+            and artifacts[name]["plaintext_size_bytes"] > 0
             for name in expected_names
         )
+        and not _contains_secret_material_key(manifest)
     )
 
 
@@ -2731,16 +3130,6 @@ def evaluate(
         if isinstance(recovery_report, dict) and isinstance(recovery_report.get("backup"), dict)
         else {}
     )
-    restore_report = (
-        recovery_report.get("restore")
-        if isinstance(recovery_report, dict) and isinstance(recovery_report.get("restore"), dict)
-        else {}
-    )
-    verification_report = (
-        recovery_report.get("verification")
-        if isinstance(recovery_report, dict) and isinstance(recovery_report.get("verification"), dict)
-        else {}
-    )
     signed_backup_ok, signed_backup_detail = _verify_signed_evidence_file(
         backup_report,
         authorization_path=authorization_path,
@@ -2762,6 +3151,223 @@ def evaluate(
         expected="release-bound duckdock-secure-backup-v1 manifest with valid duckdock-backup OpenSSH signature",
         detail="The gate verifies the retained manifest bytes, signer identity, encrypted/plaintext artifact metadata and exact release commit; a signature_verified boolean is not evidence.",
     )
+    storage_provider = (
+        recovery_report.get("storage_provider") if isinstance(recovery_report, dict) else None
+    )
+    (
+        recovery_policy_ok,
+        recovery_trust_store,
+        storage_identities,
+        restore_identities,
+        verification_identities,
+        recovery_policy_detail,
+    ) = _recovery_policy_context(
+        recovery_report.get("recovery_policy") if isinstance(recovery_report, dict) else None,
+        authorization_path=authorization_path,
+        storage_provider=storage_provider,
+    )
+    media_embedded = (
+        recovery_report.get("media_receipt") if isinstance(recovery_report, dict) else None
+    )
+    restore_embedded = (
+        recovery_report.get("restore_receipt") if isinstance(recovery_report, dict) else None
+    )
+    verification_embedded = (
+        recovery_report.get("verification_receipt")
+        if isinstance(recovery_report, dict)
+        else None
+    )
+    media_signature_ok, media_receipt, media_signature_detail = _verified_embedded_receipt(
+        media_embedded,
+        authorization_path=authorization_path,
+        allowed_signers=recovery_trust_store,
+        allowed_identities=storage_identities,
+        namespace=BACKUP_MEDIA_SIGNATURE_NAMESPACE,
+    )
+    restore_signature_ok, restore_receipt, restore_signature_detail = (
+        _verified_embedded_receipt(
+            restore_embedded,
+            authorization_path=authorization_path,
+            allowed_signers=recovery_trust_store,
+            allowed_identities=restore_identities,
+            namespace=RESTORE_EXECUTION_SIGNATURE_NAMESPACE,
+        )
+    )
+    verification_signature_ok, verification_receipt, verification_signature_detail = (
+        _verified_embedded_receipt(
+            verification_embedded,
+            authorization_path=authorization_path,
+            allowed_signers=recovery_trust_store,
+            allowed_identities=verification_identities,
+            namespace=RECOVERY_VERIFICATION_SIGNATURE_NAMESPACE,
+        )
+    )
+    exercise = (
+        recovery_report.get("exercise")
+        if isinstance(recovery_report, dict) and isinstance(recovery_report.get("exercise"), dict)
+        else {}
+    )
+    exercise_id = exercise.get("exercise_id")
+    restore_target_environment = exercise.get("restore_target_environment")
+    manifest_digest = backup_report.get("manifest_sha256")
+    media_receipt_valid = _backup_media_receipt_valid(
+        media_receipt,
+        exercise_id=exercise_id,
+        target_environment=target.get("target_id"),
+        storage_provider=storage_provider,
+        manifest_sha256=manifest_digest,
+    )
+    restore_receipt_valid = _restore_execution_receipt_valid(
+        restore_receipt,
+        exercise_id=exercise_id,
+        production_target_environment=target.get("target_id"),
+        restore_target_environment=restore_target_environment,
+        manifest_sha256=manifest_digest,
+    )
+    verification_receipt_valid = _recovery_verification_receipt_valid(
+        verification_receipt,
+        exercise_id=exercise_id,
+        restore_target_environment=restore_target_environment,
+        manifest_sha256=manifest_digest,
+    )
+    role_signers = [
+        embedded.get("signed_evidence", {}).get("signer_identity")
+        if isinstance(embedded, dict)
+        and isinstance(embedded.get("signed_evidence"), dict)
+        else None
+        for embedded in (media_embedded, restore_embedded, verification_embedded)
+    ]
+    role_signers_distinct = (
+        all(_meaningful_string(identity) for identity in role_signers)
+        and len(set(role_signers)) == 3
+    )
+    manifest_created = (
+        _parse_time(backup_manifest.get("created_at"))
+        if isinstance(backup_manifest, dict)
+        else None
+    )
+    recovery_point = (
+        _parse_time(media_receipt.get("recovery_point_at"))
+        if isinstance(media_receipt, dict)
+        else None
+    )
+    media_completed = (
+        _parse_time(media_receipt.get("completed_at"))
+        if isinstance(media_receipt, dict)
+        else None
+    )
+    failure_at = (
+        _parse_time(restore_receipt.get("failure_injected_at"))
+        if isinstance(restore_receipt, dict)
+        else None
+    )
+    restore_started = (
+        _parse_time(restore_receipt.get("started_at"))
+        if isinstance(restore_receipt, dict)
+        else None
+    )
+    restore_completed = (
+        _parse_time(restore_receipt.get("completed_at"))
+        if isinstance(restore_receipt, dict)
+        else None
+    )
+    verification_started = (
+        _parse_time(verification_receipt.get("started_at"))
+        if isinstance(verification_receipt, dict)
+        else None
+    )
+    verification_completed = (
+        _parse_time(verification_receipt.get("completed_at"))
+        if isinstance(verification_receipt, dict)
+        else None
+    )
+    exercise_started = _parse_time(exercise.get("started_at"))
+    exercise_completed = _parse_time(exercise.get("completed_at"))
+    report_observed = (
+        _parse_time(recovery_report.get("observed_at"))
+        if isinstance(recovery_report, dict)
+        else None
+    )
+    recovery_timeline = (
+        all(
+            value is not None
+            for value in (
+                recovery_point,
+                manifest_created,
+                media_completed,
+                failure_at,
+                restore_started,
+                restore_completed,
+                verification_started,
+                verification_completed,
+                exercise_started,
+                exercise_completed,
+                report_observed,
+            )
+        )
+        and recovery_point <= manifest_created <= media_completed
+        and recovery_point <= failure_at <= restore_started <= restore_completed
+        and restore_completed <= verification_started <= verification_completed
+        and exercise_started - timedelta(minutes=5) <= media_completed
+        and exercise_started - timedelta(minutes=5) <= restore_completed
+        and exercise_started - timedelta(minutes=5) <= verification_completed
+        and verification_completed <= exercise_completed <= report_observed
+    )
+    measured_rpo = (
+        math.ceil((failure_at - recovery_point).total_seconds())
+        if failure_at is not None and recovery_point is not None
+        else -1
+    )
+    measured_rto = (
+        math.ceil((verification_completed - failure_at).total_seconds())
+        if verification_completed is not None and failure_at is not None
+        else -1
+    )
+    mysql_rows = (
+        verification_receipt.get("mysql", {}).get("rows_verified")
+        if isinstance(verification_receipt, dict)
+        and isinstance(verification_receipt.get("mysql"), dict)
+        else None
+    )
+    objects_verified = (
+        verification_receipt.get("object_store", {}).get("objects_verified")
+        if isinstance(verification_receipt, dict)
+        and isinstance(verification_receipt.get("object_store"), dict)
+        else None
+    )
+    git_repository_count = (
+        verification_receipt.get("git", {}).get("repositories_verified")
+        if isinstance(verification_receipt, dict)
+        and isinstance(verification_receipt.get("git"), dict)
+        else None
+    )
+    media_artifacts = (
+        {
+            item.get("name"): item
+            for item in media_receipt.get("artifact_versions", [])
+            if isinstance(item, dict) and isinstance(item.get("name"), str)
+        }
+        if isinstance(media_receipt, dict)
+        and isinstance(media_receipt.get("artifact_versions"), list)
+        else {}
+    )
+    manifest_artifacts = (
+        backup_manifest.get("artifacts")
+        if isinstance(backup_manifest, dict)
+        and isinstance(backup_manifest.get("artifacts"), dict)
+        else {}
+    )
+    offsite_artifacts_match = (
+        set(media_artifacts) == set(RECOVERY_REQUIRED_ARTIFACTS)
+        and set(manifest_artifacts) == set(RECOVERY_REQUIRED_ARTIFACTS)
+        and all(
+            media_artifacts[name].get("sha256")
+            == manifest_artifacts[name].get("encrypted_sha256")
+            and media_artifacts[name].get("size_bytes")
+            == manifest_artifacts[name].get("encrypted_size_bytes")
+            for name in RECOVERY_REQUIRED_ARTIFACTS
+        )
+    )
     recovery_claims_match = isinstance(recovery_report, dict) and all(
         recovery_report.get(key) == recovery.get(key)
         for key in (
@@ -2778,7 +3384,7 @@ def evaluate(
     recovery_report_matches = (
         _report_release_target_binding(
             recovery_report,
-            schema_version="duckdock-ga-recovery-evidence-v1",
+            schema_version=RECOVERY_SCHEMA_VERSION,
             status="PASSED",
             control=recovery,
             target=target,
@@ -2790,20 +3396,30 @@ def evaluate(
         and signed_backup_ok
         and backup_manifest_ok
         and backup_report.get("decryption_key_external") is True
-        and restore_report.get("destructive_restore") is True
-        and _meaningful_string(restore_report.get("target_environment"))
-        and restore_report.get("target_environment") != target.get("target_id")
-        and restore_report.get("production_data_overwrite") is False
-        and restore_report.get("integrity_digest_verified") is True
-        and _ordered_report_times(
-            restore_report.get("started_at"),
-            restore_report.get("completed_at"),
-            no_later_than=_control_observed_at(recovery),
-        )
-        and verification_report.get("mysql_rows_verified") == recovery.get("mysql_rows_verified")
-        and verification_report.get("objects_verified") == recovery.get("objects_verified")
-        and verification_report.get("git_repositories_verified") is recovery.get("git_repositories_verified")
-        and verification_report.get("passed") is True
+        and _meaningful_string(storage_provider)
+        and recovery_policy_ok
+        and media_signature_ok
+        and restore_signature_ok
+        and verification_signature_ok
+        and role_signers_distinct
+        and media_receipt_valid
+        and restore_receipt_valid
+        and verification_receipt_valid
+        and offsite_artifacts_match
+        and _meaningful_string(exercise_id)
+        and exercise.get("production_target_environment") == target.get("target_id")
+        and _meaningful_string(restore_target_environment)
+        and restore_target_environment != target.get("target_id")
+        and exercise.get("maximum_rpo_seconds") == target_rpo
+        and exercise.get("maximum_rto_seconds") == target_rto
+        and recovery_timeline
+        and recovery_report.get("rpo_seconds") == measured_rpo
+        and recovery_report.get("rto_seconds") == measured_rto
+        and recovery_report.get("mysql_rows_verified") == mysql_rows
+        and recovery_report.get("objects_verified") == objects_verified
+        and recovery_report.get("git_repositories_verified")
+        is (isinstance(git_repository_count, int) and git_repository_count > 0)
+        and not _contains_secret_material_key(recovery_report)
     )
     recovery_ok = (
         recovery.get("status") == "PASSED"
@@ -2823,7 +3439,13 @@ def evaluate(
         passed=recovery_ok,
         observed=f"status={recovery.get('status')}, RPO={recovery.get('rpo_seconds')}, RTO={recovery.get('rto_seconds')}",
         expected=f"offsite encrypted immutable restore; RPO<={target_rpo}s; RTO<={target_rto}s; DB/object/Git verified",
-        detail="The release-bound report must prove a signed offsite encrypted immutable backup and a destructive non-production restore with DB/object/Git integrity checks.",
+        detail=(
+            "The v2 collector must retain the signed backup manifest plus separate storage, restore "
+            "executor and independent verification receipts. RPO/RTO and offsite artifact identity "
+            "are recomputed from raw evidence. "
+            f"policy=({recovery_policy_detail}); media=({media_signature_detail}); "
+            f"restore=({restore_signature_detail}); verification=({verification_signature_detail})"
+        ),
     )
 
     capacity = controls["capacity"]
