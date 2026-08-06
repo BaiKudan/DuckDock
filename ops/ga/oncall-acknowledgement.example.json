@@ -1,0 +1,11 @@
+{
+  "schema_version": "duckdock-ga-oncall-acknowledgement-v1",
+  "exercise_id": "ga-20260806-001",
+  "target_environment": "__CHANGE_ME_TARGET_ID__",
+  "alert_name": "DuckDockGA_ga-20260806-001",
+  "receipt_id": "__CHANGE_ME_ACK_RECEIPT_ID__",
+  "schedule": "__CHANGE_ME_ONCALL_SCHEDULE__",
+  "acknowledged": true,
+  "acknowledged_by": "__CHANGE_ME_ONCALL_IDENTITY__",
+  "acknowledged_at": "2026-08-06T00:45:00Z"
+}

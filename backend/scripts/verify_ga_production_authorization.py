@@ -27,6 +27,12 @@ from urllib.parse import urlparse
 SCHEMA_VERSION = "duckdock-ga-production-authorization-v2"
 APPROVAL_POLICY_SCHEMA_VERSION = "duckdock-ga-approval-policy-v1"
 APPROVAL_STATEMENT_SCHEMA_VERSION = "duckdock-ga-approval-statement-v1"
+ALERTING_SCHEMA_VERSION = "duckdock-ga-alerting-evidence-v2"
+ALERTING_POLICY_SCHEMA_VERSION = "duckdock-ga-alerting-trust-policy-v1"
+ALERT_DELIVERY_SCHEMA_VERSION = "duckdock-ga-alert-delivery-receipt-v1"
+ONCALL_ACK_SCHEMA_VERSION = "duckdock-ga-oncall-acknowledgement-v1"
+ALERT_DELIVERY_SIGNATURE_NAMESPACE = "duckdock-alert-delivery-receipt"
+ONCALL_ACK_SIGNATURE_NAMESPACE = "duckdock-oncall-acknowledgement"
 REQUIRED_CONTROLS = {
     "application_readiness",
     "tls",
@@ -806,6 +812,372 @@ def _verify_policy_signed_evidence_file(
     )
 
 
+def _alerting_policy_context(
+    reference: Any,
+    *,
+    authorization_path: Path,
+    schedule: Any,
+) -> tuple[bool, dict[str, Any], Path | None, set[str], set[str], str]:
+    if not isinstance(reference, dict):
+        return False, {}, None, set(), set(), "missing alerting trust policy reference"
+    policy_path = _resolve_file(reference.get("path"), authorization_path)
+    trust_path_from_reference = _resolve_file(
+        reference.get("allowed_signers_path"), authorization_path
+    )
+    policy: dict[str, Any] = {}
+    if policy_path is not None and policy_path.is_file():
+        try:
+            loaded = json.loads(policy_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            loaded = None
+        if isinstance(loaded, dict):
+            policy = loaded
+    expected_policy_keys = {
+        "schema_version",
+        "policy_id",
+        "organization",
+        "allowed_signers_path",
+        "allowed_signers_sha256",
+        "delivery_identities",
+        "oncall_schedules",
+    }
+    expected_reference_keys = {
+        "path",
+        "sha256",
+        "policy_id",
+        "allowed_signers_path",
+        "allowed_signers_sha256",
+    }
+    delivery_raw = policy.get("delivery_identities")
+    schedules_raw = policy.get("oncall_schedules")
+    schedules_valid = isinstance(schedules_raw, dict) and bool(schedules_raw) and all(
+        _meaningful_string(name)
+        and isinstance(identities, list)
+        and bool(identities)
+        and all(_meaningful_string(identity) for identity in identities)
+        and len(identities) == len(set(identities))
+        for name, identities in schedules_raw.items()
+    )
+    oncall_identities = (
+        {str(identity) for identities in schedules_raw.values() for identity in identities}
+        if schedules_valid
+        else set()
+    )
+    delivery_identities = (
+        {str(identity) for identity in delivery_raw}
+        if isinstance(delivery_raw, list)
+        and delivery_raw
+        and all(_meaningful_string(identity) for identity in delivery_raw)
+        and len(delivery_raw) == len(set(delivery_raw))
+        else set()
+    )
+    selected_oncall = (
+        {str(identity) for identity in schedules_raw.get(schedule, [])}
+        if schedules_valid and isinstance(schedule, str) and schedule in schedules_raw
+        else set()
+    )
+    policy_digest = _sha256(policy_path) if policy_path is not None and policy_path.is_file() else "missing"
+    policy_trust_path = (
+        _resolve_file(policy.get("allowed_signers_path"), policy_path)
+        if policy_path is not None
+        else None
+    )
+    trust_digest = (
+        _sha256(policy_trust_path)
+        if policy_trust_path is not None and policy_trust_path.is_file()
+        else "missing"
+    )
+    signer_bindings: dict[str, set[str]] | None = None
+    signer_detail = "missing trust store"
+    if policy_trust_path is not None and policy_trust_path.is_file():
+        signer_bindings, signer_detail = _allowed_signer_bindings(policy_trust_path)
+    configured_identities = delivery_identities.union(oncall_identities)
+    valid = (
+        set(reference) == expected_reference_keys
+        and bool(DIGEST_RE.fullmatch(str(reference.get("sha256", ""))))
+        and policy_digest == reference.get("sha256")
+        and set(policy) == expected_policy_keys
+        and policy.get("schema_version") == ALERTING_POLICY_SCHEMA_VERSION
+        and _meaningful_string(policy.get("policy_id"))
+        and policy.get("policy_id") == reference.get("policy_id")
+        and _meaningful_string(policy.get("organization"))
+        and bool(delivery_identities)
+        and schedules_valid
+        and bool(selected_oncall)
+        and not delivery_identities.intersection(oncall_identities)
+        and policy_trust_path is not None
+        and trust_path_from_reference == policy_trust_path
+        and bool(DIGEST_RE.fullmatch(str(reference.get("allowed_signers_sha256", ""))))
+        and trust_digest == reference.get("allowed_signers_sha256")
+        and trust_digest == policy.get("allowed_signers_sha256")
+        and signer_bindings is not None
+        and set(signer_bindings) == configured_identities
+    )
+    detail = (
+        f"policy={policy_path or 'missing'}, digest={policy_digest}, "
+        f"trust={policy_trust_path or 'missing'}, trust_digest={trust_digest}, {signer_detail}"
+    )
+    return valid, policy, policy_trust_path, delivery_identities, selected_oncall, detail
+
+
+def _verified_alerting_receipt(
+    embedded: Any,
+    *,
+    authorization_path: Path,
+    allowed_signers: Path | None,
+    allowed_identities: set[str],
+    namespace: str,
+) -> tuple[bool, dict[str, Any] | None, str]:
+    if not isinstance(embedded, dict):
+        return False, None, "missing embedded signed receipt"
+    signed_evidence = embedded.get("signed_evidence")
+    if not isinstance(signed_evidence, dict) or set(signed_evidence) != {
+        "path",
+        "sha256",
+        "signature_path",
+        "signer_identity",
+    }:
+        return False, None, "missing signed receipt reference"
+    path = _resolve_file(signed_evidence.get("path"), authorization_path)
+    signature = _resolve_file(signed_evidence.get("signature_path"), authorization_path)
+    identity = signed_evidence.get("signer_identity")
+    expected_digest = str(signed_evidence.get("sha256", ""))
+    exists = path is not None and path.is_file()
+    actual_digest = _sha256(path) if exists else "missing"
+    digest_ok = bool(DIGEST_RE.fullmatch(expected_digest)) and actual_digest == expected_digest
+    signer_ok = _meaningful_string(identity) and identity in allowed_identities
+    signature_ok = False
+    signature_detail = "missing or unauthorized signature artifacts"
+    if (
+        exists
+        and digest_ok
+        and signer_ok
+        and allowed_signers is not None
+        and allowed_signers.is_file()
+        and signature is not None
+        and signature.is_file()
+    ):
+        signature_ok, signature_detail = _verify_ssh_payload(
+            identity=str(identity),
+            allowed_signers=allowed_signers,
+            signature=signature,
+            namespace=namespace,
+            payload=path.read_bytes(),
+        )
+    raw: dict[str, Any] | None = None
+    if exists:
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            value = None
+        raw = value if isinstance(value, dict) else None
+    embedded_raw = {key: value for key, value in embedded.items() if key != "signed_evidence"}
+    projection_ok = raw is not None and raw == embedded_raw
+    valid = exists and digest_ok and signer_ok and signature_ok and projection_ok
+    return (
+        valid,
+        raw,
+        (
+            f"path={path or 'missing'}, digest={actual_digest}, signer={identity or 'missing'}, "
+            f"projection={projection_ok}, signature={signature_detail}"
+        ),
+    )
+
+
+def _alertmanager_api_observation(
+    value: Any,
+    *,
+    active: bool | None = None,
+    alert_name: Any = None,
+) -> bool:
+    if not isinstance(value, dict):
+        return False
+    status = value.get("http_status")
+    response_bytes = value.get("response_bytes")
+    raw_response = value.get("raw_response_body")
+    raw_request = value.get("raw_request_body")
+    base_valid = (
+        _parse_time(value.get("observed_at")) is not None
+        and isinstance(status, int)
+        and not isinstance(status, bool)
+        and 200 <= status < 300
+        and isinstance(response_bytes, int)
+        and not isinstance(response_bytes, bool)
+        and response_bytes >= 0
+        and isinstance(raw_response, str)
+        and len(raw_response.encode("utf-8")) == response_bytes
+        and hashlib.sha256(raw_response.encode("utf-8")).hexdigest()
+        == value.get("response_sha256")
+        and isinstance(raw_request, str)
+        and hashlib.sha256(raw_request.encode("utf-8")).hexdigest()
+        == value.get("request_sha256")
+        and bool(DIGEST_RE.fullmatch(str(value.get("response_sha256", ""))))
+        and bool(DIGEST_RE.fullmatch(str(value.get("request_sha256", ""))))
+    )
+    if active is None:
+        return base_valid
+    try:
+        response_payload = json.loads(raw_response) if isinstance(raw_response, str) else None
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(response_payload, list) or not _meaningful_string(alert_name):
+        return False
+    computed_matches = sum(
+        1
+        for item in response_payload
+        if isinstance(item, dict)
+        and isinstance(item.get("labels"), dict)
+        and item["labels"].get("alertname") == alert_name
+    )
+    matching = value.get("matching_alerts")
+    return (
+        base_valid
+        and raw_request == ""
+        and isinstance(matching, int)
+        and not isinstance(matching, bool)
+        and matching == computed_matches
+        and ((matching > 0) if active else (matching == 0))
+        and value.get("label_selector_sha256")
+        == _canonical_digest({"alertname": alert_name})
+        and value.get("expected_active") is active
+        and value.get("passed") is True
+    )
+
+
+def _alertmanager_post_observation(
+    value: Any,
+    *,
+    labels: Any,
+    starts_at: datetime | None,
+    ends_at: datetime | None,
+) -> bool:
+    if not (
+        _alertmanager_api_observation(value)
+        and isinstance(value, dict)
+        and isinstance(labels, dict)
+        and starts_at is not None
+        and ends_at is not None
+    ):
+        return False
+    payload = [
+        {
+            "labels": labels,
+            "annotations": {"summary": "DuckDock GA signed on-call delivery exercise"},
+            "startsAt": starts_at.isoformat(),
+            "endsAt": ends_at.isoformat(),
+        }
+    ]
+    raw_request = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    try:
+        response_payload = json.loads(value.get("raw_response_body")) if value.get("raw_response_body") else None
+    except (TypeError, json.JSONDecodeError):
+        return False
+    return (
+        value.get("request_payload") == payload
+        and value.get("raw_request_body") == raw_request
+        and value.get("request_sha256")
+        == hashlib.sha256(raw_request.encode("utf-8")).hexdigest()
+        and (response_payload is None or isinstance(response_payload, (dict, list)))
+    )
+
+
+def _alert_delivery_receipt_valid(
+    value: Any,
+    *,
+    exercise_id: Any,
+    target_environment: Any,
+    alert_name: Any,
+    schedule: Any,
+    event: str,
+) -> bool:
+    expected_keys = {
+        "schema_version",
+        "exercise_id",
+        "target_environment",
+        "alert_name",
+        "event",
+        "receipt_id",
+        "deliveries",
+        "schedule",
+        "delivered",
+        "delivered_at",
+    }
+    deliveries = value.get("deliveries") if isinstance(value, dict) else None
+    delivered_at = _parse_time(value.get("delivered_at")) if isinstance(value, dict) else None
+    delivery_times = (
+        [_parse_time(item.get("delivered_at")) for item in deliveries]
+        if isinstance(deliveries, list) and all(isinstance(item, dict) for item in deliveries)
+        else []
+    )
+    deliveries_valid = (
+        isinstance(deliveries, list)
+        and len(deliveries) >= 2
+        and all(
+            isinstance(item, dict)
+            and set(item) == {"channel", "receiver", "provider_receipt_id", "delivered_at"}
+            and _meaningful_string(item.get("channel"))
+            and _meaningful_string(item.get("receiver"))
+            and _meaningful_string(item.get("provider_receipt_id"))
+            for item in deliveries
+        )
+        and all(item is not None for item in delivery_times)
+        and len({item["channel"] for item in deliveries}) == len(deliveries)
+        and len({item["receiver"] for item in deliveries}) == len(deliveries)
+        and len({item["provider_receipt_id"] for item in deliveries}) == len(deliveries)
+        and delivered_at is not None
+        and max(item for item in delivery_times if item is not None) == delivered_at
+    )
+    return (
+        isinstance(value, dict)
+        and set(value) == expected_keys
+        and value.get("schema_version") == ALERT_DELIVERY_SCHEMA_VERSION
+        and value.get("exercise_id") == exercise_id
+        and value.get("target_environment") == target_environment
+        and value.get("alert_name") == alert_name
+        and value.get("schedule") == schedule
+        and value.get("event") == event
+        and _meaningful_string(value.get("receipt_id"))
+        and deliveries_valid
+        and value.get("delivered") is True
+        and _parse_time(value.get("delivered_at")) is not None
+    )
+
+
+def _oncall_acknowledgement_valid(
+    value: Any,
+    *,
+    exercise_id: Any,
+    target_environment: Any,
+    alert_name: Any,
+    schedule: Any,
+    signer_identity: Any,
+) -> bool:
+    expected_keys = {
+        "schema_version",
+        "exercise_id",
+        "target_environment",
+        "alert_name",
+        "receipt_id",
+        "schedule",
+        "acknowledged",
+        "acknowledged_by",
+        "acknowledged_at",
+    }
+    return (
+        isinstance(value, dict)
+        and set(value) == expected_keys
+        and value.get("schema_version") == ONCALL_ACK_SCHEMA_VERSION
+        and value.get("exercise_id") == exercise_id
+        and value.get("target_environment") == target_environment
+        and value.get("alert_name") == alert_name
+        and value.get("schedule") == schedule
+        and value.get("acknowledged_by") == signer_identity
+        and _meaningful_string(value.get("receipt_id"))
+        and value.get("acknowledged") is True
+        and _parse_time(value.get("acknowledged_at")) is not None
+    )
+
+
 def _signed_backup_manifest(
     signed_file: dict[str, Any],
     *,
@@ -1459,25 +1831,210 @@ def evaluate(
 
     alerting = controls["alerting"]
     alerting_report = _evidence_json(alerting, authorization_path)
-    firing_receipt = (
-        alerting_report.get("firing_receipt")
-        if isinstance(alerting_report, dict) and isinstance(alerting_report.get("firing_receipt"), dict)
+    alerting_schedule = alerting.get("oncall_schedule")
+    alert_exercise = (
+        alerting_report.get("alert_exercise")
+        if isinstance(alerting_report, dict)
+        and isinstance(alerting_report.get("alert_exercise"), dict)
         else {}
     )
-    resolved_receipt = (
-        alerting_report.get("resolved_receipt")
-        if isinstance(alerting_report, dict) and isinstance(alerting_report.get("resolved_receipt"), dict)
-        else {}
+    alerting_policy_ok, _, alerting_trust_store, delivery_identities, oncall_identities, alerting_policy_detail = (
+        _alerting_policy_context(
+            alerting_report.get("alerting_policy") if isinstance(alerting_report, dict) else None,
+            authorization_path=authorization_path,
+            schedule=alerting_schedule,
+        )
     )
-    acknowledgement = (
-        alerting_report.get("oncall_acknowledgement")
-        if isinstance(alerting_report, dict) and isinstance(alerting_report.get("oncall_acknowledgement"), dict)
-        else {}
+    firing_embedded = alerting_report.get("firing_receipt") if isinstance(alerting_report, dict) else None
+    resolved_embedded = alerting_report.get("resolved_receipt") if isinstance(alerting_report, dict) else None
+    acknowledgement_embedded = (
+        alerting_report.get("oncall_acknowledgement") if isinstance(alerting_report, dict) else None
+    )
+    firing_signature_ok, firing_receipt, firing_signature_detail = _verified_alerting_receipt(
+        firing_embedded,
+        authorization_path=authorization_path,
+        allowed_signers=alerting_trust_store,
+        allowed_identities=delivery_identities,
+        namespace=ALERT_DELIVERY_SIGNATURE_NAMESPACE,
+    )
+    resolved_signature_ok, resolved_receipt, resolved_signature_detail = _verified_alerting_receipt(
+        resolved_embedded,
+        authorization_path=authorization_path,
+        allowed_signers=alerting_trust_store,
+        allowed_identities=delivery_identities,
+        namespace=ALERT_DELIVERY_SIGNATURE_NAMESPACE,
+    )
+    acknowledgement_signature_ok, acknowledgement, acknowledgement_signature_detail = _verified_alerting_receipt(
+        acknowledgement_embedded,
+        authorization_path=authorization_path,
+        allowed_signers=alerting_trust_store,
+        allowed_identities=oncall_identities,
+        namespace=ONCALL_ACK_SIGNATURE_NAMESPACE,
+    )
+    exercise_id = alert_exercise.get("exercise_id")
+    alert_name = alert_exercise.get("alert_name")
+    labels = alert_exercise.get("labels")
+    firing_signer = (
+        firing_embedded.get("signed_evidence", {}).get("signer_identity")
+        if isinstance(firing_embedded, dict)
+        and isinstance(firing_embedded.get("signed_evidence"), dict)
+        else None
+    )
+    resolved_signer = (
+        resolved_embedded.get("signed_evidence", {}).get("signer_identity")
+        if isinstance(resolved_embedded, dict)
+        and isinstance(resolved_embedded.get("signed_evidence"), dict)
+        else None
+    )
+    acknowledgement_signer = (
+        acknowledgement_embedded.get("signed_evidence", {}).get("signer_identity")
+        if isinstance(acknowledgement_embedded, dict)
+        and isinstance(acknowledgement_embedded.get("signed_evidence"), dict)
+        else None
+    )
+    firing_receipt_valid = _alert_delivery_receipt_valid(
+        firing_receipt,
+        exercise_id=exercise_id,
+        target_environment=target.get("target_id"),
+        alert_name=alert_name,
+        schedule=alerting_schedule,
+        event="firing",
+    )
+    resolved_receipt_valid = _alert_delivery_receipt_valid(
+        resolved_receipt,
+        exercise_id=exercise_id,
+        target_environment=target.get("target_id"),
+        alert_name=alert_name,
+        schedule=alerting_schedule,
+        event="resolved",
+    )
+    acknowledgement_valid = _oncall_acknowledgement_valid(
+        acknowledgement,
+        exercise_id=exercise_id,
+        target_environment=target.get("target_id"),
+        alert_name=alert_name,
+        schedule=alerting_schedule,
+        signer_identity=acknowledgement_signer,
+    )
+    firing_api = alert_exercise.get("firing_api")
+    active_observation = alert_exercise.get("active_observation")
+    resolved_api = alert_exercise.get("resolved_api")
+    inactive_observation = alert_exercise.get("inactive_observation")
+    exercise_started = _parse_time(alert_exercise.get("started_at"))
+    firing_expires = _parse_time(alert_exercise.get("firing_expires_at"))
+    resolve_requested = _parse_time(alert_exercise.get("resolve_requested_at"))
+    report_observed = _parse_time(alerting_report.get("observed_at")) if isinstance(alerting_report, dict) else None
+    firing_delivered = _parse_time(firing_receipt.get("delivered_at")) if isinstance(firing_receipt, dict) else None
+    acknowledged_at = _parse_time(acknowledgement.get("acknowledged_at")) if isinstance(acknowledgement, dict) else None
+    resolved_delivered = _parse_time(resolved_receipt.get("delivered_at")) if isinstance(resolved_receipt, dict) else None
+    firing_api_at = _parse_time(firing_api.get("observed_at")) if isinstance(firing_api, dict) else None
+    active_at = _parse_time(active_observation.get("observed_at")) if isinstance(active_observation, dict) else None
+    resolved_api_at = _parse_time(resolved_api.get("observed_at")) if isinstance(resolved_api, dict) else None
+    inactive_at = _parse_time(inactive_observation.get("observed_at")) if isinstance(inactive_observation, dict) else None
+    firing_target_times = (
+        [_parse_time(item.get("delivered_at")) for item in firing_receipt["deliveries"]]
+        if isinstance(firing_receipt, dict)
+        and isinstance(firing_receipt.get("deliveries"), list)
+        and all(isinstance(item, dict) for item in firing_receipt["deliveries"])
+        else []
+    )
+    resolved_target_times = (
+        [_parse_time(item.get("delivered_at")) for item in resolved_receipt["deliveries"]]
+        if isinstance(resolved_receipt, dict)
+        and isinstance(resolved_receipt.get("deliveries"), list)
+        and all(isinstance(item, dict) for item in resolved_receipt["deliveries"])
+        else []
+    )
+    timeline_values = (
+        exercise_started,
+        firing_expires,
+        firing_api_at,
+        active_at,
+        firing_delivered,
+        acknowledged_at,
+        resolve_requested,
+        resolved_api_at,
+        inactive_at,
+        resolved_delivered,
+        report_observed,
+    )
+    timeline_complete = all(value is not None for value in timeline_values)
+    alerting_timeline_valid = (
+        timeline_complete
+        and exercise_started <= firing_api_at <= active_at <= report_observed
+        and len(firing_target_times) >= 2
+        and all(
+            item is not None and exercise_started <= item <= firing_delivered
+            for item in firing_target_times
+        )
+        and exercise_started <= firing_delivered <= acknowledged_at <= resolve_requested
+        and resolve_requested < firing_expires
+        and resolve_requested <= resolved_api_at <= inactive_at <= report_observed
+        and len(resolved_target_times) >= 2
+        and all(
+            item is not None and resolve_requested <= item <= resolved_delivered
+            for item in resolved_target_times
+        )
+        and resolve_requested <= resolved_delivered <= report_observed
+    )
+    receipt_id_values = [
+        item.get("receipt_id")
+        for item in (firing_receipt, acknowledgement, resolved_receipt)
+        if isinstance(item, dict)
+    ]
+    receipt_ids_unique = (
+        len(receipt_id_values) == 3
+        and all(isinstance(value, str) for value in receipt_id_values)
+        and len(set(receipt_id_values)) == 3
+    )
+    firing_targets = (
+        {(item.get("channel"), item.get("receiver")) for item in firing_receipt.get("deliveries", [])}
+        if isinstance(firing_receipt, dict)
+        and isinstance(firing_receipt.get("deliveries"), list)
+        and all(
+            isinstance(item, dict)
+            and isinstance(item.get("channel"), str)
+            and isinstance(item.get("receiver"), str)
+            for item in firing_receipt["deliveries"]
+        )
+        else set()
+    )
+    resolved_targets = (
+        {(item.get("channel"), item.get("receiver")) for item in resolved_receipt.get("deliveries", [])}
+        if isinstance(resolved_receipt, dict)
+        and isinstance(resolved_receipt.get("deliveries"), list)
+        and all(
+            isinstance(item, dict)
+            and isinstance(item.get("channel"), str)
+            and isinstance(item.get("receiver"), str)
+            for item in resolved_receipt["deliveries"]
+        )
+        else set()
+    )
+    firing_provider_ids = (
+        {item.get("provider_receipt_id") for item in firing_receipt.get("deliveries", [])}
+        if isinstance(firing_receipt, dict)
+        and isinstance(firing_receipt.get("deliveries"), list)
+        and all(
+            isinstance(item, dict) and isinstance(item.get("provider_receipt_id"), str)
+            for item in firing_receipt["deliveries"]
+        )
+        else set()
+    )
+    resolved_provider_ids = (
+        {item.get("provider_receipt_id") for item in resolved_receipt.get("deliveries", [])}
+        if isinstance(resolved_receipt, dict)
+        and isinstance(resolved_receipt.get("deliveries"), list)
+        and all(
+            isinstance(item, dict) and isinstance(item.get("provider_receipt_id"), str)
+            for item in resolved_receipt["deliveries"]
+        )
+        else set()
     )
     alerting_report_matches = (
         _report_release_target_binding(
             alerting_report,
-            schema_version="duckdock-ga-alerting-evidence-v1",
+            schema_version=ALERTING_SCHEMA_VERSION,
             status="PASS",
             control=alerting,
             target=target,
@@ -1485,21 +2042,57 @@ def evaluate(
         )
         and alerting_report.get("test_notification_delivered") is alerting.get("test_notification_delivered")
         and alerting_report.get("resolved_notification_delivered") is alerting.get("resolved_notification_delivered")
-        and alerting_report.get("oncall_schedule") == alerting.get("oncall_schedule")
-        and firing_receipt.get("delivered") is True
-        and resolved_receipt.get("delivered") is True
-        and _meaningful_string(firing_receipt.get("receipt_id"))
-        and _meaningful_string(resolved_receipt.get("receipt_id"))
-        and firing_receipt.get("receipt_id") != resolved_receipt.get("receipt_id")
-        and acknowledgement.get("acknowledged") is True
-        and acknowledgement.get("schedule") == alerting.get("oncall_schedule")
-        and _meaningful_string(acknowledgement.get("receipt_id"))
-        and _ordered_report_times(
-            firing_receipt.get("delivered_at"),
-            acknowledgement.get("acknowledged_at"),
-            resolved_receipt.get("delivered_at"),
-            no_later_than=_control_observed_at(alerting),
+        and alerting_report.get("oncall_schedule") == alerting_schedule
+        and alerting_policy_ok
+        and firing_signature_ok
+        and resolved_signature_ok
+        and acknowledgement_signature_ok
+        and firing_receipt_valid
+        and resolved_receipt_valid
+        and acknowledgement_valid
+        and receipt_ids_unique
+        and len(firing_targets) >= 2
+        and firing_targets == resolved_targets
+        and len(firing_provider_ids) >= 2
+        and len(resolved_provider_ids) >= 2
+        and not firing_provider_ids.intersection(resolved_provider_ids)
+        and firing_signer == resolved_signer
+        and firing_signer != acknowledgement_signer
+        and _meaningful_string(exercise_id)
+        and alert_name == f"DuckDockGA_{exercise_id}"
+        and isinstance(labels, dict)
+        and labels
+        == {
+            "alertname": alert_name,
+            "severity": "critical",
+            "duckdock_target": target.get("target_id"),
+            "duckdock_exercise": exercise_id,
+        }
+        and _https_url(alert_exercise.get("alertmanager_url"))
+        and _alertmanager_post_observation(
+            firing_api,
+            labels=labels,
+            starts_at=exercise_started,
+            ends_at=firing_expires,
         )
+        and _alertmanager_api_observation(
+            active_observation,
+            active=True,
+            alert_name=alert_name,
+        )
+        and _alertmanager_post_observation(
+            resolved_api,
+            labels=labels,
+            starts_at=exercise_started,
+            ends_at=resolve_requested,
+        )
+        and _alertmanager_api_observation(
+            inactive_observation,
+            active=False,
+            alert_name=alert_name,
+        )
+        and firing_api.get("request_sha256") != resolved_api.get("request_sha256")
+        and alerting_timeline_valid
     )
     alerting_ok = (
         alerting.get("status") == "PASS"
@@ -1515,7 +2108,12 @@ def evaluate(
         passed=alerting_ok,
         observed=f"status={alerting.get('status')}, fired={alerting.get('test_notification_delivered')}, resolved={alerting.get('resolved_notification_delivered')}",
         expected="firing + resolved notifications delivered to a named on-call schedule",
-        detail="The release-bound target report must retain distinct firing/resolved receipts and a timestamped acknowledgement from the named on-call schedule.",
+        detail=(
+            "The target collector must actively observe the same Alertmanager alert firing/resolving and retain "
+            "separately signed delivery/on-call receipts under an exact, content-addressed trust policy. "
+            f"policy=({alerting_policy_detail}); firing=({firing_signature_detail}); "
+            f"ack=({acknowledgement_signature_detail}); resolved=({resolved_signature_detail})"
+        ),
     )
 
     recovery = controls["recovery"]

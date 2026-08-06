@@ -10,7 +10,13 @@ from pathlib import Path
 import pytest
 
 from scripts.verify_ga_production_authorization import (
+    ALERTING_POLICY_SCHEMA_VERSION,
+    ALERTING_SCHEMA_VERSION,
+    ALERT_DELIVERY_SCHEMA_VERSION,
+    ALERT_DELIVERY_SIGNATURE_NAMESPACE,
     APPROVAL_POLICY_SCHEMA_VERSION,
+    ONCALL_ACK_SCHEMA_VERSION,
+    ONCALL_ACK_SIGNATURE_NAMESPACE,
     REQUIRED_APPROVAL_ROLES,
     SCHEMA_VERSION,
     _approval_statement,
@@ -589,34 +595,256 @@ def _document(tmp_path: Path, now: datetime) -> dict:
     )
     write_target_report("network", network_report)
 
-    alerting_report = target_report("duckdock-ga-alerting-evidence-v1")
+    if shutil.which("ssh-keygen") is None:
+        pytest.skip("ssh-keygen is required for signed target evidence verification")
+    alert_delivery_identity = "alert-delivery@example.com"
+    oncall_identity = "oncall-primary@example.com"
+    alert_delivery_key = tmp_path / "alert_delivery_key"
+    oncall_key = tmp_path / "oncall_key"
+    for key in (alert_delivery_key, oncall_key):
+        subprocess.run(
+            ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)],
+            check=True,
+        )
+    alerting_allowed_signers = tmp_path / "alerting_allowed_signers"
+    alerting_allowed_signers.write_text(
+        (
+            f"{alert_delivery_identity} "
+            f"{alert_delivery_key.with_suffix('.pub').read_text(encoding='utf-8').strip()}\n"
+            f"{oncall_identity} "
+            f"{oncall_key.with_suffix('.pub').read_text(encoding='utf-8').strip()}\n"
+        ),
+        encoding="utf-8",
+    )
+    alerting_policy_path = tmp_path / "alerting-policy.json"
+    alerting_policy = {
+        "schema_version": ALERTING_POLICY_SCHEMA_VERSION,
+        "policy_id": "duckdock-target-alerting-authority",
+        "organization": "DuckDock Test Operations",
+        "allowed_signers_path": str(alerting_allowed_signers),
+        "allowed_signers_sha256": hashlib.sha256(
+            alerting_allowed_signers.read_bytes()
+        ).hexdigest(),
+        "delivery_identities": [alert_delivery_identity],
+        "oncall_schedules": {"platform-primary": [oncall_identity]},
+    }
+    alerting_policy_path.write_text(
+        json.dumps(alerting_policy, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    exercise_id = "ga-20260806-001"
+    alert_name = f"DuckDockGA_{exercise_id}"
+    alert_labels = {
+        "alertname": alert_name,
+        "severity": "critical",
+        "duckdock_target": "customer-production",
+        "duckdock_exercise": exercise_id,
+    }
+
+    def signed_alert_receipt(
+        filename: str,
+        payload: dict,
+        key: Path,
+        namespace: str,
+        identity: str,
+    ) -> dict:
+        path = tmp_path / filename
+        path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+        subprocess.run(
+            [
+                "ssh-keygen",
+                "-q",
+                "-Y",
+                "sign",
+                "-f",
+                str(key),
+                "-n",
+                namespace,
+                str(path),
+            ],
+            check=True,
+        )
+        return {
+            **payload,
+            "signed_evidence": {
+                "path": str(path),
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "signature_path": f"{path}.sig",
+                "signer_identity": identity,
+            },
+        }
+
+    exercise_started = now - timedelta(minutes=10)
+    firing_expires_at = exercise_started + timedelta(minutes=15)
+    firing_api_at = now - timedelta(minutes=9, seconds=50)
+    active_at = now - timedelta(minutes=9, seconds=40)
+    firing_delivered_at = now - timedelta(minutes=9)
+    acknowledged_at = now - timedelta(minutes=8)
+    resolve_requested_at = now - timedelta(minutes=7)
+    resolved_api_at = now - timedelta(minutes=6, seconds=50)
+    inactive_at = now - timedelta(minutes=6, seconds=40)
+    resolved_delivered_at = now - timedelta(minutes=6)
+
+    def post_observation(
+        observed: datetime,
+        starts_at: datetime,
+        ends_at: datetime,
+    ) -> dict:
+        payload = [
+            {
+                "labels": alert_labels,
+                "annotations": {"summary": "DuckDock GA signed on-call delivery exercise"},
+                "startsAt": starts_at.isoformat(),
+                "endsAt": ends_at.isoformat(),
+            }
+        ]
+        raw_request = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        raw_response = "{}"
+        return {
+            "observed_at": observed.isoformat(),
+            "http_status": 200,
+            "response_bytes": len(raw_response),
+            "response_sha256": hashlib.sha256(raw_response.encode()).hexdigest(),
+            "request_sha256": hashlib.sha256(raw_request.encode()).hexdigest(),
+            "raw_response_body": raw_response,
+            "raw_request_body": raw_request,
+            "request_payload": payload,
+        }
+
+    def state_observation(observed: datetime, *, active: bool) -> dict:
+        response = [{"labels": alert_labels}] if active else []
+        raw_response = json.dumps(response, sort_keys=True, separators=(",", ":"))
+        selector = json.dumps(
+            {"alertname": alert_name}, sort_keys=True, separators=(",", ":")
+        ).encode()
+        return {
+            "observed_at": observed.isoformat(),
+            "http_status": 200,
+            "response_bytes": len(raw_response),
+            "response_sha256": hashlib.sha256(raw_response.encode()).hexdigest(),
+            "request_sha256": hashlib.sha256(b"").hexdigest(),
+            "raw_response_body": raw_response,
+            "raw_request_body": "",
+            "matching_alerts": 1 if active else 0,
+            "label_selector_sha256": hashlib.sha256(selector).hexdigest(),
+            "expected_active": active,
+            "passed": True,
+        }
+
+    def delivery_targets(event: str, delivered_at: datetime) -> list[dict]:
+        return [
+            {
+                "channel": "oncall-webhook",
+                "receiver": "primary-oncall",
+                "provider_receipt_id": f"provider-{event}-oncall",
+                "delivered_at": (delivered_at - timedelta(seconds=1)).isoformat(),
+            },
+            {
+                "channel": "pager",
+                "receiver": "primary-pager",
+                "provider_receipt_id": f"provider-{event}-pager",
+                "delivered_at": delivered_at.isoformat(),
+            },
+        ]
+
+    firing_receipt = signed_alert_receipt(
+        "alert-firing-receipt.json",
+        {
+            "schema_version": ALERT_DELIVERY_SCHEMA_VERSION,
+            "exercise_id": exercise_id,
+            "target_environment": "customer-production",
+            "alert_name": alert_name,
+            "event": "firing",
+            "receipt_id": "incident-fire-123",
+            "deliveries": delivery_targets("firing", firing_delivered_at),
+            "schedule": "platform-primary",
+            "delivered": True,
+            "delivered_at": firing_delivered_at.isoformat(),
+        },
+        alert_delivery_key,
+        ALERT_DELIVERY_SIGNATURE_NAMESPACE,
+        alert_delivery_identity,
+    )
+    acknowledgement = signed_alert_receipt(
+        "alert-oncall-ack.json",
+        {
+            "schema_version": ONCALL_ACK_SCHEMA_VERSION,
+            "exercise_id": exercise_id,
+            "target_environment": "customer-production",
+            "alert_name": alert_name,
+            "receipt_id": "incident-ack-123",
+            "schedule": "platform-primary",
+            "acknowledged": True,
+            "acknowledged_by": oncall_identity,
+            "acknowledged_at": acknowledged_at.isoformat(),
+        },
+        oncall_key,
+        ONCALL_ACK_SIGNATURE_NAMESPACE,
+        oncall_identity,
+    )
+    resolved_receipt = signed_alert_receipt(
+        "alert-resolved-receipt.json",
+        {
+            "schema_version": ALERT_DELIVERY_SCHEMA_VERSION,
+            "exercise_id": exercise_id,
+            "target_environment": "customer-production",
+            "alert_name": alert_name,
+            "event": "resolved",
+            "receipt_id": "incident-resolved-123",
+            "deliveries": delivery_targets("resolved", resolved_delivered_at),
+            "schedule": "platform-primary",
+            "delivered": True,
+            "delivered_at": resolved_delivered_at.isoformat(),
+        },
+        alert_delivery_key,
+        ALERT_DELIVERY_SIGNATURE_NAMESPACE,
+        alert_delivery_identity,
+    )
+    active_observation = state_observation(active_at, active=True)
+    inactive_observation = state_observation(inactive_at, active=False)
+    alerting_report = target_report(ALERTING_SCHEMA_VERSION)
     alerting_report.update(
         {
             "test_notification_delivered": True,
             "resolved_notification_delivered": True,
             "oncall_schedule": "platform-primary",
-            "firing_receipt": {
-                "receipt_id": "incident-fire-123",
-                "delivered": True,
-                "delivered_at": (now - timedelta(minutes=8)).isoformat(),
+            "alerting_policy": {
+                "path": str(alerting_policy_path),
+                "sha256": hashlib.sha256(alerting_policy_path.read_bytes()).hexdigest(),
+                "policy_id": alerting_policy["policy_id"],
+                "allowed_signers_path": str(alerting_allowed_signers),
+                "allowed_signers_sha256": hashlib.sha256(
+                    alerting_allowed_signers.read_bytes()
+                ).hexdigest(),
             },
-            "oncall_acknowledgement": {
-                "receipt_id": "incident-ack-123",
-                "acknowledged": True,
-                "schedule": "platform-primary",
-                "acknowledged_at": (now - timedelta(minutes=7)).isoformat(),
+            "alert_exercise": {
+                "exercise_id": exercise_id,
+                "alert_name": alert_name,
+                "labels": alert_labels,
+                "alertmanager_url": "https://alerts.example.com",
+                "started_at": exercise_started.isoformat(),
+                "firing_expires_at": firing_expires_at.isoformat(),
+                "resolve_requested_at": resolve_requested_at.isoformat(),
+                "firing_api": post_observation(
+                    firing_api_at,
+                    exercise_started,
+                    firing_expires_at,
+                ),
+                "active_observation": active_observation,
+                "resolved_api": post_observation(
+                    resolved_api_at,
+                    exercise_started,
+                    resolve_requested_at,
+                ),
+                "inactive_observation": inactive_observation,
             },
-            "resolved_receipt": {
-                "receipt_id": "incident-resolved-123",
-                "delivered": True,
-                "delivered_at": (now - timedelta(minutes=6)).isoformat(),
-            },
+            "firing_receipt": firing_receipt,
+            "oncall_acknowledgement": acknowledgement,
+            "resolved_receipt": resolved_receipt,
         }
     )
     write_target_report("alerting", alerting_report)
 
-    if shutil.which("ssh-keygen") is None:
-        pytest.skip("ssh-keygen is required for signed backup verification")
     backup_manifest_path = tmp_path / "backup-manifest.json"
     backup_manifest_path.write_text(
         json.dumps(
@@ -1312,6 +1540,100 @@ def test_network_gate_revalidates_raw_evidence_instead_of_trusting_summaries(
     assert result["status"] == "BLOCKED"
     network_check = next(item for item in result["checks"] if item["key"] == "network")
     assert network_check["status"] == "BLOCK"
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "tampered_delivery_receipt",
+        "delivery_key_used_for_ack",
+        "wildcard_oncall_trust",
+        "forged_active_summary",
+    ],
+)
+def test_alerting_gate_revalidates_signed_receipts_and_exact_identity_roles(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    evidence = document["controls"]["alerting"]["evidence"]
+    report_path = Path(evidence["path"])
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    if mutation == "tampered_delivery_receipt":
+        firing_path = Path(report["firing_receipt"]["signed_evidence"]["path"])
+        firing = json.loads(firing_path.read_text(encoding="utf-8"))
+        firing["delivered"] = False
+        firing_path.write_text(json.dumps(firing, sort_keys=True) + "\n", encoding="utf-8")
+    elif mutation == "delivery_key_used_for_ack":
+        embedded_ack = report["oncall_acknowledgement"]
+        signed_ack = embedded_ack["signed_evidence"]
+        ack_path = Path(signed_ack["path"])
+        ack = json.loads(ack_path.read_text(encoding="utf-8"))
+        ack["acknowledged_by"] = "alert-delivery@example.com"
+        ack_path.write_text(json.dumps(ack, sort_keys=True) + "\n", encoding="utf-8")
+        signature_path = Path(signed_ack["signature_path"])
+        signature_path.unlink()
+        subprocess.run(
+            [
+                "ssh-keygen",
+                "-q",
+                "-Y",
+                "sign",
+                "-f",
+                str(tmp_path / "alert_delivery_key"),
+                "-n",
+                ONCALL_ACK_SIGNATURE_NAMESPACE,
+                str(ack_path),
+            ],
+            check=True,
+        )
+        report["oncall_acknowledgement"] = {
+            **ack,
+            "signed_evidence": {
+                **signed_ack,
+                "sha256": hashlib.sha256(ack_path.read_bytes()).hexdigest(),
+                "signer_identity": "alert-delivery@example.com",
+            },
+        }
+        report_path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+        evidence["sha256"] = hashlib.sha256(report_path.read_bytes()).hexdigest()
+    elif mutation == "wildcard_oncall_trust":
+        policy_reference = report["alerting_policy"]
+        policy_path = Path(policy_reference["path"])
+        policy = json.loads(policy_path.read_text(encoding="utf-8"))
+        trust_path = Path(policy["allowed_signers_path"])
+        trust = trust_path.read_text(encoding="utf-8").replace(
+            "oncall-primary@example.com ",
+            "oncall-*@example.com ",
+        )
+        trust_path.write_text(trust, encoding="utf-8")
+        trust_digest = hashlib.sha256(trust_path.read_bytes()).hexdigest()
+        policy["allowed_signers_sha256"] = trust_digest
+        policy_path.write_text(json.dumps(policy, sort_keys=True) + "\n", encoding="utf-8")
+        policy_reference["allowed_signers_sha256"] = trust_digest
+        policy_reference["sha256"] = hashlib.sha256(policy_path.read_bytes()).hexdigest()
+        report_path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+        evidence["sha256"] = hashlib.sha256(report_path.read_bytes()).hexdigest()
+    else:
+        active = report["alert_exercise"]["active_observation"]
+        active["raw_response_body"] = "[]"
+        active["response_bytes"] = 2
+        active["response_sha256"] = hashlib.sha256(b"[]").hexdigest()
+        report_path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+        evidence["sha256"] = hashlib.sha256(report_path.read_bytes()).hexdigest()
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    assert result["status"] == "BLOCKED"
+    alerting_check = next(item for item in result["checks"] if item["key"] == "alerting")
+    assert alerting_check["status"] == "BLOCK"
 
 
 @pytest.mark.parametrize(

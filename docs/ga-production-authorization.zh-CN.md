@@ -192,9 +192,65 @@ python backend/scripts/collect_ga_target_network.py \
    与 allowed-signers。生产门禁会在 namespace `duckdock-backup` 实际验签，并解析
    manifest 的 release commit、age 加密方式和三类 artifact digest/size；不接受
    `signature_verified: true` 自报字段。
-10. 触发测试告警，由命名 on-call schedule 实际确认，再恢复告警。按
-    `ops/ga/alerting-evidence.example.json` 保留三个不同且有时序的 firing、ack、
-    resolved receipt。加载规则或仅送达 webhook 不能证明有人值守。
+10. 使用 `collect_ga_target_alerting.py` 主动触发并恢复唯一的目标 Alertmanager
+    告警。发布机构先从 `ops/ga/alerting-trust-policy.example.json` 建立独立、只读、
+    内容寻址的告警信任策略：`delivery_identities` 是能从通知供应商取得真实投递回执
+    的服务身份，`oncall_schedules` 将命名 schedule 映射到实际值班人员身份；两类
+    身份及公钥不得重合，allowed-signers 禁止通配 principal。
+
+    采集器运行期间，通知集成根据它输出的 `exercise_id`/`alert_name` 原子写入 firing
+    与 resolved 的 `duckdock-ga-alert-delivery-receipt-v1` 文件；每份文件必须列出至少
+    两个不同 channel、receiver 和 provider receipt ID，且 firing/resolved 覆盖完全
+    相同的目标，再由 delivery 身份签名。实际值班人员确认告警后写入
+    `duckdock-ga-oncall-acknowledgement-v1`，由本人签名。三个 receipt/signature 路径
+    在演练开始前必须不存在，防止复用历史回执：
+
+```bash
+ssh-keygen -Y sign \
+  -f /release-authority/alert-delivery-key \
+  -n duckdock-alert-delivery-receipt \
+  /secure/evidence/alert-firing.json
+
+ssh-keygen -Y sign \
+  -f ~/.ssh/oncall-ack-key \
+  -n duckdock-oncall-acknowledgement \
+  /secure/evidence/alert-ack.json
+```
+
+    firing 与人工 ack 签名出现后，采集器才会向同一 Alertmanager alert 写入 resolve；
+    通知集成随后以相同 delivery 身份签署 resolved receipt。正式命令示例：
+
+```bash
+python backend/scripts/collect_ga_target_alerting.py \
+  --target-environment customer-production \
+  --acknowledge-oncall-exercise customer-production \
+  --source-commit "$DUCKDOCK_GA_SOURCE_COMMIT" \
+  --backend-image "$DUCKDOCK_GA_BACKEND_IMAGE" \
+  --frontend-image "$DUCKDOCK_GA_FRONTEND_IMAGE" \
+  --alertmanager-url https://alerts.example.com \
+  --ca-file /release-authority/target-alertmanager-ca.pem \
+  --bearer-token-file /run/secrets/alertmanager-probe-token \
+  --exercise-id ga-20260806-001 \
+  --oncall-schedule platform-primary \
+  --alerting-policy /release-authority/duckdock-alerting-policy.json \
+  --delivery-signer-identity alert-delivery@example.com \
+  --oncall-signer-identity oncall-primary@example.com \
+  --firing-receipt /secure/evidence/alert-firing.json \
+  --firing-signature /secure/evidence/alert-firing.json.sig \
+  --ack-receipt /secure/evidence/alert-ack.json \
+  --ack-signature /secure/evidence/alert-ack.json.sig \
+  --resolved-receipt /secure/evidence/alert-resolved.json \
+  --resolved-signature /secure/evidence/alert-resolved.json.sig \
+  --output /secure/evidence/target-alerting.json
+```
+
+    输出协议只能是 `duckdock-ga-alerting-evidence-v2`。生产授权器会重新读取策略和
+    三份原始 JSON，核对摘要、双接收目标、精确身份角色、OpenSSH namespace，并
+    重新解析受大小限制的 Alertmanager 原始 HTTP 请求/响应来验证 exact labels、
+    startsAt/endsAt 与 active→inactive 匹配数。加载规则、仅送达无签名 webhook、预先存在
+    的 receipt、自报 `signature_verified` 或 delivery 服务代替人签 ack 均不能通过。
+    若任一阶段失败，采集器会尽力自动 resolve 已注入的告警；重试必须使用新的
+    exercise ID 和全新的 receipt/signature 路径，不能复用失败演练留下的文件。
 11. 委托与项目实现方独立的安全机构按指定范围执行渗透测试和人工代码审查，
     关闭并复测全部 Critical/High。按
     `ops/ga/independent-security-evidence.example.json` 记录独立性、五类必测范围、

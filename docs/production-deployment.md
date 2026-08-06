@@ -102,10 +102,12 @@ The production image is rebuilt from the exact upstream `0.33.1` release commit
 with post-release `x/crypto` and gRPC security fixes, then reduced to a non-root
 scratch runtime; CI generates SBOM/provenance and blocks Critical/High findings.
 
-Before authorization, deliberately fire a test alert, retain the Alertmanager
-notification receipt, resolve it and retain the resolved receipt. Record the
-named on-call schedule in the production authorization bundle. Merely loading
-the rules does not satisfy this gate.
+Before authorization, run `backend/scripts/collect_ga_target_alerting.py` against
+the target Alertmanager. It must prove firing and resolved delivery to both
+configured channels/receivers, plus a separately signed acknowledgement from an
+actual member of the named on-call schedule. The collector and GA gate re-verify
+the exact-principal trust policy, raw OpenSSH signatures and active/inactive API
+observations. Merely loading the rules does not satisfy this gate.
 
 ## Analysis Worker
 

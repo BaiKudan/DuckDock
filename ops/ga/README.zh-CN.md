@@ -25,7 +25,13 @@ python backend/scripts/verify_ga_production_authorization.py \
 - `network-evidence.example.json`：`collect_ga_target_network.py` 输出的 v2 结构示例；
   执行器从已确认的集群外视角做 nmap 全端口/数据端口扫描，并保留 CNI、探针身份、
   完整 NetworkPolicy 与 ingress/egress 正反向连接原始结果；禁止手填；
-- `alerting-evidence.example.json`：firing、值班确认和 resolved 三张回执；
+- `alerting-evidence.example.json`：`collect_ga_target_alerting.py` 输出的主动演练 v2
+  结构；绑定 Alertmanager active/inactive API 观测与三份原始签名回执；禁止手填；
+- `alerting-trust-policy.example.json`：delivery 服务身份和命名 on-call schedule 的
+  独立信任策略；对应 allowed-signers 禁止通配 principal 或公钥复用；
+- `alert-delivery-receipt.example.json`、`oncall-acknowledgement.example.json`：
+  通知集成与实际值班人员在演练期间分别写入并签名的精确原始协议；每个 delivery
+  receipt 至少包含两个不同 channel/receiver/provider receipt；
 - `recovery-evidence.example.json`：签名备份与非生产破坏性恢复；
 - `independent-security-evidence.example.json`：独立渗透/代码审查和签名报告；
 - `high-availability-evidence.example.json`：目标多故障域故障注入。
