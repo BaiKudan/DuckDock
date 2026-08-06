@@ -9,11 +9,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+try:
+    from scripts.ga_path_resolution import ga_file_resolution_override
+except ModuleNotFoundError:  # direct script execution
+    from ga_path_resolution import ga_file_resolution_override
 
-CAMPAIGN_FREEZE_SCHEMA_VERSION = "duckdock-ga-approval-campaign-freeze-v1"
+
+LEGACY_CAMPAIGN_FREEZE_SCHEMA_VERSION = "duckdock-ga-approval-campaign-freeze-v1"
+CAMPAIGN_FREEZE_SCHEMA_VERSION = "duckdock-ga-approval-campaign-freeze-v2"
 CAMPAIGN_ID_RE = re.compile(r"^gac_[0-9a-f]{64}$")
 DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
-CAMPAIGN_FREEZE_KEYS = {
+LEGACY_CAMPAIGN_FREEZE_KEYS = {
     "schema_version",
     "campaign_id",
     "frozen_at",
@@ -23,6 +29,7 @@ CAMPAIGN_FREEZE_KEYS = {
     "release_digest",
     "evaluation",
 }
+CAMPAIGN_FREEZE_KEYS = LEGACY_CAMPAIGN_FREEZE_KEYS | {"execution_closure"}
 BOUND_FILE_KEYS = {"path", "sha256"}
 
 
@@ -34,6 +41,41 @@ def load_object(path: Path, label: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"{label} root must be an object")
     return value
+
+
+def require_formal_campaign_freeze(
+    authorization: dict[str, Any],
+    *,
+    authorization_path: Path,
+) -> Path:
+    reference = authorization.get("approval_campaign")
+    if not isinstance(reference, dict) or set(reference) != {
+        "path",
+        "sha256",
+        "campaign_id",
+    }:
+        raise ValueError("formal GA authorization has no exact approval campaign reference")
+    raw_path = reference.get("path")
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        raise ValueError("formal GA approval campaign path is invalid")
+    handled, overridden = ga_file_resolution_override(raw_path)
+    if handled:
+        if overridden is None:
+            raise ValueError("formal GA approval campaign has no portable file mapping")
+        freeze_path = overridden
+    else:
+        freeze_path = Path(raw_path).expanduser()
+        if not freeze_path.is_absolute():
+            freeze_path = authorization_path.resolve().parent / freeze_path
+    if freeze_path.is_symlink() or not freeze_path.is_file():
+        raise ValueError("formal GA approval campaign freeze is missing or symlinked")
+    freeze_path = freeze_path.resolve()
+    if reference.get("sha256") != sha256_path(freeze_path):
+        raise ValueError("formal GA approval campaign freeze digest mismatch")
+    freeze = load_object(freeze_path, "formal GA approval campaign freeze")
+    if freeze.get("schema_version") != CAMPAIGN_FREEZE_SCHEMA_VERSION:
+        raise ValueError("formal GA authorization requires a closure-bound campaign freeze v2")
+    return freeze_path
 
 
 def sha256_path(path: Path) -> str:
@@ -63,17 +105,26 @@ def campaign_statement(
     release_digest: str,
     frozen_at: str,
     approvals_expire_at: str,
+    execution_closure_sha256: str | None = None,
 ) -> bytes:
+    schema_version = (
+        CAMPAIGN_FREEZE_SCHEMA_VERSION
+        if execution_closure_sha256 is not None
+        else LEGACY_CAMPAIGN_FREEZE_SCHEMA_VERSION
+    )
+    statement = {
+        "schema_version": schema_version,
+        "authorization_sha256": authorization_sha256,
+        "approval_policy_sha256": approval_policy_sha256,
+        "release_digest": release_digest,
+        "frozen_at": frozen_at,
+        "approvals_expire_at": approvals_expire_at,
+    }
+    if execution_closure_sha256 is not None:
+        statement["execution_closure_sha256"] = execution_closure_sha256
     return (
         json.dumps(
-            {
-                "schema_version": CAMPAIGN_FREEZE_SCHEMA_VERSION,
-                "authorization_sha256": authorization_sha256,
-                "approval_policy_sha256": approval_policy_sha256,
-                "release_digest": release_digest,
-                "frozen_at": frozen_at,
-                "approvals_expire_at": approvals_expire_at,
-            },
+            statement,
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=False,
@@ -89,6 +140,7 @@ def derive_campaign_id(
     release_digest: str,
     frozen_at: str,
     approvals_expire_at: str,
+    execution_closure_sha256: str | None = None,
 ) -> str:
     statement = campaign_statement(
         authorization_sha256=authorization_sha256,
@@ -96,6 +148,7 @@ def derive_campaign_id(
         release_digest=release_digest,
         frozen_at=frozen_at,
         approvals_expire_at=approvals_expire_at,
+        execution_closure_sha256=execution_closure_sha256,
     )
     return f"gac_{hashlib.sha256(statement).hexdigest()}"
 
@@ -108,12 +161,24 @@ def validate_campaign_freeze(
     now: datetime,
     require_active: bool = True,
     enforce_recorded_paths: bool = True,
+    require_execution_closure: bool = False,
 ) -> dict[str, Any]:
     freeze = load_object(freeze_path, "approval campaign freeze")
-    if set(freeze) != CAMPAIGN_FREEZE_KEYS:
+    schema_version = freeze.get("schema_version")
+    expected_keys = (
+        CAMPAIGN_FREEZE_KEYS
+        if schema_version == CAMPAIGN_FREEZE_SCHEMA_VERSION
+        else LEGACY_CAMPAIGN_FREEZE_KEYS
+    )
+    if set(freeze) != expected_keys:
         raise ValueError("approval campaign freeze has invalid fields")
-    if freeze.get("schema_version") != CAMPAIGN_FREEZE_SCHEMA_VERSION:
+    if schema_version not in {
+        CAMPAIGN_FREEZE_SCHEMA_VERSION,
+        LEGACY_CAMPAIGN_FREEZE_SCHEMA_VERSION,
+    }:
         raise ValueError("approval campaign freeze schema version is unsupported")
+    if require_execution_closure and schema_version != CAMPAIGN_FREEZE_SCHEMA_VERSION:
+        raise ValueError("formal GA approval requires a closure-bound campaign freeze v2")
     authorization = freeze.get("authorization")
     policy = freeze.get("approval_policy")
     if not isinstance(authorization, dict) or set(authorization) != BOUND_FILE_KEYS:
@@ -160,12 +225,55 @@ def validate_campaign_freeze(
         if current > expires_at:
             raise ValueError("approval campaign has expired")
 
+    closure_validation: dict[str, Any] | None = None
+    execution_closure_digest: str | None = None
+    if schema_version == CAMPAIGN_FREEZE_SCHEMA_VERSION:
+        closure_reference = freeze.get("execution_closure")
+        if not isinstance(closure_reference, dict) or set(closure_reference) != BOUND_FILE_KEYS:
+            raise ValueError("approval campaign execution closure binding is invalid")
+        raw_closure_path = closure_reference.get("path")
+        if not isinstance(raw_closure_path, str) or not raw_closure_path.strip():
+            raise ValueError("approval campaign execution closure path is invalid")
+        handled, overridden = ga_file_resolution_override(raw_closure_path)
+        if handled:
+            if overridden is None:
+                raise ValueError("execution closure has no verified portable file mapping")
+            closure_path = overridden
+        else:
+            closure_path = Path(raw_closure_path).expanduser()
+            if not closure_path.is_absolute():
+                closure_path = freeze_path.resolve().parent / closure_path
+        if closure_path.is_symlink() or not closure_path.is_file():
+            raise ValueError("approval campaign execution closure is missing or symlinked")
+        closure_path = closure_path.resolve()
+        execution_closure_digest = sha256_path(closure_path)
+        if (
+            not DIGEST_RE.fullmatch(str(closure_reference.get("sha256", "")))
+            or closure_reference.get("sha256") != execution_closure_digest
+        ):
+            raise ValueError("execution closure digest does not match the approval campaign freeze")
+        try:
+            from scripts.close_ga_execution_campaign import verify_persisted_closure
+        except ModuleNotFoundError:  # direct script execution
+            from close_ga_execution_campaign import verify_persisted_closure
+        closure_validation = verify_persisted_closure(
+            closure_path,
+            authorization_path=expected_authorization_path,
+            approval_policy_path=expected_policy_path,
+            now=current,
+        )
+        if closure_validation.get("closure_sha256") != execution_closure_digest:
+            raise ValueError("execution closure changed during approval campaign validation")
+        if closure_validation.get("release_digest") != release_digest:
+            raise ValueError("execution closure release digest differs from the approval freeze")
+
     expected_campaign_id = derive_campaign_id(
         authorization_sha256=authorization_digest,
         approval_policy_sha256=policy_digest,
         release_digest=release_digest,
         frozen_at=str(freeze["frozen_at"]),
         approvals_expire_at=str(freeze["approvals_expire_at"]),
+        execution_closure_sha256=execution_closure_digest,
     )
     if freeze.get("campaign_id") != expected_campaign_id:
         raise ValueError("approval campaign id does not match its frozen inputs")
@@ -189,5 +297,7 @@ def validate_campaign_freeze(
         "frozen_at": frozen_at,
         "approvals_expire_at": expires_at,
         "release_digest": release_digest,
+        "schema_version": schema_version,
+        "execution_closure": closure_validation,
         "freeze": freeze,
     }

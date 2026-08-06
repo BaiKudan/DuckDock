@@ -279,17 +279,21 @@ def verify(env_file: Path) -> dict[str, Any]:
         "ga_approval_campaign",
         'evaluation.get("campaign_stage") == "APPROVAL_COLLECTION"' in freezer_text
         and "campaign authorization approvals must be empty" in freezer_text
+        and "verify_persisted_closure" in freezer_text
+        and '"execution_closure"' in freezer_text
+        and "require_execution_closure=not args.allow_legacy_unbound" in signer_text
         and 'preflight.get("campaign_stage") == "APPROVAL_COLLECTION"' in signer_text
         and 'preflight.get("evidence_ready_for_approval") is True' in signer_text
         and "approved-at cannot exceed the approval campaign expiry" in signer_text
         and "new approval did not pass authoritative verification" in signer_text
         and 'result.get("status") == "GA_AUTHORIZED"' in finalizer_text
+        and "require_execution_closure=not args.allow_legacy_unbound" in finalizer_text
         and "do not all belong to the frozen approval campaign" in finalizer_text
         and "persisted final authorization did not re-verify" in finalizer_text
         and "campaign freeze bound files cannot be resolved" in authorization_verifier_text
         and 'expected_base.pop("approval_campaign", None)' in authorization_verifier_text,
-        "immutable expiring freeze; each signer re-evaluates; mixed campaigns rejected; persisted GA_AUTHORIZED recheck",
-        "one bounded campaign binds the base/policy/digest; four approvals and final output pass the same gate",
+        "closure-bound v2 freeze; each signer re-evaluates; mixed campaigns rejected; persisted GA_AUTHORIZED recheck",
+        "one bounded campaign binds execution closure/base/policy/digest; four approvals and final output pass the same gate",
     )
     add(
         "ga_authorized_archive",
@@ -299,6 +303,7 @@ def verify(env_file: Path) -> dict[str, Any]:
         and "symbolic-link evidence is forbidden" in archiver_text
         and "private-key material is forbidden" in archiver_text
         and "authorization evaluation changed during archive creation" in archiver_text
+        and "require_formal_campaign_freeze" in archiver_text
         and "GzipFile" in archiver_text
         and "mtime=0" in archiver_text,
         "explicit reference closure; allowed-root isolation; double GA evaluation; deterministic immutable archive",
@@ -311,6 +316,7 @@ def verify(env_file: Path) -> dict[str, Any]:
         and "archived authorization did not independently re-evaluate"
         in archive_verifier_text
         and "ga_file_resolution_overrides(overrides, strict=True)" in archive_verifier_text
+        and "require_formal_campaign_freeze" in archive_verifier_text
         and "return (True, None) if strict" in path_resolution_text,
         "independent digest/member/reference verification plus strict offline GA re-evaluation",
         "transported archive verifies without reading original host evidence paths",

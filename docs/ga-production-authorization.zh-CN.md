@@ -759,20 +759,25 @@ next_action=collect_organizational_approvals
 `campaign_stage=EVIDENCE_COLLECTION`；版本、目标或发布机构策略无效时停在
 `campaign_stage=FOUNDATION`。这两种状态都禁止继续签字。
 
-预签字门禁通过后，先冻结一次有时限的审批活动。冻结工具再次执行权威门禁，将空
-`approvals` 授权文件、发布机构策略、release digest、冻结时间和审批截止时间写入
-不可覆盖的回执；窗口默认 24 小时，最大 72 小时：
+预签字门禁通过后，先冻结一次有时限的审批活动。正式 freeze v2 先独立重验 persisted
+execution closure 的 campaign/request/topology、64 份外部产物、88 个闭包输入、133 条
+引用和预审批评估，再把 closure、空 `approvals` 授权文件、发布机构策略、release digest、
+冻结时间和审批截止时间共同内容寻址到不可覆盖的回执；窗口默认 24 小时，最大 72 小时：
 
 ```bash
 python backend/scripts/freeze_ga_approval_campaign.py \
   --authorization /secure/duckdock-2.0.0-authorization.json \
   --approval-policy /release-authority/duckdock-ga-approval-policy.json \
+  --execution-closure /secure/evidence/execution-campaign-closure.json \
   --approval-window-hours 24 \
   --receipt-output /secure/duckdock-2.0.0-campaign-freeze.json
 ```
 
 冻结输入不能预先包含 `approval_campaign`；该字段由 finalizer 在四份签字完成后写入
 最终授权文件。若从完整 example 复制底稿，冻结前应同时移除示例 approvals 和该示例引用。
+`--allow-legacy-unbound` 仅用于审计历史 v1 fixture；正式 freezer、signer、finalizer、最终
+授权 CLI、archiver 与 archive verifier 默认全部拒绝没有 execution closure 绑定的 v1，
+发布流水线不得使用该兼容开关。
 
 然后将同一份只读授权文件、全部内容寻址证据、发布机构策略和 campaign freeze 回执提供给
 四个不同负责人。授权文件的 `approvals` 此时必须为空；每位负责人都必须在自己的
@@ -830,7 +835,9 @@ digest、错误密钥、签名缺失、base 已带审批、证据变化和非同
 看似可用的最终授权文件。成功时会在最终授权的 `approval_campaign` 中保留 freeze
 回执的 path/SHA-256/campaign ID；权威授权器会重新打开 freeze 和其绑定的原始空
 approvals base，核对最终文件除审批与该引用外完全一致。因此即使绕过 finalizer 手工
-拼 JSON，也不能用虚构或缺失的 freeze 得到 `GA_AUTHORIZED`。
+拼 JSON，也不能用虚构或缺失的 freeze 得到 `GA_AUTHORIZED`。v2 freeze 摘要又进入每份
+签名 statement，因此 closure、64 份计划产物、空 base、策略或窗口中任一项变化都会使
+四份签名同时失效。
 
 最后仍需以独立命令对持久化授权文件执行同一权威门禁：
 
@@ -841,14 +848,14 @@ python backend/scripts/verify_ga_production_authorization.py \
   --output /secure/duckdock-2.0.0-ga-authorization-result.json
 ```
 
-退出码 `0` 且状态 `GA_AUTHORIZED` 才是正式生产授权；退出码 `2` 是证据或签字
-阻断，退出码 `3` 是授权文件结构错误。得到该结果后使用授权归档器收口活动：
+退出码 `0` 且状态 `GA_AUTHORIZED` 才是正式生产授权；该 CLI 默认还要求 v2 freeze，
+所以历史 v1 即使四份签名有效也不能作为正式结果退出 `0`。退出码 `2` 是证据或签字
+阻断，退出码 `3` 是授权文件或正式协议错误。得到该结果后使用授权归档器收口活动：
 
 ```bash
 python backend/scripts/archive_ga_authorized_bundle.py \
   --authorization /secure/duckdock-2.0.0-authorized.json \
   --approval-policy /release-authority/duckdock-ga-approval-policy.json \
-  --supplemental-file /secure/evidence/execution-campaign-closure.json \
   --supplemental-file /secure/duckdock-2.0.0-assembly.json \
   --supplemental-file /secure/duckdock-2.0.0-finalization.json \
   --supplemental-file /secure/product-preflight.json \
@@ -865,11 +872,12 @@ python backend/scripts/archive_ga_authorized_bundle.py \
 `GA_AUTHORIZED` 才写出结果；三个输出均不可覆盖，持久化后会重新读取并验证。
 它不会扫描目录，只沿 JSON 中显式的 `path+sha256`、`path+manifest_sha256`、
 `allowed_signers_path+allowed_signers_sha256`、`signature_path` 引用闭包，并加入明确
-传入的 supplemental receipt/result。正式 GA 必须把 execution closure 作为 supplemental；
-它会继续显式引用 campaign/request/topology、64 份外部产物和 preapproval outputs，从而
-把计划到实际证据的完整映射带入 portable archive。campaign freeze 及其空 base 由最终授权中的
-内容寻址引用自动进入闭包，不需要作为 supplemental 重复传入。因此同目录审批私钥、builder 私钥和未引用文件
-不会进入归档；即使显式引用，常见 OpenSSH/PEM/age 私钥材料也会被拒绝。授权文件
+传入的 supplemental receipt/result。正式 v2 campaign freeze 已内容寻址 execution closure；
+closure 又显式引用 campaign/request/topology、64 份外部产物和 preapproval outputs，因此
+完整“计划→实际证据”图会自动进入 portable archive，不再需要把 closure 作为 supplemental
+重复传入。campaign freeze 及其空 base 同样由最终授权中的内容寻址引用自动进入闭包。
+因此同目录审批私钥、builder 私钥和未引用文件不会进入归档；即使显式引用，常见
+OpenSSH/PEM/age 私钥材料也会被拒绝。授权文件
 目录和策略目录自动成为允许根；引用位于其他受控目录时，
 必须显式追加 `--include-root evidence=/absolute/evidence/root`，越界引用、符号链接、
 摘要不符、证据中途变化或大于默认上限的输入都会 fail closed。
@@ -912,7 +920,9 @@ python backend/scripts/verify_ga_authorized_archive.py \
 引用索引和私钥排除，再把成员物化到临时隔离目录。随后以严格路径重映射重跑同一
 权威 evaluator：任何未进入 manifest 的原主机路径都会返回 missing，绝不回退读取
 接收机或原发布机文件系统。只有历史 canonical 时点仍得到完全一致的
-`GA_AUTHORIZED` 和 release digest，才输出 `GA_AUTHORIZED_ARCHIVE_VERIFIED`。
+`GA_AUTHORIZED`、closure-bound freeze v2 和 release digest，才输出
+`GA_AUTHORIZED_ARCHIVE_VERIFIED`。closure 的引用账本会按已验证 manifest 映射到临时
+内容寻址成员后重新闭合。
 
 授权结果还会固定输出 `failed_foundation_checks`、`failed_evidence_checks`、
 `failed_approval_checks` 和 `next_action`。发布活动只能按 `next_action` 前进，不能因

@@ -19,10 +19,15 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 try:
-    from scripts.ga_path_resolution import ga_file_resolution_overrides
+    from scripts.ga_approval_campaign import require_formal_campaign_freeze
+    from scripts.ga_path_resolution import (
+        ga_file_resolution_override,
+        ga_file_resolution_overrides,
+    )
     from scripts.verify_ga_production_authorization import evaluate
 except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
-    from ga_path_resolution import ga_file_resolution_overrides
+    from ga_approval_campaign import require_formal_campaign_freeze
+    from ga_path_resolution import ga_file_resolution_override, ga_file_resolution_overrides
     from verify_ga_production_authorization import evaluate
 
 
@@ -134,10 +139,16 @@ def _resolve_file(
     authorization_path: Path,
     roots: Sequence[AllowedRoot],
 ) -> Path:
-    candidate = Path(raw_path).expanduser()
-    if not candidate.is_absolute():
-        adjacent = authorization_path.parent / candidate
-        candidate = adjacent if adjacent.exists() else Path.cwd() / candidate
+    handled, overridden = ga_file_resolution_override(raw_path)
+    if handled:
+        if overridden is None:
+            raise ValueError(f"referenced file has no verified portable mapping: {raw_path}")
+        candidate = overridden
+    else:
+        candidate = Path(raw_path).expanduser()
+        if not candidate.is_absolute():
+            adjacent = authorization_path.parent / candidate
+            candidate = adjacent if adjacent.exists() else Path.cwd() / candidate
     if candidate.is_symlink():
         raise ValueError(f"symbolic-link evidence is forbidden: {candidate}")
     resolved = candidate.resolve()
@@ -240,6 +251,7 @@ def _evaluate(
     approval_policy_path: Path,
     *,
     now: datetime,
+    allow_legacy_unbound: bool,
 ) -> dict[str, Any]:
     authorization = _load_object(authorization_path, "GA authorization")
     result = evaluate(
@@ -249,6 +261,11 @@ def _evaluate(
         now=now,
     )
     _assert_authorized(result)
+    if not allow_legacy_unbound:
+        require_formal_campaign_freeze(
+            authorization,
+            authorization_path=authorization_path,
+        )
     return result
 
 
@@ -575,11 +592,13 @@ def create_archive(
         authorization,
         approval_policy,
         now=operation_time,
+        allow_legacy_unbound=args.allow_legacy_unbound,
     )
     canonical_result = _evaluate(
         authorization,
         approval_policy,
         now=created_at,
+        allow_legacy_unbound=args.allow_legacy_unbound,
     )
     captured, captured_references = _capture_reference_closure(
         [authorization, approval_policy, *supplemental_files],
@@ -593,6 +612,7 @@ def create_archive(
         authorization,
         approval_policy,
         now=operation_time,
+        allow_legacy_unbound=args.allow_legacy_unbound,
     )
     if second_result != first_result:
         raise ValueError("authorization evaluation changed during archive creation")
@@ -613,6 +633,7 @@ def create_archive(
             authorization,
             approval_policy,
             now=created_at,
+            allow_legacy_unbound=args.allow_legacy_unbound,
         )
     if portable_result != canonical_result:
         raise ValueError("captured reference closure is not independently GA_AUTHORIZED")
@@ -665,6 +686,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--manifest-output", type=Path, required=True)
     parser.add_argument("--digest-output", type=Path, required=True)
+    parser.add_argument(
+        "--allow-legacy-unbound",
+        action="store_true",
+        help="archive historical v1 authorizations only; never use for a formal GA release",
+    )
     parser.add_argument("--created-at", help="RFC3339 deterministic manifest time")
     parser.add_argument("--max-file-bytes", type=int, default=DEFAULT_MAX_FILE_BYTES)
     parser.add_argument("--max-total-bytes", type=int, default=DEFAULT_MAX_TOTAL_BYTES)

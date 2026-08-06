@@ -13,8 +13,10 @@ from pathlib import Path
 from typing import Any, Sequence
 
 try:
+    from scripts.close_ga_execution_campaign import verify_persisted_closure
     from scripts.ga_approval_campaign import (
         CAMPAIGN_FREEZE_SCHEMA_VERSION,
+        LEGACY_CAMPAIGN_FREEZE_SCHEMA_VERSION,
         derive_campaign_id,
         parse_rfc3339,
         sha256_path,
@@ -22,8 +24,10 @@ try:
     )
     from scripts.verify_ga_production_authorization import evaluate, lint_authorization
 except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
+    from close_ga_execution_campaign import verify_persisted_closure
     from ga_approval_campaign import (
         CAMPAIGN_FREEZE_SCHEMA_VERSION,
+        LEGACY_CAMPAIGN_FREEZE_SCHEMA_VERSION,
         derive_campaign_id,
         parse_rfc3339,
         sha256_path,
@@ -107,6 +111,17 @@ def freeze_campaign(
     ):
         raise ValueError("authorization is not ready for an approval campaign freeze")
     release_digest = str(evaluation.get("release_digest", ""))
+    execution_closure_digest: str | None = None
+    if args.execution_closure is not None:
+        closure_validation = verify_persisted_closure(
+            args.execution_closure,
+            authorization_path=args.authorization,
+            approval_policy_path=args.approval_policy,
+            now=current,
+        )
+        if closure_validation.get("release_digest") != release_digest:
+            raise ValueError("execution closure release digest differs from the authorization")
+        execution_closure_digest = str(closure_validation["closure_sha256"])
     frozen_at_text = frozen_at.isoformat()
     expires_at_text = expires_at.isoformat()
     campaign_id = derive_campaign_id(
@@ -115,14 +130,25 @@ def freeze_campaign(
         release_digest=release_digest,
         frozen_at=frozen_at_text,
         approvals_expire_at=expires_at_text,
+        execution_closure_sha256=execution_closure_digest,
     )
     if (
         sha256_path(args.authorization) != authorization_digest
         or sha256_path(args.approval_policy) != policy_digest
+        or (
+            args.execution_closure is not None
+            and sha256_path(args.execution_closure) != execution_closure_digest
+        )
     ):
-        raise ValueError("authorization or approval policy changed during campaign freeze")
-    return {
-        "schema_version": CAMPAIGN_FREEZE_SCHEMA_VERSION,
+        raise ValueError(
+            "authorization, approval policy or execution closure changed during campaign freeze"
+        )
+    receipt = {
+        "schema_version": (
+            CAMPAIGN_FREEZE_SCHEMA_VERSION
+            if execution_closure_digest is not None
+            else LEGACY_CAMPAIGN_FREEZE_SCHEMA_VERSION
+        ),
         "campaign_id": campaign_id,
         "frozen_at": frozen_at_text,
         "approvals_expire_at": expires_at_text,
@@ -137,6 +163,12 @@ def freeze_campaign(
         "release_digest": release_digest,
         "evaluation": evaluation,
     }
+    if args.execution_closure is not None:
+        receipt["execution_closure"] = {
+            "path": str(args.execution_closure.resolve()),
+            "sha256": execution_closure_digest,
+        }
+    return receipt
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -144,14 +176,28 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--authorization", type=Path, required=True)
     parser.add_argument("--approval-policy", type=Path, required=True)
     parser.add_argument("--receipt-output", type=Path, required=True)
+    binding = parser.add_mutually_exclusive_group(required=True)
+    binding.add_argument(
+        "--execution-closure",
+        type=Path,
+        help="persisted execution campaign closure required by the formal v2 profile",
+    )
+    binding.add_argument(
+        "--allow-legacy-unbound",
+        action="store_true",
+        help="validate historical v1 campaigns only; never use for a formal GA release",
+    )
     parser.add_argument("--frozen-at")
     parser.add_argument("--approval-window-hours", type=int, default=24)
     args = parser.parse_args(argv)
     try:
-        for path, label in (
+        inputs = [
             (args.authorization, "authorization"),
             (args.approval_policy, "approval policy"),
-        ):
+        ]
+        if args.execution_closure is not None:
+            inputs.append((args.execution_closure, "execution closure"))
+        for path, label in inputs:
             if not path.is_file():
                 raise ValueError(f"{label} does not exist: {path}")
         if not 1 <= args.approval_window_hours <= MAX_APPROVAL_WINDOW_HOURS:
@@ -159,6 +205,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         if args.receipt_output.resolve() in {
             args.authorization.resolve(),
             args.approval_policy.resolve(),
+            *(
+                {args.execution_closure.resolve()}
+                if args.execution_closure is not None
+                else set()
+            ),
         }:
             raise ValueError("campaign receipt must not overwrite an input")
         if args.receipt_output.exists():
@@ -180,6 +231,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 authorization_path=args.authorization,
                 approval_policy_path=args.approval_policy,
                 now=datetime.now(timezone.utc),
+                require_execution_closure=args.execution_closure is not None,
             )
             if validated["campaign_id"] != receipt["campaign_id"]:
                 raise ValueError("persisted campaign receipt did not re-verify")

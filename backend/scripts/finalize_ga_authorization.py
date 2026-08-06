@@ -119,6 +119,7 @@ def finalize(
         authorization_path=args.authorization,
         approval_policy_path=args.approval_policy,
         now=current,
+        require_execution_closure=not args.allow_legacy_unbound,
     )
 
     entry_records = [
@@ -210,6 +211,7 @@ def finalize(
             "campaign_id": campaign["campaign_id"],
             "frozen_at": campaign["freeze"]["frozen_at"],
             "approvals_expire_at": campaign["freeze"]["approvals_expire_at"],
+            "schema_version": campaign["schema_version"],
         },
         "approval_entries": [
             {
@@ -235,6 +237,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--authorization", type=Path, required=True)
     parser.add_argument("--approval-policy", type=Path, required=True)
     parser.add_argument("--campaign-freeze", type=Path, required=True)
+    parser.add_argument(
+        "--allow-legacy-unbound",
+        action="store_true",
+        help="validate historical v1 campaigns only; never use for a formal GA release",
+    )
     parser.add_argument(
         "--approval-entry",
         type=Path,

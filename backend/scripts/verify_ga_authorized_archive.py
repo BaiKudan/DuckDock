@@ -15,6 +15,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Sequence
 
 try:
+    from scripts.ga_approval_campaign import require_formal_campaign_freeze
     from scripts.archive_ga_authorized_bundle import (
         ARCHIVE_MANIFEST_SCHEMA_VERSION,
         PRIVATE_KEY_MARKERS,
@@ -27,6 +28,7 @@ try:
     from scripts.ga_path_resolution import ga_file_resolution_overrides
     from scripts.verify_ga_production_authorization import evaluate
 except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
+    from ga_approval_campaign import require_formal_campaign_freeze
     from archive_ga_authorized_bundle import (
         ARCHIVE_MANIFEST_SCHEMA_VERSION,
         PRIVATE_KEY_MARKERS,
@@ -388,12 +390,21 @@ def _assert_authorized(result: dict[str, Any], manifest: dict[str, Any]) -> None
         and result.get("release_digest") == manifest.get("release_digest")
         and result.get("checked_at") == evaluation.get("checked_at")
     ):
+        campaign_check = next(
+            (
+                check
+                for check in result.get("checks", [])
+                if check.get("key") == "approval_campaign"
+            ),
+            {},
+        )
         raise ValueError(
             "archived authorization did not independently re-evaluate as "
             f"GA_AUTHORIZED: status={result.get('status')}, "
             f"foundation={result.get('failed_foundation_checks')}, "
             f"evidence={result.get('failed_evidence_checks')}, "
-            f"approvals={result.get('failed_approval_checks')}"
+            f"approvals={result.get('failed_approval_checks')}, "
+            f"campaign={campaign_check.get('observed', 'missing')}"
         )
 
 
@@ -452,6 +463,11 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
                 approval_policy_path=approval_policy_path,
                 now=checked_at,
             )
+            if not args.allow_legacy_unbound:
+                require_formal_campaign_freeze(
+                    authorization,
+                    authorization_path=authorization_path,
+                )
         _assert_authorized(result, manifest)
 
     return {
@@ -476,6 +492,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-archive-bytes", type=int, default=DEFAULT_MAX_ARCHIVE_BYTES)
     parser.add_argument("--max-manifest-bytes", type=int, default=DEFAULT_MAX_MANIFEST_BYTES)
     parser.add_argument("--max-total-bytes", type=int, default=DEFAULT_MAX_TOTAL_BYTES)
+    parser.add_argument(
+        "--allow-legacy-unbound",
+        action="store_true",
+        help="verify historical v1 archives only; never use for a formal GA release",
+    )
     args = parser.parse_args(argv)
     try:
         if args.max_archive_bytes <= 0 or args.max_manifest_bytes <= 0 or args.max_total_bytes <= 0:

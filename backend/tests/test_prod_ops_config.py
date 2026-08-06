@@ -287,8 +287,11 @@ def test_ga_approval_tools_reverify_before_signing_and_before_final_output():
     assert 'result.get("campaign_stage") == "APPROVAL_COLLECTION"' in assembler
     assert "persisted preapproval authorization did not re-verify" in assembler
     assert 'evaluation.get("campaign_stage") == "APPROVAL_COLLECTION"' in freezer
+    assert "verify_persisted_closure" in freezer
+    assert '"execution_closure"' in freezer
     assert "campaign authorization approvals must be empty" in freezer
     assert "validate_campaign_freeze" in signer
+    assert "require_execution_closure=not args.allow_legacy_unbound" in signer
     assert "approved-at cannot exceed the approval campaign expiry" in signer
     assert 'preflight.get("campaign_stage") == "APPROVAL_COLLECTION"' in signer
     assert 'preflight.get("evidence_ready_for_approval") is True' in signer
@@ -296,10 +299,12 @@ def test_ga_approval_tools_reverify_before_signing_and_before_final_output():
     assert "every signer evaluates the same campaign" in signer
     assert "new approval did not pass authoritative verification" in signer
     assert 'result.get("status") == "GA_AUTHORIZED"' in finalizer
+    assert "require_execution_closure=not args.allow_legacy_unbound" in finalizer
     assert "base authorization approvals must be empty" in finalizer
     assert "do not all belong to the frozen approval campaign" in finalizer
     assert "persisted final authorization did not re-verify" in finalizer
     assert 'result.get("status") == "GA_AUTHORIZED"' in archiver
+    assert "require_formal_campaign_freeze" in archiver
     assert 'result.get("next_action") == "archive_authorized_bundle"' in archiver
     assert "referenced file is outside every allowed root" in archiver
     assert "symbolic-link evidence is forbidden" in archiver
@@ -308,6 +313,7 @@ def test_ga_approval_tools_reverify_before_signing_and_before_final_output():
     assert "GzipFile" in archiver
     assert "mtime=0" in archiver
     assert "GA_AUTHORIZED_ARCHIVE_VERIFIED" in archive_verifier
+    assert "require_formal_campaign_freeze" in archive_verifier
     assert "manifest reference index does not exactly match" in archive_verifier
     assert "archived authorization did not independently re-evaluate" in archive_verifier
     assert "ga_file_resolution_overrides(overrides, strict=True)" in archive_verifier

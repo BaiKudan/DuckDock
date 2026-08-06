@@ -30,9 +30,12 @@ except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
     from ga_path_resolution import ga_file_resolution_override
 
 try:
-    from scripts.ga_approval_campaign import validate_campaign_freeze
+    from scripts.ga_approval_campaign import (
+        require_formal_campaign_freeze,
+        validate_campaign_freeze,
+    )
 except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
-    from ga_approval_campaign import validate_campaign_freeze
+    from ga_approval_campaign import require_formal_campaign_freeze, validate_campaign_freeze
 
 try:
     from scripts.ga_capacity_evidence import (
@@ -6124,6 +6127,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="return zero after emitting any structurally valid non-GA report",
     )
+    parser.add_argument(
+        "--allow-legacy-unbound",
+        action="store_true",
+        help="validate historical v1 authorizations only; never use for a formal GA release",
+    )
     return parser.parse_args(argv)
 
 
@@ -6142,6 +6150,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             authorization_path=args.authorization.resolve(),
             approval_policy_path=args.approval_policy,
         )
+        if result.get("status") == "GA_AUTHORIZED" and not args.allow_legacy_unbound:
+            require_formal_campaign_freeze(
+                document,
+                authorization_path=args.authorization,
+            )
     except ValueError as exc:
         print(f"GA authorization error: {exc}", file=sys.stderr)
         return 3

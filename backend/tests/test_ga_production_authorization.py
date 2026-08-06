@@ -18,7 +18,7 @@ import scripts.close_ga_execution_campaign as execution_campaign_closer
 import scripts.collect_ga_release_provenance as release_provenance_collector
 import scripts.prepare_ga_execution_campaign as execution_campaign_preparer
 import scripts.verify_ga_trust_topology as trust_topology_verifier
-from scripts.ga_approval_campaign import derive_campaign_id
+from scripts.ga_approval_campaign import derive_campaign_id, validate_campaign_freeze
 
 from scripts.verify_ga_production_authorization import (
     ALERTING_POLICY_SCHEMA_VERSION,
@@ -3531,6 +3531,7 @@ def _freeze_approval_campaign(
             str(tmp_path / "approval-policy.json"),
             "--receipt-output",
             str(campaign_freeze),
+            "--allow-legacy-unbound",
             "--frozen-at",
             now.isoformat(),
             "--approval-window-hours",
@@ -4294,6 +4295,140 @@ def test_execution_campaign_closure_reverifies_all_64_external_artifacts(
         reference = persisted_closure["outputs"][name]
         path = Path(reference["path"])
         assert reference["sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+
+    preapproval_authorization = Path(plan["artifacts"]["preapproval_authorization"])
+    approval_policy = tmp_path / "approval-policy.json"
+    closure_validation = execution_campaign_closer.verify_persisted_closure(
+        persisted_closure_path,
+        authorization_path=preapproval_authorization,
+        approval_policy_path=approval_policy,
+    )
+    assert closure_validation["closure_sha256"] == hashlib.sha256(
+        persisted_closure_path.read_bytes()
+    ).hexdigest()
+
+    campaign_freeze = evidence_root / "approval-campaign-freeze.json"
+    freezer = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).parents[1] / "scripts" / "freeze_ga_approval_campaign.py"),
+            "--authorization",
+            str(preapproval_authorization),
+            "--approval-policy",
+            str(approval_policy),
+            "--execution-closure",
+            str(persisted_closure_path),
+            "--receipt-output",
+            str(campaign_freeze),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    assert freezer.returncode == 0, freezer.stdout.decode()
+    freeze_receipt = json.loads(campaign_freeze.read_text(encoding="utf-8"))
+    assert freeze_receipt["schema_version"] == "duckdock-ga-approval-campaign-freeze-v2"
+    assert freeze_receipt["execution_closure"]["sha256"] == closure_validation[
+        "closure_sha256"
+    ]
+
+    approval_paths: list[Path] = []
+    for role in sorted(REQUIRED_APPROVAL_ROLES):
+        role_slug = role.lower()
+        approval_path = evidence_root / f"formal-{role_slug}-approval.json"
+        signer = subprocess.run(
+            [
+                str(Path(__file__).parents[2] / "scripts" / "sign-ga-approval.sh"),
+                "--authorization",
+                str(preapproval_authorization),
+                "--approval-policy",
+                str(approval_policy),
+                "--campaign-freeze",
+                str(campaign_freeze),
+                "--role",
+                role,
+                "--identity",
+                f"{role_slug}@example.com",
+                "--key",
+                str(tmp_path / f"{role_slug}_key"),
+                "--signature-output",
+                str(evidence_root / f"formal-{role_slug}.sig"),
+                "--approval-output",
+                str(approval_path),
+                "--preflight-output",
+                str(evidence_root / f"formal-{role_slug}-preflight.json"),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+        assert signer.returncode == 0, signer.stdout.decode()
+        approval_paths.append(approval_path)
+
+    final_authorization = evidence_root / "formal-authorized.json"
+    finalization_receipt = evidence_root / "formal-finalization.json"
+    finalizer_command = [
+        sys.executable,
+        str(Path(__file__).parents[1] / "scripts" / "finalize_ga_authorization.py"),
+        "--authorization",
+        str(preapproval_authorization),
+        "--approval-policy",
+        str(approval_policy),
+        "--campaign-freeze",
+        str(campaign_freeze),
+    ]
+    for approval_path in approval_paths:
+        finalizer_command.extend(["--approval-entry", str(approval_path)])
+    finalizer_command.extend(
+        [
+            "--output",
+            str(final_authorization),
+            "--receipt-output",
+            str(finalization_receipt),
+        ]
+    )
+    finalizer = subprocess.run(
+        finalizer_command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    assert finalizer.returncode == 0, finalizer.stdout.decode()
+    finalized = json.loads(finalization_receipt.read_text(encoding="utf-8"))
+    assert finalized["evaluation"]["status"] == "GA_AUTHORIZED"
+    assert finalized["campaign_freeze"]["schema_version"] == (
+        "duckdock-ga-approval-campaign-freeze-v2"
+    )
+
+    archive_command, archive_outputs = _authorized_archive_command(
+        tmp_path,
+        final_authorization,
+        stem="formal-closure-bound-ga",
+        allow_legacy_unbound=False,
+    )
+    archived = subprocess.run(
+        archive_command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    assert archived.returncode == 0, archived.stdout.decode()
+    archive_manifest = json.loads(archive_outputs[1].read_text(encoding="utf-8"))
+    assert any(
+        reference["raw_path"] == str(persisted_closure_path)
+        for reference in archive_manifest["references"]
+    )
+    verified_archive = subprocess.run(
+        _authorized_archive_verifier_command(
+            archive_outputs,
+            allow_legacy_unbound=False,
+        ),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    assert verified_archive.returncode == 0, verified_archive.stdout.decode()
+
     original_closure = persisted_closure_path.read_bytes()
     assert (
         execution_campaign_closer.main(
@@ -4437,6 +4572,14 @@ def test_campaign_freeze_binds_exact_inputs_and_is_immutable(tmp_path: Path) -> 
     receipt = json.loads(original_payload)
 
     assert receipt["schema_version"] == "duckdock-ga-approval-campaign-freeze-v1"
+    with pytest.raises(ValueError, match="closure-bound campaign freeze v2"):
+        validate_campaign_freeze(
+            campaign_freeze,
+            authorization_path=authorization,
+            approval_policy_path=tmp_path / "approval-policy.json",
+            now=now,
+            require_execution_closure=True,
+        )
     assert receipt["campaign_id"].startswith("gac_")
     assert receipt["authorization"]["sha256"] == hashlib.sha256(
         authorization.read_bytes()
@@ -4500,6 +4643,7 @@ def test_signing_tool_rejects_expired_campaign_freeze(tmp_path: Path) -> None:
             str(tmp_path / "approval-policy.json"),
             "--campaign-freeze",
             str(campaign_freeze),
+            "--allow-legacy-unbound",
             "--role",
             "Product",
             "--identity",
@@ -4552,6 +4696,7 @@ def test_signing_tool_rejects_evidence_changed_after_campaign_freeze(tmp_path: P
             str(tmp_path / "approval-policy.json"),
             "--campaign-freeze",
             str(campaign_freeze),
+            "--allow-legacy-unbound",
             "--role",
             "Product",
             "--identity",
@@ -4600,6 +4745,7 @@ def test_signing_tool_reruns_preflight_and_emits_verified_approval(tmp_path: Pat
             str(tmp_path / "approval-policy.json"),
             "--campaign-freeze",
             str(campaign_freeze),
+            "--allow-legacy-unbound",
             "--role",
             "Product",
             "--identity",
@@ -4684,6 +4830,7 @@ def test_signing_tool_refuses_unverifiable_or_premature_approval(
             str(tmp_path / "approval-policy.json"),
             "--campaign-freeze",
             str(campaign_freeze),
+            "--allow-legacy-unbound",
             "--role",
             "Product",
             "--identity",
@@ -4732,6 +4879,7 @@ def test_finalization_tool_emits_only_a_reverified_ga_authorization(tmp_path: Pa
                 str(tmp_path / "approval-policy.json"),
                 "--campaign-freeze",
                 str(campaign_freeze),
+                "--allow-legacy-unbound",
                 "--role",
                 role,
                 "--identity",
@@ -4764,6 +4912,7 @@ def test_finalization_tool_emits_only_a_reverified_ga_authorization(tmp_path: Pa
         str(tmp_path / "approval-policy.json"),
         "--campaign-freeze",
         str(campaign_freeze),
+        "--allow-legacy-unbound",
     ]
     for path in approval_paths:
         command.extend(["--approval-entry", str(path)])
@@ -4844,6 +4993,7 @@ def test_finalization_tool_refuses_one_cross_digest_approval(tmp_path: Path) -> 
         str(tmp_path / "approval-policy.json"),
         "--campaign-freeze",
         str(campaign_freeze),
+        "--allow-legacy-unbound",
     ]
     for approval in approvals:
         path = tmp_path / f"{approval['role'].lower()}-approval.json"
@@ -4878,6 +5028,7 @@ def _authorized_archive_command(
     *,
     stem: str = "duckdock-2.0.0-ga",
     supplemental_files: tuple[Path, ...] = (),
+    allow_legacy_unbound: bool = True,
 ) -> tuple[list[str], list[Path]]:
     outputs = [
         tmp_path / f"{stem}.tar.gz",
@@ -4902,14 +5053,20 @@ def _authorized_archive_command(
         "--digest-output",
         str(outputs[2]),
     ]
+    if allow_legacy_unbound:
+        command.append("--allow-legacy-unbound")
     for supplemental_file in supplemental_files:
         command.extend(["--supplemental-file", str(supplemental_file)])
     command.extend(["--created-at", datetime.now(timezone.utc).isoformat()])
     return command, outputs
 
 
-def _authorized_archive_verifier_command(outputs: list[Path]) -> list[str]:
-    return [
+def _authorized_archive_verifier_command(
+    outputs: list[Path],
+    *,
+    allow_legacy_unbound: bool = True,
+) -> list[str]:
+    command = [
         sys.executable,
         str(
             Path(__file__).parents[1]
@@ -4920,9 +5077,11 @@ def _authorized_archive_verifier_command(outputs: list[Path]) -> list[str]:
         str(outputs[0]),
         "--manifest",
         str(outputs[1]),
-        "--digest",
-        str(outputs[2]),
     ]
+    if allow_legacy_unbound:
+        command.append("--allow-legacy-unbound")
+    command.extend(["--digest", str(outputs[2])])
+    return command
 
 
 def test_authorized_archive_is_deterministic_complete_and_excludes_private_keys(

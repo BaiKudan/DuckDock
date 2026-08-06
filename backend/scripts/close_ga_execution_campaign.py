@@ -10,7 +10,7 @@ import os
 import re
 import sys
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -22,6 +22,7 @@ try:
         _capture_reference_closure,
     )
     from scripts.assemble_ga_preapproval_authorization import assemble
+    from scripts.ga_path_resolution import ga_file_resolution_override
     from scripts.prepare_ga_execution_campaign import (
         PLAN_SCHEMA_VERSION,
         _parse_time,
@@ -36,11 +37,30 @@ except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
         _capture_reference_closure,
     )
     from assemble_ga_preapproval_authorization import assemble
+    from ga_path_resolution import ga_file_resolution_override
     from prepare_ga_execution_campaign import PLAN_SCHEMA_VERSION, _parse_time, prepare
     from verify_ga_production_authorization import evaluate
 
 
 CLOSURE_SCHEMA_VERSION = "duckdock-ga-execution-campaign-closure-v1"
+CLOSURE_KEYS = {
+    "schema_version",
+    "status",
+    "authorization_boundary",
+    "closed_at",
+    "campaign_id",
+    "campaign",
+    "assembly_request",
+    "approval_policy",
+    "external_artifact_count",
+    "external_artifacts",
+    "captured_input_count",
+    "reference_count",
+    "references",
+    "outputs",
+    "evaluation",
+    "next_action",
+}
 CLOSURE_OUTPUT_KEYS = {
     "preapproval_authorization",
     "preapproval_assembly_receipt",
@@ -94,7 +114,13 @@ def _checked_reference(value: Any, *, label: str) -> tuple[Path, str]:
         raise ValueError(f"{label}.path must be a non-empty path")
     if not isinstance(digest, str) or SHA256_RE.fullmatch(digest) is None:
         raise ValueError(f"{label}.sha256 must be SHA-256")
-    candidate = Path(raw_path).expanduser()
+    handled, overridden = ga_file_resolution_override(raw_path)
+    if handled:
+        if overridden is None:
+            raise ValueError(f"{label} has no verified portable file mapping")
+        candidate = overridden
+    else:
+        candidate = Path(raw_path).expanduser()
     if candidate.is_symlink():
         raise ValueError(f"{label} is not a regular non-symlink file: {candidate}")
     path = candidate.resolve()
@@ -103,6 +129,17 @@ def _checked_reference(value: Any, *, label: str) -> tuple[Path, str]:
     if _sha256(path) != digest:
         raise ValueError(f"{label} digest mismatch")
     return path, digest
+
+
+def _resolved_recorded_path(raw_path: Any, *, label: str) -> Path:
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        raise ValueError(f"{label} must be a non-empty path")
+    handled, overridden = ga_file_resolution_override(raw_path)
+    if handled:
+        if overridden is None:
+            raise ValueError(f"{label} has no verified portable file mapping")
+        return overridden.resolve()
+    return Path(raw_path).expanduser().resolve()
 
 
 def _exact_roots(paths: set[Path]) -> list[AllowedRoot]:
@@ -143,12 +180,17 @@ def _capture_exact_closure(
     return captured, references
 
 
-def _topology_inputs(receipt: dict[str, Any]) -> tuple[dict[Path, str], Path]:
+def _topology_inputs(
+    receipt: dict[str, Any],
+) -> tuple[dict[Path, str], Path, dict[Path, str]]:
     tracked: dict[Path, str] = {}
+    recorded_paths: dict[Path, str] = {}
+    manifest_reference = receipt.get("manifest")
     manifest_path, manifest_digest = _checked_reference(
-        receipt.get("manifest"), label="trust topology manifest"
+        manifest_reference, label="trust topology manifest"
     )
     tracked[manifest_path] = manifest_digest
+    recorded_paths[manifest_path] = str(manifest_reference["path"])
     policies = receipt.get("policies")
     if not isinstance(policies, dict) or "approval" not in policies:
         raise ValueError("trust topology receipt has no approval policy")
@@ -165,11 +207,13 @@ def _topology_inputs(receipt: dict[str, Any]) -> tuple[dict[Path, str], Path]:
         )
         tracked[policy_path] = policy_digest
         tracked[trust_path] = trust_digest
+        recorded_paths[policy_path] = str(policy["policy"]["path"])
+        recorded_paths[trust_path] = str(policy["allowed_signers"]["path"])
         if name == "approval":
             approval_policy = policy_path
     if approval_policy is None:
         raise ValueError("trust topology receipt has no approval policy path")
-    return tracked, approval_policy
+    return tracked, approval_policy, recorded_paths
 
 
 def _label_paths(
@@ -200,6 +244,60 @@ def _validate_observation_window(
             raise ValueError(
                 f"campaign {name} evidence was not observed inside the execution window"
             )
+
+
+def _reference_ledger(
+    references: Sequence[CapturedReference],
+    labels: dict[Path, str],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "source": labels.get(reference.source, str(reference.source)),
+            "target": labels.get(reference.target, str(reference.target)),
+            "reference_type": reference.reference_type,
+            "raw_path": reference.raw_path,
+            "declared_sha256": reference.declared_sha256,
+        }
+        for reference in sorted(
+            references,
+            key=lambda item: (
+                str(item.source),
+                item.reference_type,
+                item.raw_path,
+                str(item.target),
+            ),
+        )
+    ]
+
+
+def _evaluation_verdict(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError("execution closure evaluation must be an object")
+    checks = value.get("checks")
+    if not isinstance(checks, list) or any(not isinstance(check, dict) for check in checks):
+        raise ValueError("execution closure evaluation checks must be an array of objects")
+    return {
+        **{key: item for key, item in value.items() if key != "checks"},
+        "checks": [
+            {
+                "key": check.get("key"),
+                "owner": check.get("owner"),
+                "passed": check.get("passed"),
+                "status": check.get("status"),
+            }
+            for check in checks
+        ],
+    }
+
+
+def _reference_record_sort_key(item: dict[str, Any]) -> tuple[str, ...]:
+    return (
+        str(item.get("source")),
+        str(item.get("target")),
+        str(item.get("reference_type")),
+        str(item.get("raw_path")),
+        str(item.get("declared_sha256")),
+    )
 
 
 def close(
@@ -283,7 +381,9 @@ def close(
     )
 
     topology_receipt = _load_object(topology_receipt_path, "trust topology receipt")
-    topology_inputs, approval_policy_path = _topology_inputs(topology_receipt)
+    topology_inputs, approval_policy_path, topology_recorded_paths = _topology_inputs(
+        topology_receipt
+    )
     execution = campaign.get("execution")
     if not isinstance(execution, dict):
         raise ValueError("execution campaign has no normalized execution controls")
@@ -299,7 +399,9 @@ def close(
         "backup_allowed_signers": backup_path,
         **{
             f"topology_input:{index}": path
-            for index, path in enumerate(sorted(topology_inputs, key=str))
+            for index, path in enumerate(
+                sorted(topology_inputs, key=lambda item: topology_recorded_paths[item])
+            )
         },
     }
     allowed_paths = set(planned_inputs.values()) | set(fixed_paths.values())
@@ -336,24 +438,7 @@ def close(
         }
         for name, path in sorted(planned_inputs.items())
     }
-    reference_ledger = [
-        {
-            "source": labels.get(reference.source, str(reference.source)),
-            "target": labels.get(reference.target, str(reference.target)),
-            "reference_type": reference.reference_type,
-            "raw_path": reference.raw_path,
-            "declared_sha256": reference.declared_sha256,
-        }
-        for reference in sorted(
-            references,
-            key=lambda item: (
-                str(item.source),
-                item.reference_type,
-                item.raw_path,
-                str(item.target),
-            ),
-        )
-    ]
+    reference_ledger = _reference_ledger(references, labels)
     closure = {
         "schema_version": CLOSURE_SCHEMA_VERSION,
         "status": "PREAPPROVAL_ASSEMBLED",
@@ -379,6 +464,245 @@ def close(
         "next_action": "freeze_preapproval_campaign_then_collect_organizational_approvals",
     }
     return authorization, assembly_receipt, closure, captured_digests
+
+
+def verify_persisted_closure(
+    closure_path: Path,
+    *,
+    authorization_path: Path,
+    approval_policy_path: Path,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    closure_path = closure_path.resolve()
+    authorization_path = authorization_path.resolve()
+    approval_policy_path = approval_policy_path.resolve()
+    closure = _load_object(closure_path, "execution campaign closure")
+    if set(closure) != CLOSURE_KEYS:
+        raise ValueError("execution campaign closure has invalid fields")
+    if not (
+        closure.get("schema_version") == CLOSURE_SCHEMA_VERSION
+        and closure.get("status") == "PREAPPROVAL_ASSEMBLED"
+        and closure.get("authorization_boundary")
+        == "does_not_authorize_GA_or_target_mutation"
+        and closure.get("next_action")
+        == "freeze_preapproval_campaign_then_collect_organizational_approvals"
+    ):
+        raise ValueError("execution campaign closure status or boundary is invalid")
+    closed_at = _parse_time(closure.get("closed_at"), "closure closed_at")
+    if closed_at > current + timedelta(minutes=5):
+        raise ValueError("execution campaign closure time is in the future")
+
+    campaign_path, campaign_digest = _checked_reference(
+        closure.get("campaign"), label="closed execution campaign"
+    )
+    assembly_request_path, assembly_request_digest = _checked_reference(
+        closure.get("assembly_request"), label="closed preapproval assembly request"
+    )
+    closed_policy_path, closed_policy_digest = _checked_reference(
+        closure.get("approval_policy"), label="closed approval policy"
+    )
+    if closed_policy_path != approval_policy_path:
+        raise ValueError("execution closure approval policy path mismatch")
+
+    campaign = _load_object(campaign_path, "closed execution campaign")
+    if campaign.get("schema_version") != PLAN_SCHEMA_VERSION:
+        raise ValueError("closed execution campaign schema is unsupported")
+    if closure.get("campaign_id") != campaign.get("campaign_id"):
+        raise ValueError("execution closure campaign ID mismatch")
+    campaign_request_path, _ = _checked_reference(
+        campaign.get("request"), label="closed campaign request"
+    )
+    campaign_reference = closure.get("campaign")
+    portable_resolution, _ = ga_file_resolution_override(
+        campaign_reference.get("path") if isinstance(campaign_reference, dict) else None
+    )
+    topology = campaign.get("trust_topology")
+    if not isinstance(topology, dict):
+        raise ValueError("closed execution campaign has no trust topology")
+    topology_receipt_path, _ = _checked_reference(
+        topology.get("receipt"), label="closed trust topology receipt"
+    )
+    checked_assembly_path, checked_assembly_digest = _checked_reference(
+        campaign.get("preapproval_assembly_request"),
+        label="campaign preapproval assembly request",
+    )
+    if (
+        checked_assembly_path != assembly_request_path
+        or checked_assembly_digest != assembly_request_digest
+    ):
+        raise ValueError("execution closure assembly request differs from the campaign")
+    if portable_resolution:
+        if _sha256(campaign_path) != campaign_digest:
+            raise ValueError("closed execution campaign digest did not re-verify")
+    else:
+        created_at = _parse_time(campaign.get("created_at"), "campaign created_at")
+        regenerated_campaign, regenerated_request = prepare(
+            campaign_request_path,
+            topology_receipt_path,
+            assembly_request_path,
+            now=created_at,
+            require_fresh_evidence_root=False,
+        )
+        if regenerated_campaign != campaign or _sha256(campaign_path) != campaign_digest:
+            raise ValueError("closed execution campaign did not independently re-verify")
+        if _load_object(assembly_request_path, "closed assembly request") != regenerated_request:
+            raise ValueError("closed preapproval assembly request did not independently re-verify")
+
+    artifacts_value = campaign.get("artifacts")
+    if not isinstance(artifacts_value, dict):
+        raise ValueError("closed execution campaign artifacts must be an object")
+    artifacts = {
+        str(name): _resolved_recorded_path(path, label=f"campaign artifact {name}")
+        for name, path in artifacts_value.items()
+    }
+    if CLOSURE_OUTPUT_KEYS - set(artifacts):
+        raise ValueError("closed execution campaign is missing closure outputs")
+    planned_inputs = {
+        name: path for name, path in artifacts.items() if name not in CLOSURE_OUTPUT_KEYS
+    }
+    external_artifacts = closure.get("external_artifacts")
+    if (
+        not isinstance(external_artifacts, dict)
+        or set(external_artifacts) != set(planned_inputs)
+        or closure.get("external_artifact_count") != len(planned_inputs)
+    ):
+        raise ValueError("execution closure external artifact ledger is incomplete")
+    for name, path in planned_inputs.items():
+        record = external_artifacts.get(name)
+        if not isinstance(record, dict) or set(record) != {"path", "sha256", "size_bytes"}:
+            raise ValueError(f"execution closure artifact record is invalid: {name}")
+        if _resolved_recorded_path(
+            record.get("path"), label=f"execution closure artifact {name}"
+        ) != path:
+            raise ValueError(f"execution closure artifact path mismatch: {name}")
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"execution closure artifact is missing or symlinked: {name}")
+        if (
+            record.get("sha256") != _sha256(path)
+            or record.get("size_bytes") != path.stat().st_size
+        ):
+            raise ValueError(f"execution closure artifact content mismatch: {name}")
+
+    starts_at = _parse_time(campaign.get("window_starts_at"), "window_starts_at")
+    expires_at = _parse_time(campaign.get("window_expires_at"), "window_expires_at")
+    if closed_at < starts_at or closed_at > expires_at:
+        raise ValueError("execution closure was emitted outside the campaign window")
+    _validate_observation_window(
+        planned_inputs,
+        starts_at=starts_at,
+        closed_at=closed_at,
+    )
+    topology_receipt = _load_object(topology_receipt_path, "closed topology receipt")
+    topology_inputs, topology_policy_path, topology_recorded_paths = _topology_inputs(
+        topology_receipt
+    )
+    if (
+        topology_policy_path != approval_policy_path
+        or topology_inputs.get(approval_policy_path) != closed_policy_digest
+    ):
+        raise ValueError("execution closure policy does not match the trust topology")
+    execution = campaign.get("execution")
+    if not isinstance(execution, dict):
+        raise ValueError("closed execution campaign has no execution controls")
+    backup_path, _ = _checked_reference(
+        execution.get("backup_allowed_signers"),
+        label="closed campaign backup allowed-signers",
+    )
+    fixed_paths = {
+        "campaign": campaign_path,
+        "campaign_request": campaign_request_path,
+        "assembly_request": assembly_request_path,
+        "topology_receipt": topology_receipt_path,
+        "backup_allowed_signers": backup_path,
+        **{
+            f"topology_input:{index}": path
+            for index, path in enumerate(
+                sorted(topology_inputs, key=lambda item: topology_recorded_paths[item])
+            )
+        },
+    }
+    allowed_paths = set(planned_inputs.values()) | set(fixed_paths.values())
+    captured, references = _capture_exact_closure(
+        allowed_paths,
+        allowed_paths=allowed_paths,
+        authorization_path=authorization_path,
+    )
+    labels = _label_paths(planned_inputs, fixed_paths)
+    expected_references = _reference_ledger(references, labels)
+    recorded_references = closure.get("references")
+    if closure.get("captured_input_count") != len(captured):
+        raise ValueError("execution closure captured-input count did not independently re-verify")
+    if closure.get("reference_count") != len(expected_references):
+        raise ValueError("execution closure reference count did not independently re-verify")
+    if not isinstance(recorded_references, list) or sorted(
+        recorded_references, key=_reference_record_sort_key
+    ) != sorted(expected_references, key=_reference_record_sort_key):
+        raise ValueError("execution closure reference ledger did not independently re-verify")
+
+    outputs = closure.get("outputs")
+    if not isinstance(outputs, dict) or set(outputs) != {
+        "preapproval_authorization",
+        "preapproval_assembly_receipt",
+    }:
+        raise ValueError("execution closure output bindings are invalid")
+    closed_authorization_path, _ = _checked_reference(
+        outputs.get("preapproval_authorization"),
+        label="closed preapproval authorization",
+    )
+    assembly_receipt_path, _ = _checked_reference(
+        outputs.get("preapproval_assembly_receipt"),
+        label="closed preapproval assembly receipt",
+    )
+    if (
+        closed_authorization_path != authorization_path
+        or authorization_path != artifacts["preapproval_authorization"]
+        or assembly_receipt_path != artifacts["preapproval_assembly_receipt"]
+        or closure_path != artifacts["execution_closure"]
+    ):
+        raise ValueError("execution closure outputs do not match the planned paths")
+    assembly_receipt = _load_object(
+        assembly_receipt_path, "closed preapproval assembly receipt"
+    )
+    receipt_authorization_path, receipt_authorization_digest = _checked_reference(
+        assembly_receipt.get("authorization"),
+        label="assembly receipt authorization",
+    )
+    if (
+        receipt_authorization_path != authorization_path
+        or receipt_authorization_digest != _sha256(authorization_path)
+    ):
+        raise ValueError("assembly receipt does not bind the closed authorization")
+    authorization = _load_object(authorization_path, "closed preapproval authorization")
+    result = evaluate(
+        authorization,
+        authorization_path=authorization_path,
+        approval_policy_path=approval_policy_path,
+        now=closed_at,
+    )
+    recorded_evaluation = closure.get("evaluation")
+    if not (
+        result.get("status") == "AWAITING_EXTERNAL_APPROVALS"
+        and result.get("campaign_stage") == "APPROVAL_COLLECTION"
+        and result.get("foundation_ready") is True
+        and result.get("evidence_ready_for_approval") is True
+        and result.get("failed_foundation_checks") == []
+        and result.get("failed_evidence_checks") == []
+        and recorded_evaluation == assembly_receipt.get("evaluation")
+        and _evaluation_verdict(result) == _evaluation_verdict(recorded_evaluation)
+    ):
+        raise ValueError("closed preapproval authorization did not independently re-verify")
+    if any(_sha256(item.path) != item.sha256 for item in captured):
+        raise ValueError("execution closure input changed during independent verification")
+    return {
+        "closure_sha256": _sha256(closure_path),
+        "campaign_id": campaign["campaign_id"],
+        "closed_at": closed_at,
+        "authorization_sha256": _sha256(authorization_path),
+        "approval_policy_sha256": _sha256(approval_policy_path),
+        "release_digest": result["release_digest"],
+        "closure": closure,
+    }
 
 
 def _atomic_write(path: Path, payload: bytes) -> None:
