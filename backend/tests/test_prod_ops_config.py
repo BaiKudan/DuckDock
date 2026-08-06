@@ -177,6 +177,7 @@ def test_production_image_context_excludes_test_and_local_validation_artifacts()
         ".venv/",
         "scripts/collect_ga_target_readiness.py",
         "scripts/collect_ga_target_ha.py",
+        "scripts/collect_ga_target_network.py",
         "scripts/seed_handover_e2e.py",
         "scripts/g2_target_capacity_gate.py",
         "scripts/ga_release_identity.py",

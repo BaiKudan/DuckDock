@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 import json
 import re
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -53,6 +55,13 @@ PLACEHOLDER_MARKERS = ("__CHANGE_ME", "example.invalid", "<", ">")
 DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 IMAGE_RE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
+REQUIRED_NETWORK_POLICIES = {
+    "default-deny",
+    "allow-dns",
+    "frontend-ingress-and-backend",
+    "backend-from-frontend",
+    "controlled-external-egress",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -376,6 +385,188 @@ def _https_url(value: Any) -> bool:
         return False
     parsed = urlparse(value)
     return parsed.scheme == "https" and bool(parsed.hostname) and parsed.hostname not in {"localhost", "127.0.0.1"}
+
+
+def _canonical_digest(value: Any) -> str:
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _literal_ip(value: Any, *, globally_routable: bool = False) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    return address.is_global if globally_routable else True
+
+
+def _nmap_xml_summary(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        root = ET.fromstring(value)
+    except ET.ParseError:
+        return None
+    host_node = root.find("host")
+    status_node = host_node.find("status") if host_node is not None else None
+    finished = root.find("./runstats/finished")
+    if host_node is None or status_node is None or finished is None:
+        return None
+    addresses = sorted(
+        node.get("addr", "")
+        for node in host_node.findall("address")
+        if node.get("addr") and node.get("addrtype") in {None, "ipv4", "ipv6"}
+    )
+    port_states: dict[str, str] = {}
+    for port_node in host_node.findall("./ports/port"):
+        state_node = port_node.find("state")
+        port_id = port_node.get("portid")
+        if state_node is not None and port_id and port_id.isdigit():
+            port_states[port_id] = state_node.get("state", "unknown")
+    try:
+        elapsed = float(finished.get("elapsed", ""))
+    except ValueError:
+        return None
+    return {
+        "host_state": status_node.get("state", "unknown"),
+        "addresses": addresses,
+        "port_states": port_states,
+        "nmap_version": root.get("version", "unknown"),
+        "elapsed_seconds": elapsed,
+    }
+
+
+def _network_connection_result(value: Any, *, connected: bool, port: int) -> bool:
+    if not isinstance(value, dict):
+        return False
+    exit_code = value.get("kubectl_exit_code")
+    destination_port = value.get("destination_port")
+    return (
+        _meaningful_string(value.get("source_namespace"))
+        and _meaningful_string(value.get("source"))
+        and _meaningful_string(value.get("destination_host"))
+        and isinstance(destination_port, int)
+        and not isinstance(destination_port, bool)
+        and destination_port == port
+        and value.get("connected") is connected
+        and isinstance(exit_code, int)
+        and not isinstance(exit_code, bool)
+        and ((exit_code == 0) if connected else (exit_code != 0))
+    )
+
+
+def _network_probe_identities_valid(value: Any) -> bool:
+    if not isinstance(value, dict) or set(value) != {"ingress", "monitoring", "untrusted"}:
+        return False
+    namespaces: list[str] = []
+    for role, item in value.items():
+        if not isinstance(item, dict):
+            return False
+        namespace = item.get("namespace")
+        labels = item.get("namespace_labels")
+        if not (
+            _meaningful_string(namespace)
+            and _meaningful_string(item.get("namespace_uid"))
+            and _meaningful_string(item.get("namespace_resource_version"))
+            and isinstance(labels, dict)
+            and _meaningful_string(item.get("pod"))
+            and _meaningful_string(item.get("pod_uid"))
+            and _meaningful_string(item.get("pod_resource_version"))
+        ):
+            return False
+        namespaces.append(namespace)
+        if role == "ingress" and labels.get("duckdock.io/ingress") != "true":
+            return False
+        if role == "monitoring" and labels.get("duckdock.io/monitoring") != "true":
+            return False
+        if role == "untrusted" and (
+            labels.get("duckdock.io/ingress") == "true"
+            or labels.get("duckdock.io/monitoring") == "true"
+        ):
+            return False
+    return len(namespaces) == len(set(namespaces))
+
+
+def _network_policy_snapshots_valid(value: Any) -> bool:
+    if not isinstance(value, list) or not value:
+        return False
+    names = [item.get("name") for item in value if isinstance(item, dict)]
+    if (
+        len(names) != len(value)
+        or not all(_meaningful_string(name) for name in names)
+        or len(names) != len(set(names))
+        or not REQUIRED_NETWORK_POLICIES.issubset(set(names))
+    ):
+        return False
+    for item in value:
+        spec = item.get("spec")
+        generation = item.get("generation")
+        if not (
+            _meaningful_string(item.get("uid"))
+            and _meaningful_string(item.get("resource_version"))
+            and isinstance(generation, int)
+            and not isinstance(generation, bool)
+            and generation >= 1
+            and isinstance(spec, dict)
+            and item.get("spec_sha256") == _canonical_digest(spec)
+        ):
+            return False
+        for rule in spec.get("egress", []) or []:
+            if not isinstance(rule, dict):
+                return False
+            for target_entry in rule.get("to", []) or []:
+                ip_block = target_entry.get("ipBlock") if isinstance(target_entry, dict) else None
+                if isinstance(ip_block, dict) and ip_block.get("cidr") in {"0.0.0.0/0", "::/0"}:
+                    return False
+    return True
+
+
+def _nmap_scan_valid(
+    value: Any,
+    *,
+    requested_ports: str,
+    expected_open_ports: list[int],
+    expected_host: str | None = None,
+) -> bool:
+    if not isinstance(value, dict):
+        return False
+    addresses = value.get("addresses")
+    states = value.get("port_states")
+    elapsed = value.get("elapsed_seconds")
+    raw_xml = value.get("raw_nmap_xml")
+    xml_summary = _nmap_xml_summary(raw_xml)
+    single_port_state_valid = True
+    if requested_ports.isdigit():
+        observed_state = states.get(requested_ports) if isinstance(states, dict) else None
+        single_port_state_valid = isinstance(observed_state, str) and observed_state != "open"
+    return (
+        value.get("requested_ports") == requested_ports
+        and value.get("host_state") == "up"
+        and (expected_host is None or value.get("host") == expected_host)
+        and isinstance(addresses, list)
+        and bool(addresses)
+        and all(_literal_ip(address) for address in addresses)
+        and isinstance(states, dict)
+        and value.get("open_tcp_ports") == expected_open_ports
+        and all(str(port) in states and states[str(port)] == "open" for port in expected_open_ports)
+        and (bool(expected_open_ports) or single_port_state_valid)
+        and _meaningful_string(value.get("nmap_version"))
+        and isinstance(elapsed, (int, float))
+        and not isinstance(elapsed, bool)
+        and elapsed >= 0
+        and isinstance(raw_xml, str)
+        and hashlib.sha256(raw_xml.encode("utf-8")).hexdigest()
+        == value.get("xml_sha256")
+        and bool(DIGEST_RE.fullmatch(str(value.get("xml_sha256", ""))))
+        and isinstance(xml_summary, dict)
+        and xml_summary["host_state"] == value.get("host_state")
+        and xml_summary["addresses"] == addresses
+        and xml_summary["port_states"] == states
+        and xml_summary["nmap_version"] == value.get("nmap_version")
+        and xml_summary["elapsed_seconds"] == elapsed
+    )
 
 
 def _release_digest(
@@ -1051,6 +1242,24 @@ def evaluate(
         if isinstance(network_report, dict) and isinstance(network_report.get("policy_tests"), dict)
         else {}
     )
+    public_scan = external_scan.get("public_ingress") if isinstance(external_scan.get("public_ingress"), dict) else {}
+    private_scans = (
+        external_scan.get("private_data_services")
+        if isinstance(external_scan.get("private_data_services"), dict)
+        else {}
+    )
+    cni = policy_tests.get("cni") if isinstance(policy_tests.get("cni"), dict) else {}
+    probe_identities = policy_tests.get("probe_identities")
+    ingress_tests = (
+        policy_tests.get("ingress_tests")
+        if isinstance(policy_tests.get("ingress_tests"), dict)
+        else {}
+    )
+    egress_tests = (
+        policy_tests.get("egress_tests")
+        if isinstance(policy_tests.get("egress_tests"), dict)
+        else {}
+    )
     network_claims_match = isinstance(network_report, dict) and all(
         network_report.get(key) == network.get(key)
         for key in (
@@ -1062,20 +1271,167 @@ def evaluate(
             "egress_allowlist_enforced",
         )
     )
+    public_hostname = urlparse(str(target.get("public_base_url", ""))).hostname
+    public_scan_valid = bool(public_hostname) and _nmap_scan_valid(
+        public_scan,
+        requested_ports="1-65535",
+        expected_open_ports=[443],
+        expected_host=public_hostname,
+    )
+    private_scan_ports = {
+        "database": 3306,
+        "redis": 6379,
+        "object_store_direct": 9000,
+    }
+    private_scans_valid = set(private_scans) == set(private_scan_ports) and all(
+        isinstance(private_scans.get(name), dict)
+        and _literal_ip(private_scans[name].get("host"))
+        and _nmap_scan_valid(
+            private_scans[name],
+            requested_ports=str(port),
+            expected_open_ports=[],
+        )
+        for name, port in private_scan_ports.items()
+    )
+    cni_images = cni.get("images")
+    cni_desired = cni.get("desired")
+    cni_ready = cni.get("ready")
+    cni_valid = (
+        _meaningful_string(cni.get("namespace"))
+        and _meaningful_string(cni.get("name"))
+        and _meaningful_string(cni.get("uid"))
+        and _meaningful_string(cni.get("resource_version"))
+        and isinstance(cni.get("generation"), int)
+        and not isinstance(cni.get("generation"), bool)
+        and cni.get("generation") >= 1
+        and isinstance(cni_desired, int)
+        and not isinstance(cni_desired, bool)
+        and cni_desired > 0
+        and cni_ready == cni_desired
+        and isinstance(cni_images, list)
+        and bool(cni_images)
+        and all(isinstance(image, str) and bool(IMAGE_RE.fullmatch(image)) for image in cni_images)
+    )
+    cni_identity = (
+        f"{cni.get('namespace')}/{cni.get('name')} {' '.join(cni_images)}"
+        if cni_valid
+        else "invalid"
+    )
+    probe_identities_valid = _network_probe_identities_valid(probe_identities)
+    ingress_probe = probe_identities.get("ingress", {}) if isinstance(probe_identities, dict) else {}
+    monitoring_probe = probe_identities.get("monitoring", {}) if isinstance(probe_identities, dict) else {}
+    untrusted_probe = probe_identities.get("untrusted", {}) if isinstance(probe_identities, dict) else {}
+    target_namespace = policy_tests.get("namespace")
+    frontend_service = f"frontend.{target_namespace}.svc.cluster.local"
+    backend_service = f"backend.{target_namespace}.svc.cluster.local"
+    ingress_paths_valid = (
+        probe_identities_valid
+        and set(ingress_tests)
+        == {
+            "trusted_frontend_allowed",
+            "trusted_backend_allowed",
+            "untrusted_frontend_denied",
+            "untrusted_backend_denied",
+        }
+        and _network_connection_result(
+            ingress_tests.get("trusted_frontend_allowed"), connected=True, port=8080
+        )
+        and ingress_tests["trusted_frontend_allowed"].get("source_namespace") == ingress_probe.get("namespace")
+        and ingress_tests["trusted_frontend_allowed"].get("source") == f"pod/{ingress_probe.get('pod')}"
+        and ingress_tests["trusted_frontend_allowed"].get("destination_host") == frontend_service
+        and _network_connection_result(
+            ingress_tests.get("trusted_backend_allowed"), connected=True, port=8801
+        )
+        and ingress_tests["trusted_backend_allowed"].get("source_namespace") == monitoring_probe.get("namespace")
+        and ingress_tests["trusted_backend_allowed"].get("source") == f"pod/{monitoring_probe.get('pod')}"
+        and ingress_tests["trusted_backend_allowed"].get("destination_host") == backend_service
+        and _network_connection_result(
+            ingress_tests.get("untrusted_frontend_denied"), connected=False, port=8080
+        )
+        and ingress_tests["untrusted_frontend_denied"].get("source_namespace") == untrusted_probe.get("namespace")
+        and ingress_tests["untrusted_frontend_denied"].get("source") == f"pod/{untrusted_probe.get('pod')}"
+        and ingress_tests["untrusted_frontend_denied"].get("destination_host") == frontend_service
+        and _network_connection_result(
+            ingress_tests.get("untrusted_backend_denied"), connected=False, port=8801
+        )
+        and ingress_tests["untrusted_backend_denied"].get("source_namespace") == untrusted_probe.get("namespace")
+        and ingress_tests["untrusted_backend_denied"].get("source") == f"pod/{untrusted_probe.get('pod')}"
+        and ingress_tests["untrusted_backend_denied"].get("destination_host") == backend_service
+    )
+    approved_egress = (
+        egress_tests.get("approved_destination_allowed")
+        if isinstance(egress_tests.get("approved_destination_allowed"), dict)
+        else {}
+    )
+    control_egress = (
+        egress_tests.get("untrusted_control_destination_reachable")
+        if isinstance(egress_tests.get("untrusted_control_destination_reachable"), dict)
+        else {}
+    )
+    denied_egress = (
+        egress_tests.get("unapproved_destination_denied")
+        if isinstance(egress_tests.get("unapproved_destination_denied"), dict)
+        else {}
+    )
+    approved_port = approved_egress.get("destination_port")
+    unapproved_port = denied_egress.get("destination_port")
+    egress_paths_valid = (
+        set(egress_tests)
+        == {
+            "untrusted_control_destination_reachable",
+            "approved_destination_allowed",
+            "unapproved_destination_denied",
+        }
+        and isinstance(approved_port, int)
+        and not isinstance(approved_port, bool)
+        and 1 <= approved_port <= 65535
+        and isinstance(unapproved_port, int)
+        and not isinstance(unapproved_port, bool)
+        and 1 <= unapproved_port <= 65535
+        and _network_connection_result(approved_egress, connected=True, port=approved_port)
+        and approved_egress.get("source_namespace") == target_namespace
+        and approved_egress.get("source") == "deployment/backend"
+        and _network_connection_result(control_egress, connected=True, port=unapproved_port)
+        and control_egress.get("source_namespace") == untrusted_probe.get("namespace")
+        and control_egress.get("source") == f"pod/{untrusted_probe.get('pod')}"
+        and _network_connection_result(denied_egress, connected=False, port=unapproved_port)
+        and denied_egress.get("source_namespace") == target_namespace
+        and denied_egress.get("source") == "deployment/backend"
+        and control_egress.get("destination_host") == denied_egress.get("destination_host")
+        and control_egress.get("destination_port") == denied_egress.get("destination_port")
+        and (approved_egress.get("destination_host"), approved_port)
+        != (denied_egress.get("destination_host"), unapproved_port)
+    )
     network_report_matches = (
         _report_release_target_binding(
             network_report,
-            schema_version="duckdock-ga-network-evidence-v1",
+            schema_version="duckdock-ga-network-evidence-v2",
             status="PASS",
             control=network,
             target=target,
             release=release,
         )
         and network_claims_match
-        and _meaningful_string(network_report.get("enforced_by"))
-        and external_scan.get("transport") == "network TCP scan from outside target"
+        and network_report.get("passed") is True
+        and network_report.get("enforced_by") == cni_identity
+        and external_scan.get("transport") == "nmap TCP scan from acknowledged external vantage"
+        and _meaningful_string(external_scan.get("scanner_id"))
+        and _literal_ip(external_scan.get("scanner_source_ip"), globally_routable=True)
+        and public_scan_valid
+        and private_scans_valid
         and external_scan.get("discovered_tcp_ports") == [443]
+        and external_scan.get("private_data_services_unreachable") is True
         and external_scan.get("passed") is True
+        and _meaningful_string(policy_tests.get("cluster_context"))
+        and _meaningful_string(target_namespace)
+        and cni_valid
+        and probe_identities_valid
+        and _network_policy_snapshots_valid(policy_tests.get("network_policies"))
+        and policy_tests.get("required_policies_present") is True
+        and policy_tests.get("policy_snapshots_valid") is True
+        and policy_tests.get("broad_world_egress_absent") is True
+        and ingress_paths_valid
+        and egress_paths_valid
         and policy_tests.get("default_deny_ingress_exercised") is True
         and policy_tests.get("unapproved_egress_denied") is True
         and policy_tests.get("approved_egress_allowed") is True

@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import ssl
 import subprocess
 import sys
@@ -33,12 +34,20 @@ except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
 
 SCHEMA_VERSION = "duckdock-kubernetes-ha-failover-v2"
 STATE_SCHEMA_VERSION = "duckdock-ga-state-services-failover-v1"
-NETWORK_SCHEMA_VERSION = "duckdock-ga-network-evidence-v1"
+NETWORK_SCHEMA_VERSION = "duckdock-ga-network-evidence-v2"
 APPROVAL_POLICY_SCHEMA_VERSION = "duckdock-ga-approval-policy-v1"
 COMPONENTS = ("backend", "frontend", "worker", "beat")
 STATE_SERVICES = ("mysql", "redis", "object_store", "rwx_repository_storage")
 TAINT = "duckdock.io/fault-domain-unavailable=true:NoSchedule"
 TAINT_KEY = "duckdock.io/fault-domain-unavailable"
+NETWORK_REQUIRED_POLICIES = {
+    "default-deny",
+    "allow-dns",
+    "frontend-ingress-and-backend",
+    "backend-from-frontend",
+    "controlled-external-egress",
+}
+IMMUTABLE_IMAGE_RE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
 
 
 def _sha256(path: Path) -> str:
@@ -105,9 +114,111 @@ def _aware_time(value: Any) -> bool:
 
 
 def validate_network_evidence(path: Path, binding: dict[str, Any]) -> dict[str, Any]:
+    def meaningful(value: Any) -> bool:
+        return isinstance(value, str) and bool(value.strip()) and "__CHANGE_ME" not in value
+
+    def policy_has_broad_world(spec: dict[str, Any]) -> bool:
+        return any(
+            isinstance(target, dict)
+            and isinstance(target.get("ipBlock"), dict)
+            and target["ipBlock"].get("cidr") in {"0.0.0.0/0", "::/0"}
+            for rule in spec.get("egress", []) or []
+            if isinstance(rule, dict)
+            for target in rule.get("to", []) or []
+        )
+
+    def raw_scan_retained(scan: Any) -> bool:
+        if not isinstance(scan, dict) or not isinstance(scan.get("raw_nmap_xml"), str):
+            return False
+        return hashlib.sha256(scan["raw_nmap_xml"].encode("utf-8")).hexdigest() == scan.get(
+            "xml_sha256"
+        )
+
     report = _load_object(path, "network evidence")
     external_scan = report.get("external_scan")
     policy_tests = report.get("policy_tests")
+    public_scan = external_scan.get("public_ingress") if isinstance(external_scan, dict) else None
+    private_scans = external_scan.get("private_data_services") if isinstance(external_scan, dict) else None
+    policies = policy_tests.get("network_policies") if isinstance(policy_tests, dict) else None
+    cni = policy_tests.get("cni") if isinstance(policy_tests, dict) else None
+    probes = policy_tests.get("probe_identities") if isinstance(policy_tests, dict) else None
+    ingress = policy_tests.get("ingress_tests") if isinstance(policy_tests, dict) else None
+    egress = policy_tests.get("egress_tests") if isinstance(policy_tests, dict) else None
+    policy_names = [
+        item.get("name")
+        for item in policies or []
+        if isinstance(item, dict) and isinstance(item.get("name"), str)
+    ]
+    policies_valid = (
+        isinstance(policies, list)
+        and len(policy_names) == len(policies) == len(set(policy_names))
+        and NETWORK_REQUIRED_POLICIES.issubset(set(policy_names))
+        and all(
+            isinstance(item, dict)
+            and meaningful(item.get("uid"))
+            and meaningful(item.get("resource_version"))
+            and isinstance(item.get("generation"), int)
+            and not isinstance(item.get("generation"), bool)
+            and item.get("generation") >= 1
+            and isinstance(item.get("spec"), dict)
+            and item.get("spec_sha256")
+            == hashlib.sha256(
+                json.dumps(item["spec"], sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
+            and not policy_has_broad_world(item["spec"])
+            for item in policies
+        )
+    )
+    probe_rows_valid = isinstance(probes, dict) and all(
+        isinstance(item, dict)
+        and meaningful(item.get("namespace"))
+        and meaningful(item.get("namespace_uid"))
+        and meaningful(item.get("namespace_resource_version"))
+        and isinstance(item.get("namespace_labels"), dict)
+        and meaningful(item.get("pod"))
+        and meaningful(item.get("pod_uid"))
+        and meaningful(item.get("pod_resource_version"))
+        for item in probes.values()
+    )
+    probes_valid = (
+        probe_rows_valid
+        and set(probes) == {"ingress", "monitoring", "untrusted"}
+        and len({item.get("namespace") for item in probes.values() if isinstance(item, dict)}) == 3
+        and probes.get("ingress", {}).get("namespace_labels", {}).get("duckdock.io/ingress") == "true"
+        and probes.get("monitoring", {}).get("namespace_labels", {}).get("duckdock.io/monitoring") == "true"
+        and probes.get("untrusted", {}).get("namespace_labels", {}).get("duckdock.io/ingress") != "true"
+        and probes.get("untrusted", {}).get("namespace_labels", {}).get("duckdock.io/monitoring") != "true"
+    )
+    ingress_expected = {
+        "trusted_frontend_allowed": True,
+        "trusted_backend_allowed": True,
+        "untrusted_frontend_denied": False,
+        "untrusted_backend_denied": False,
+    }
+    ingress_valid = isinstance(ingress, dict) and set(ingress) == set(ingress_expected) and all(
+        isinstance(ingress.get(name), dict) and ingress[name].get("connected") is connected
+        for name, connected in ingress_expected.items()
+    )
+    control = egress.get("untrusted_control_destination_reachable", {}) if isinstance(egress, dict) else {}
+    approved = egress.get("approved_destination_allowed", {}) if isinstance(egress, dict) else {}
+    denied = egress.get("unapproved_destination_denied", {}) if isinstance(egress, dict) else {}
+    egress_valid = (
+        isinstance(egress, dict)
+        and set(egress)
+        == {
+            "untrusted_control_destination_reachable",
+            "approved_destination_allowed",
+            "unapproved_destination_denied",
+        }
+        and isinstance(control, dict)
+        and isinstance(approved, dict)
+        and isinstance(denied, dict)
+        and control.get("connected") is True
+        and approved.get("connected") is True
+        and denied.get("connected") is False
+        and control.get("destination_host") == denied.get("destination_host")
+        and control.get("destination_port") == denied.get("destination_port")
+    )
     if not (
         report.get("schema_version") == NETWORK_SCHEMA_VERSION
         and report.get("status") == "PASS"
@@ -115,10 +226,49 @@ def validate_network_evidence(path: Path, binding: dict[str, Any]) -> dict[str, 
         and _aware_time(report.get("observed_at"))
         and _binding_matches(report, binding)
         and isinstance(external_scan, dict)
+        and external_scan.get("transport") == "nmap TCP scan from acknowledged external vantage"
         and external_scan.get("passed") is True
         and external_scan.get("discovered_tcp_ports") == [443]
+        and external_scan.get("private_data_services_unreachable") is True
+        and isinstance(public_scan, dict)
+        and raw_scan_retained(public_scan)
+        and public_scan.get("requested_ports") == "1-65535"
+        and public_scan.get("open_tcp_ports") == [443]
+        and isinstance(private_scans, dict)
+        and set(private_scans) == {"database", "redis", "object_store_direct"}
+        and all(
+            isinstance(item, dict)
+            and raw_scan_retained(item)
+            and item.get("open_tcp_ports") == []
+            for item in private_scans.values()
+        )
         and isinstance(policy_tests, dict)
         and policy_tests.get("passed") is True
+        and isinstance(cni, dict)
+        and isinstance(cni.get("desired"), int)
+        and not isinstance(cni.get("desired"), bool)
+        and cni.get("desired", 0) > 0
+        and cni.get("ready") == cni.get("desired")
+        and meaningful(cni.get("namespace"))
+        and meaningful(cni.get("name"))
+        and meaningful(cni.get("uid"))
+        and meaningful(cni.get("resource_version"))
+        and isinstance(cni.get("generation"), int)
+        and not isinstance(cni.get("generation"), bool)
+        and cni.get("generation") >= 1
+        and isinstance(cni.get("images"), list)
+        and bool(cni.get("images"))
+        and all(
+            isinstance(image, str) and bool(IMMUTABLE_IMAGE_RE.fullmatch(image))
+            for image in cni["images"]
+        )
+        and policies_valid
+        and probes_valid
+        and ingress_valid
+        and egress_valid
+        and policy_tests.get("required_policies_present") is True
+        and policy_tests.get("policy_snapshots_valid") is True
+        and policy_tests.get("broad_world_egress_absent") is True
         and policy_tests.get("default_deny_ingress_exercised") is True
         and policy_tests.get("unapproved_egress_denied") is True
         and policy_tests.get("approved_egress_allowed") is True

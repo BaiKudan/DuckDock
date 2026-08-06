@@ -1,6 +1,6 @@
 # DuckDock 2.0.0-rc.1 发布就绪评估
 
-> 评估日期：2026-08-05
+> 评估日期：2026-08-06
 > 候选版本：`2.0.0-rc.1`
 > 分支：`codex/release-2.0-rc1`
 > 结论：**达到应用与仓库工程 RC 发布门槛；未达到 2.0 GA 发布门槛，也不构成任意生产环境上线授权。**
@@ -37,7 +37,7 @@ Runtime/Reporter
 | SLO | PASS | `HEALTHY`；142 个发布窗口请求、0 错误；ingest p95 7.729 ms、timeline p95 12.636 ms、policy p95 54.426 ms |
 | Readiness | PASS | `READY`；14 PASS / 0 WARN / 0 BLOCK |
 | 浏览器 | PASS | Playwright 3/3：未登录守卫、登录表单、审批→执行→回执→验证→完成；应用内浏览器复核 Operations/Release Control，console 0 warning/error |
-| 后端回归 | PASS | 1033 passed、19 skipped；核心覆盖率历史门禁 81.04%（门槛 65%） |
+| 后端回归 | PASS | 1081 passed、19 skipped；核心覆盖率历史门禁 81.04%（门槛 65%） |
 | Python 3.12 锁定环境 | PASS | hashed dev lock；runtime lock `pip-audit` 0 已知漏洞；Ruff/compile 通过 |
 | 真实 MySQL 测试 lane | PASS | 独立临时数据库 17/17；验证后数据库与用户均已删除 |
 | 前端 | PASS | npm audit 0；lint 0 warning；11 files / 56 tests；生产 build 最大入口块 569.69 kB（门槛 600 kB） |
@@ -79,17 +79,19 @@ Langfuse 保持可替换的 provider adapter：关闭或不可用时，依赖它
 ## 5. RC 后仍存在的风险
 
 1. **独立安全审计未完成。** 当前有代码、依赖和镜像门禁，但没有与最终 commit/镜像摘要绑定的第三方渗透测试或审计报告。
-2. **HA 已完成本机真实 Kubernetes 无状态演练，但未完成目标环境承诺。** `ops/kubernetes/ha` 的受限镜像、PDB/HPA、严格且 taint-aware/revision-aware 的拓扑分散已经在三模拟 zone 中执行节点/整区 drain、Beat 迁移与恢复后再均衡；仓库现提供 fail-closed 的目标 v2 执行器，可校验精确 context/镜像、整区节点、持续公网 HTTPS、自动清理、网络证据和 Operations 签名的状态服务回执，但尚未在真实目标集群运行。本地单节点 MySQL/Redis/MinIO、`emptyDir` 和未证明 enforcement 的 kindnet 不代表托管 MySQL/Redis/S3/RWX/CNI。
-3. **目标容量尚未证明。** 本地真实 MySQL 工程基线通过，300 rps 边界探针也能 fail closed；仍需通过真实目标 HTTPS、负载均衡器和目标数据服务重跑 G2。
-4. **目标运维回执缺失。** 生产 Secret Manager/轮换、双告警接收人、异地不可变备份恢复、RPO/RTO 和 on-call 尚未绑定到最终目标。
-5. **随 Compose 打包的第三方数据镜像不属于 GA 路径。** 本地扫描发现 MySQL/MinIO 官方镜像仍含 Critical/High；单机 Compose 仅作加固参考，GA 强制使用经独立评估的外部 HA MySQL/Redis/S3。Prometheus 的 1 个 High 需要独立评估/VEX 确认，项目不得自行豁免。
-6. **类型债务仍有 81 项。** ratchet 阻止恶化，但后续版本应持续清零。
-7. **外部 Provider 兼容性是持续门禁。** Langfuse、Hermes、OTel Collector 或其他 Harness 升级后必须重跑对应 compatibility gate。
-8. **RC 不是 GA。** 最终版本必须改为 `2.0.0`，使用 registry `@sha256` 镜像，在同一 commit 上重跑全部门禁并取得 `GA_AUTHORIZED`。
+2. **目标网络隔离尚未取得真实回执。** 仓库现提供 fail-closed 的 `duckdock-ga-network-evidence-v2` 执行器：从已确认的集群外视角执行 1–65535 TCP 与三个数据端口 nmap 扫描，记录 CNI/Namespace/Pod/NetworkPolicy 原始身份，并用可达对照目标验证 ingress/egress 正反向路径；GA 门禁会重新解析原始字段，不能靠手填 PASS 绕过。但该执行器尚未在真实目标网络/CNI 上运行。
+3. **HA 已完成本机真实 Kubernetes 无状态演练，但未完成目标环境承诺。** `ops/kubernetes/ha` 的受限镜像、PDB/HPA、严格且 taint-aware/revision-aware 的拓扑分散已经在三模拟 zone 中执行节点/整区 drain、Beat 迁移与恢复后再均衡；仓库现提供 fail-closed 的目标 v2 执行器，可校验精确 context/镜像、整区节点、持续公网 HTTPS、自动清理、网络证据和 Operations 签名的状态服务回执，但尚未在真实目标集群运行。本地单节点 MySQL/Redis/MinIO、`emptyDir` 和未证明 enforcement 的 kindnet 不代表托管 MySQL/Redis/S3/RWX/CNI。
+4. **目标容量尚未证明。** 本地真实 MySQL 工程基线通过，300 rps 边界探针也能 fail closed；仍需通过真实目标 HTTPS、负载均衡器和目标数据服务重跑 G2。
+5. **目标运维回执缺失。** 生产 Secret Manager/轮换、双告警接收人、异地不可变备份恢复、RPO/RTO 和 on-call 尚未绑定到最终目标。
+6. **随 Compose 打包的第三方数据镜像不属于 GA 路径。** 本地扫描发现 MySQL/MinIO 官方镜像仍含 Critical/High；单机 Compose 仅作加固参考，GA 强制使用经独立评估的外部 HA MySQL/Redis/S3。Prometheus 的 1 个 High 需要独立评估/VEX 确认，项目不得自行豁免。
+7. **类型债务仍有 81 项。** ratchet 阻止恶化，但后续版本应持续清零。
+8. **外部 Provider 兼容性是持续门禁。** Langfuse、Hermes、OTel Collector 或其他 Harness 升级后必须重跑对应 compatibility gate。
+9. **RC 不是 GA。** 最终版本必须改为 `2.0.0`，使用 registry `@sha256` 镜像，在同一 commit 上重跑全部门禁并取得 `GA_AUTHORIZED`。
 
 ## 6. GA 前必须完成
 
 - 用真实生产密钥、域名和 TLS 部署 `ops/kubernetes/ha` 目标 overlay，替换所有占位镜像/域名/egress；
+- 从目标集群外运行 `collect_ga_target_network.py`，证明仅 443 公网开放、数据服务直连端口不可达，并实际执行受信/非受信 ingress 和批准/拒绝 egress；
 - 在真实目标 HTTPS 上执行 G2 容量与数据增长门禁，并用 `collect_ga_target_ha.py` 完成节点/zone/Beat/托管数据服务故障注入；
 - 从异地、加密、不可变介质做破坏性 staging 恢复，保留 MySQL/Git/S3 与 RPO/RTO 回执；
 - 触发和恢复告警，证明两个实际接收人及 on-call schedule；

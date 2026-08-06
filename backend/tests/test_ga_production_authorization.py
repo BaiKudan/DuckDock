@@ -399,7 +399,74 @@ def _document(tmp_path: Path, now: datetime) -> dict:
     )
     write_target_report("secrets", secrets_report)
 
-    network_report = target_report("duckdock-ga-network-evidence-v1")
+    def network_scan(host: str, ports: str, *, open_ports: list[int]) -> dict:
+        states = {str(port): "open" for port in open_ports}
+        if not open_ports and ports.isdigit():
+            states[ports] = "filtered"
+        address = host if ports != "1-65535" else "203.0.113.20"
+        port_xml = "".join(
+            f"<port protocol='tcp' portid='{port}'><state state='{state}'/></port>"
+            for port, state in states.items()
+        )
+        raw_xml = (
+            "<nmaprun version='7.98'><host><status state='up'/>"
+            f"<address addr='{address}'/><ports>{port_xml}</ports></host>"
+            "<runstats><finished elapsed='1.0'/></runstats></nmaprun>"
+        )
+        return {
+            "host": host,
+            "requested_ports": ports,
+            "host_state": "up",
+            "addresses": [address],
+            "port_states": states,
+            "open_tcp_ports": open_ports,
+            "nmap_version": "7.98",
+            "elapsed_seconds": 1.0,
+            "raw_nmap_xml": raw_xml,
+            "xml_sha256": hashlib.sha256(raw_xml.encode()).hexdigest(),
+        }
+
+    def network_connection(namespace: str, source: str, host: str, port: int, connected: bool) -> dict:
+        return {
+            "source_namespace": namespace,
+            "source": source,
+            "destination_host": host,
+            "destination_port": port,
+            "connected": connected,
+            "kubectl_exit_code": 0 if connected else 1,
+        }
+
+    network_policies = []
+    for name in (
+        "allow-dns",
+        "backend-from-frontend",
+        "controlled-external-egress",
+        "default-deny",
+        "frontend-ingress-and-backend",
+    ):
+        spec: dict = {"podSelector": {}, "policyTypes": ["Ingress", "Egress"]}
+        if name == "controlled-external-egress":
+            spec["egress"] = [
+                {
+                    "to": [{"ipBlock": {"cidr": "10.0.0.0/8"}}],
+                    "ports": [{"protocol": "TCP", "port": 443}],
+                }
+            ]
+        network_policies.append(
+            {
+                "name": name,
+                "uid": f"uid-{name}",
+                "resource_version": "10",
+                "generation": 1,
+                "spec": spec,
+                "spec_sha256": hashlib.sha256(
+                    json.dumps(spec, sort_keys=True, separators=(",", ":")).encode()
+                ).hexdigest(),
+            }
+        )
+
+    cni_image = f"quay.io/cilium/cilium@sha256:{'e' * 64}"
+    network_report = target_report("duckdock-ga-network-evidence-v2")
     network_report.update(
         {
             "public_tcp_ports": [443],
@@ -408,13 +475,110 @@ def _document(tmp_path: Path, now: datetime) -> dict:
             "object_store_direct_public": False,
             "default_deny_ingress": True,
             "egress_allowlist_enforced": True,
-            "enforced_by": "Cilium 1.18",
+            "enforced_by": f"kube-system/cilium {cni_image}",
             "external_scan": {
-                "transport": "network TCP scan from outside target",
+                "transport": "nmap TCP scan from acknowledged external vantage",
+                "scanner_id": "external-scanner-01",
+                "scanner_source_ip": "8.8.8.8",
+                "public_ingress": network_scan(
+                    "duckdock.example.com", "1-65535", open_ports=[443]
+                ),
+                "private_data_services": {
+                    "database": network_scan("10.0.0.10", "3306", open_ports=[]),
+                    "redis": network_scan("10.0.0.11", "6379", open_ports=[]),
+                    "object_store_direct": network_scan("10.0.0.12", "9000", open_ports=[]),
+                },
                 "discovered_tcp_ports": [443],
+                "private_data_services_unreachable": True,
                 "passed": True,
             },
             "policy_tests": {
+                "cluster_context": "customer-production-admin",
+                "namespace": "duckdock",
+                "cni": {
+                    "namespace": "kube-system",
+                    "name": "cilium",
+                    "uid": "uid-cilium",
+                    "resource_version": "20",
+                    "generation": 3,
+                    "desired": 5,
+                    "ready": 5,
+                    "images": [cni_image],
+                },
+                "probe_identities": {
+                    "ingress": {
+                        "namespace": "ingress-probes",
+                        "namespace_uid": "uid-ingress-probes",
+                        "namespace_resource_version": "30",
+                        "namespace_labels": {"duckdock.io/ingress": "true"},
+                        "pod": "probe",
+                        "pod_uid": "uid-ingress-probe",
+                        "pod_resource_version": "31",
+                    },
+                    "monitoring": {
+                        "namespace": "monitoring-probes",
+                        "namespace_uid": "uid-monitoring-probes",
+                        "namespace_resource_version": "32",
+                        "namespace_labels": {"duckdock.io/monitoring": "true"},
+                        "pod": "probe",
+                        "pod_uid": "uid-monitoring-probe",
+                        "pod_resource_version": "33",
+                    },
+                    "untrusted": {
+                        "namespace": "untrusted-probes",
+                        "namespace_uid": "uid-untrusted-probes",
+                        "namespace_resource_version": "34",
+                        "namespace_labels": {},
+                        "pod": "probe",
+                        "pod_uid": "uid-untrusted-probe",
+                        "pod_resource_version": "35",
+                    },
+                },
+                "network_policies": network_policies,
+                "required_policies_present": True,
+                "policy_snapshots_valid": True,
+                "broad_world_egress_absent": True,
+                "ingress_tests": {
+                    "trusted_frontend_allowed": network_connection(
+                        "ingress-probes",
+                        "pod/probe",
+                        "frontend.duckdock.svc.cluster.local",
+                        8080,
+                        True,
+                    ),
+                    "trusted_backend_allowed": network_connection(
+                        "monitoring-probes",
+                        "pod/probe",
+                        "backend.duckdock.svc.cluster.local",
+                        8801,
+                        True,
+                    ),
+                    "untrusted_frontend_denied": network_connection(
+                        "untrusted-probes",
+                        "pod/probe",
+                        "frontend.duckdock.svc.cluster.local",
+                        8080,
+                        False,
+                    ),
+                    "untrusted_backend_denied": network_connection(
+                        "untrusted-probes",
+                        "pod/probe",
+                        "backend.duckdock.svc.cluster.local",
+                        8801,
+                        False,
+                    ),
+                },
+                "egress_tests": {
+                    "untrusted_control_destination_reachable": network_connection(
+                        "untrusted-probes", "pod/probe", "control.example.com", 443, True
+                    ),
+                    "approved_destination_allowed": network_connection(
+                        "duckdock", "deployment/backend", "mysql.internal", 3306, True
+                    ),
+                    "unapproved_destination_denied": network_connection(
+                        "duckdock", "deployment/backend", "control.example.com", 443, False
+                    ),
+                },
                 "default_deny_ingress_exercised": True,
                 "unapproved_egress_denied": True,
                 "approved_egress_allowed": True,
@@ -1099,6 +1263,55 @@ def test_unrestricted_target_network_blocks_ga(tmp_path: Path) -> None:
 
     assert result["status"] == "BLOCKED"
     assert result["block_count"] == 1
+
+
+@pytest.mark.parametrize("mutation", ["hidden_public_port", "unreachable_control", "broad_egress_spec"])
+def test_network_gate_revalidates_raw_evidence_instead_of_trusting_summaries(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    evidence = document["controls"]["network"]["evidence"]
+    path = Path(evidence["path"])
+    report = json.loads(path.read_text(encoding="utf-8"))
+    if mutation == "hidden_public_port":
+        public_scan = report["external_scan"]["public_ingress"]
+        public_scan["raw_nmap_xml"] = public_scan["raw_nmap_xml"].replace(
+            "</ports>",
+            "<port protocol='tcp' portid='8443'><state state='open'/></port></ports>",
+        )
+        public_scan["xml_sha256"] = hashlib.sha256(
+            public_scan["raw_nmap_xml"].encode()
+        ).hexdigest()
+    elif mutation == "unreachable_control":
+        control = report["policy_tests"]["egress_tests"]["untrusted_control_destination_reachable"]
+        control["connected"] = False
+        control["kubectl_exit_code"] = 1
+    else:
+        policy = next(
+            item
+            for item in report["policy_tests"]["network_policies"]
+            if item["name"] == "controlled-external-egress"
+        )
+        policy["spec"]["egress"][0]["to"][0]["ipBlock"]["cidr"] = "0.0.0.0/0"
+        policy["spec_sha256"] = hashlib.sha256(
+            json.dumps(policy["spec"], sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+    path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+    evidence["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    assert result["status"] == "BLOCKED"
+    network_check = next(item for item in result["checks"] if item["key"] == "network")
+    assert network_check["status"] == "BLOCK"
 
 
 @pytest.mark.parametrize(

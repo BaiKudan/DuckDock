@@ -15,7 +15,7 @@ deployment authorization.
 
 | ID | Requirement | Completion evidence |
 |---|---|---|
-| PGA-01 | Production has a bundled TLS 1.2/1.3 edge; only 443 is public; HTTP/object/admin/monitoring ports are loopback or internal. The live probe binds the exact target, commit and immutable images. | `docker-compose.prod-tls.yml`; production baseline report; `duckdock-ga-tls-probe-v2`. |
+| PGA-01 | Production has a bundled TLS 1.2/1.3 edge; only 443 is public; HTTP/object/admin/monitoring ports are loopback or internal. Release-bound live collectors verify the exact target, commit and immutable images from an external vantage, retain full nmap results, CNI identity and NetworkPolicy specs, and exercise trusted/untrusted ingress plus allowed/denied egress with a reachable control destination. | `docker-compose.prod-tls.yml`; production baseline report; `duckdock-ga-tls-probe-v2`; `duckdock-ga-network-evidence-v2`. |
 | PGA-02 | Secrets are external/SOPS managed, no plaintext source of truth remains, and rotation is exercised. | Target secret-manager/rotation receipt. |
 | PGA-03 | Prometheus routes to Alertmanager, delivery failure alerts exist, and firing/resolved reach named on-call. | Repo config plus target receiver receipts. |
 | PGA-04 | DB, Git repo and object backups are age encrypted, signed, uploaded offsite and restored under RPO/RTO. The production gate independently verifies the original manifest OpenSSH signature and exact release commit. | Secure bundle manifest/signature, allowed-signers identity and destructive target restore receipt. |
@@ -31,8 +31,10 @@ PGA-01 through the repository portion of PGA-06 and the complete PGA-07/PGA-08
 protocol are implemented and automated. PGA-08 now requires an out-of-band
 release-authority policy, forbids per-approval trust-store overrides and binds
 the policy digest into every signature. PGA-05 now also has a disruptive,
-fail-closed target collector and v2 evidence parser; it has not been executed
-against a customer target. The local reference includes a real disposable
+fail-closed target collector and v2 evidence parser; the target network path now also has a
+fail-closed v2 collector and a GA parser that revalidates raw nmap, CNI, probe identity,
+NetworkPolicy and connection results rather than trusting summary booleans. Neither has been
+executed against a customer target. The local reference includes a real disposable
 four-node kind rehearsal: restricted images are deployed across three simulated
 zones, the Beat-hosting node is tainted/drained, stateless replicas recover in
 the two surviving zones under continuous API probes, and a revision-aware

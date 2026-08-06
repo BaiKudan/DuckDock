@@ -139,9 +139,52 @@ python backend/scripts/collect_ga_target_ha.py \
 7. 按 `ops/ga/secrets-evidence.example.json` 在目标环境实际轮换每类生产
    credential。验证旧 credential 被拒绝、工作负载重新加载、审计事件落盘，且
    证据只记录 secret 类别，绝不能包含 secret/token/password 值。
-8. 按 `ops/ga/network-evidence.example.json` 从集群外执行 TCP 扫描，并在目标
-   CNI 中实际执行默认拒绝 ingress、非白名单 egress 拒绝、白名单 egress 放行和
-   数据服务外部不可达测试。配置文件或 server dry-run 本身不是运行证据。
+8. 使用 `collect_ga_target_network.py` 采集 `duckdock-ga-network-evidence-v2`，不能
+   手填 PASS 模板。执行机必须位于目标网络之外，同时具备目标集群只读
+   NetworkPolicy/CNI DaemonSet 与三类 probe Pod `exec` 权限，并已安装 `nmap`。
+   预先准备三个不挂载生产 Secret、包含 Python 3 的 Ready probe Pod：入口受信
+   Namespace 带 `duckdock.io/ingress=true`，监控受信 Namespace 带
+   `duckdock.io/monitoring=true`，非受信 Namespace 不得带任一标签。另准备一个不在
+   backend egress allowlist 中、可由非受信 probe 访问的 TCP 对照监听器；只有同一
+   目标由对照组连通、backend 被拒绝，才证明拒绝来自策略而非目标宕机。
+
+```bash
+python backend/scripts/collect_ga_target_network.py \
+  --context customer-production-admin \
+  --namespace duckdock \
+  --target-environment customer-production \
+  --acknowledge-external-vantage customer-production \
+  --source-commit "$DUCKDOCK_GA_SOURCE_COMMIT" \
+  --backend-image "$DUCKDOCK_GA_BACKEND_IMAGE" \
+  --frontend-image "$DUCKDOCK_GA_FRONTEND_IMAGE" \
+  --base-url https://duckdock.example.com \
+  --scanner-id external-scanner-hz-01 \
+  --scanner-source-ip "$EXTERNAL_SCANNER_SOURCE_IP" \
+  --database-address 10.20.1.10 \
+  --redis-address 10.20.1.11 \
+  --object-store-direct-address 10.20.1.12 \
+  --trusted-probe-namespace duckdock-ingress-probes \
+  --trusted-probe-pod network-probe \
+  --monitoring-probe-namespace duckdock-monitoring-probes \
+  --monitoring-probe-pod network-probe \
+  --untrusted-probe-namespace duckdock-untrusted-probes \
+  --untrusted-probe-pod network-probe \
+  --approved-egress-host mysql.internal.example.com \
+  --approved-egress-port 3306 \
+  --unapproved-egress-host network-control.example.com \
+  --unapproved-egress-port 443 \
+  --cni-daemonset-name cilium \
+  --output /secure/evidence/target-network.json
+```
+
+   执行器从外部对公网入口扫描全部 1–65535 TCP 端口，并分别探测 MySQL 3306、
+   Redis 6379 和对象存储直连 9000；在集群内同时验证受信 ingress 放行、非受信
+   ingress 拒绝、批准 egress 放行和同一对照目标的非批准 egress 拒绝。报告保留
+   原始 nmap XML 及其摘要、CNI DaemonSet 不可变镜像、Namespace/Pod UID、完整
+   NetworkPolicy spec 与 kubectl exit code。生产授权器会重新计算 spec 摘要并拒绝
+   任意 `0.0.0.0/0`/`::/0` egress，即使汇总字段仍自报 PASS。该文件必须先于第 6
+   步的目标 HA disruption 生成，并由 HA v2 报告内容寻址绑定。配置文件、server
+   dry-run、本地 kind 回执或旧 v1 报告都不是目标运行证据。
 9. 按 `ops/ga/recovery-evidence.example.json` 从异地、加密、不可变备份介质对
    非生产恢复目标进行破坏性恢复。验证备份签名、manifest 摘要、外部解密密钥、
    MySQL 行、对象和 Git 仓库，并记录 RPO/RTO；禁止覆盖生产数据。`backup` 必须

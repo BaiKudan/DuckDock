@@ -18,11 +18,13 @@ python backend/scripts/verify_ga_production_authorization.py \
 
 完整目标文件必须通过内容摘要、证据新鲜度和每类目标报告的内容级解析，不能用
 无关 JSON 配合表层声明通过。Application readiness 必须由
-`backend/scripts/collect_ga_target_readiness.py` 通过目标 HTTPS 采集；TLS、容量和 HA
-使用各自工具输出。以下模板定义了其余必须由目标执行结果填充的版本化协议：
+`backend/scripts/collect_ga_target_readiness.py` 通过目标 HTTPS 采集；TLS、网络、容量
+和 HA 使用各自工具输出。以下模板定义了其余必须由目标执行结果填充的版本化协议：
 
 - `secrets-evidence.example.json`：secret store 与真实轮换结果；
-- `network-evidence.example.json`：外部端口扫描与 CNI ingress/egress 负向测试；
+- `network-evidence.example.json`：`collect_ga_target_network.py` 输出的 v2 结构示例；
+  执行器从已确认的集群外视角做 nmap 全端口/数据端口扫描，并保留 CNI、探针身份、
+  完整 NetworkPolicy 与 ingress/egress 正反向连接原始结果；禁止手填；
 - `alerting-evidence.example.json`：firing、值班确认和 resolved 三张回执；
 - `recovery-evidence.example.json`：签名备份与非生产破坏性恢复；
 - `independent-security-evidence.example.json`：独立渗透/代码审查和签名报告；
