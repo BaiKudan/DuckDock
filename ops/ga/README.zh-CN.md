@@ -39,6 +39,13 @@ python backend/scripts/verify_ga_production_authorization.py \
 `EVIDENCE_COLLECTION` 均表示当前 release digest 禁止签字；`--allow-blocked` 只用于
 查看诊断，不是发布流水线成功条件。
 
+进入签字阶段后，`scripts/sign-ga-approval.sh` 必须接收授权文件和 out-of-band policy，
+每位负责人在本地重新运行完整证据门禁；工具不再接受人工传入 release digest。每次
+调用生成 signature、可组装 approval entry 和签字人 preflight receipt，并用组织 trust
+store 当场反向验签。四份 entry 由 `backend/scripts/finalize_ga_authorization.py` 组装；
+该工具只在持久化文件重验为 `GA_AUTHORIZED` 时保留输出，并生成 finalization receipt。
+原始 base 的 `approvals` 必须为空，最终输出必须与 base 同目录。
+
 结构检查：
 
 ```bash

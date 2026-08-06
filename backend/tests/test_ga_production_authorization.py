@@ -5,6 +5,7 @@ import hashlib
 import json
 import shutil
 import subprocess
+import sys
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -45,7 +46,6 @@ from scripts.verify_ga_production_authorization import (
     RESTORE_EXECUTION_SIGNATURE_NAMESPACE,
     _approval_statement,
     _release_digest,
-    _verify_ssh_signature,
     evaluate,
     lint_authorization,
     main as verify_main,
@@ -3445,59 +3445,244 @@ def test_campaign_cannot_enter_approvals_with_unusable_target_evidence(
     assert result["next_action"] == "collect_or_replace_external_evidence"
 
 
-def test_signing_tool_emits_verifier_compatible_metadata_bound_statement(tmp_path: Path) -> None:
+def test_signing_tool_reruns_preflight_and_emits_verified_approval(tmp_path: Path) -> None:
     if shutil.which("ssh-keygen") is None:
         pytest.skip("ssh-keygen is required for production-approval signature verification")
-    key = tmp_path / "product_key"
-    subprocess.run(
-        ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)],
-        check=True,
-    )
-    identity = "product@example.com"
-    allowed_signers = tmp_path / "allowed_signers_for_tool"
-    allowed_signers.write_text(
-        f"{identity} {key.with_suffix('.pub').read_text(encoding='utf-8').strip()}\n",
-        encoding="utf-8",
-    )
-    digest = "d" * 64
-    approved_at = "2026-08-06T10:30:00+08:00"
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _add_signed_approvals(document, tmp_path, now)
+    document["approvals"] = []
+    authorization = tmp_path / "unsigned-authorization.json"
+    authorization.write_text(json.dumps(document, sort_keys=True) + "\n", encoding="utf-8")
     signature = tmp_path / "product-tool.sig"
-    subprocess.run(
+    approval_output = tmp_path / "product-approval.json"
+    preflight_output = tmp_path / "product-preflight.json"
+    completed = subprocess.run(
         [
             str(Path(__file__).parents[2] / "scripts" / "sign-ga-approval.sh"),
-            "--digest",
-            digest,
+            "--authorization",
+            str(authorization),
+            "--approval-policy",
+            str(tmp_path / "approval-policy.json"),
             "--role",
             "Product",
             "--identity",
-            identity,
+            "product@example.com",
             "--approved-at",
-            approved_at,
+            now.isoformat(),
+            "--key",
+            str(tmp_path / "product_key"),
+            "--signature-output",
+            str(signature),
+            "--approval-output",
+            str(approval_output),
+            "--preflight-output",
+            str(preflight_output),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stdout.decode()
+    approval = json.loads(approval_output.read_text(encoding="utf-8"))
+    preflight = json.loads(preflight_output.read_text(encoding="utf-8"))
+    assert preflight["evaluation"]["campaign_stage"] == "APPROVAL_COLLECTION"
+    assert preflight["approval_check"]["passed"] is True
+    assert approval["signed_digest"] == preflight["release_digest"]
+    document["approvals"] = [approval]
+
+    result = evaluate(
+        document,
+        authorization_path=authorization,
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    product_check = next(
+        check for check in result["checks"] if check["key"] == "approval_Product"
+    )
+    assert product_check["passed"] is True
+
+
+@pytest.mark.parametrize(
+    "failure",
+    ["wrong_key", "blocked_evidence", "existing_approval"],
+)
+def test_signing_tool_refuses_unverifiable_or_premature_approval(
+    tmp_path: Path,
+    failure: str,
+) -> None:
+    if shutil.which("ssh-keygen") is None:
+        pytest.skip("ssh-keygen is required for production-approval signature verification")
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _add_signed_approvals(document, tmp_path, now)
+    if failure != "existing_approval":
+        document["approvals"] = []
+    if failure == "blocked_evidence":
+        Path(document["controls"]["tls"]["evidence"]["path"]).unlink()
+    authorization = tmp_path / "unsigned-authorization.json"
+    authorization.write_text(json.dumps(document, sort_keys=True) + "\n", encoding="utf-8")
+    key = tmp_path / ("architecture_key" if failure == "wrong_key" else "product_key")
+    outputs = [
+        tmp_path / "rejected.sig",
+        tmp_path / "rejected-approval.json",
+        tmp_path / "rejected-preflight.json",
+    ]
+
+    completed = subprocess.run(
+        [
+            str(Path(__file__).parents[2] / "scripts" / "sign-ga-approval.sh"),
+            "--authorization",
+            str(authorization),
+            "--approval-policy",
+            str(tmp_path / "approval-policy.json"),
+            "--role",
+            "Product",
+            "--identity",
+            "product@example.com",
+            "--approved-at",
+            now.isoformat(),
             "--key",
             str(key),
-            "--output",
-            str(signature),
+            "--signature-output",
+            str(outputs[0]),
+            "--approval-output",
+            str(outputs[1]),
+            "--preflight-output",
+            str(outputs[2]),
         ],
-        check=True,
-    )
-    approval = {
-        "role": "Product",
-        "identity": identity,
-        "decision": "APPROVED",
-        "approved_at": approved_at,
-        "signed_digest": digest,
-        "signature_path": str(signature),
-    }
-
-    verified, detail = _verify_ssh_signature(
-        identity=identity,
-        allowed_signers=allowed_signers,
-        signature=signature,
-        approval=approval,
-        release_digest=digest,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
     )
 
-    assert verified, detail
+    assert completed.returncode == 3
+    assert not any(path.exists() for path in outputs)
+
+
+def test_finalization_tool_emits_only_a_reverified_ga_authorization(tmp_path: Path) -> None:
+    if shutil.which("ssh-keygen") is None:
+        pytest.skip("ssh-keygen is required for production-approval signature verification")
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _add_signed_approvals(document, tmp_path, now)
+    document["approvals"] = []
+    authorization = tmp_path / "unsigned-authorization.json"
+    authorization.write_text(json.dumps(document, sort_keys=True) + "\n", encoding="utf-8")
+    approval_paths: list[Path] = []
+    for role in sorted(REQUIRED_APPROVAL_ROLES):
+        role_slug = role.lower()
+        approval_path = tmp_path / f"{role_slug}-approval.json"
+        signer = subprocess.run(
+            [
+                str(Path(__file__).parents[2] / "scripts" / "sign-ga-approval.sh"),
+                "--authorization",
+                str(authorization),
+                "--approval-policy",
+                str(tmp_path / "approval-policy.json"),
+                "--role",
+                role,
+                "--identity",
+                f"{role_slug}@example.com",
+                "--approved-at",
+                now.isoformat(),
+                "--key",
+                str(tmp_path / f"{role_slug}_key"),
+                "--signature-output",
+                str(tmp_path / f"campaign-{role_slug}.sig"),
+                "--approval-output",
+                str(approval_path),
+                "--preflight-output",
+                str(tmp_path / f"{role_slug}-preflight.json"),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+        assert signer.returncode == 0, signer.stdout.decode()
+        approval_paths.append(approval_path)
+    final_authorization = tmp_path / "authorized.json"
+    finalization_receipt = tmp_path / "authorized-receipt.json"
+    command = [
+        sys.executable,
+        str(Path(__file__).parents[1] / "scripts" / "finalize_ga_authorization.py"),
+        "--authorization",
+        str(authorization),
+        "--approval-policy",
+        str(tmp_path / "approval-policy.json"),
+    ]
+    for path in approval_paths:
+        command.extend(["--approval-entry", str(path)])
+    command.extend(
+        [
+            "--output",
+            str(final_authorization),
+            "--receipt-output",
+            str(finalization_receipt),
+        ]
+    )
+
+    completed = subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stdout.decode()
+    receipt = json.loads(finalization_receipt.read_text(encoding="utf-8"))
+    assert receipt["evaluation"]["status"] == "GA_AUTHORIZED"
+    assert receipt["evaluation"]["block_count"] == 0
+    assert receipt["authorization"]["sha256"] == hashlib.sha256(
+        final_authorization.read_bytes()
+    ).hexdigest()
+
+
+def test_finalization_tool_refuses_one_cross_digest_approval(tmp_path: Path) -> None:
+    if shutil.which("ssh-keygen") is None:
+        pytest.skip("ssh-keygen is required for production-approval signature verification")
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _add_signed_approvals(document, tmp_path, now)
+    approvals = document["approvals"]
+    approvals[0]["signed_digest"] = "f" * 64
+    document["approvals"] = []
+    authorization = tmp_path / "unsigned-authorization.json"
+    authorization.write_text(json.dumps(document, sort_keys=True) + "\n", encoding="utf-8")
+    command = [
+        sys.executable,
+        str(Path(__file__).parents[1] / "scripts" / "finalize_ga_authorization.py"),
+        "--authorization",
+        str(authorization),
+        "--approval-policy",
+        str(tmp_path / "approval-policy.json"),
+    ]
+    for approval in approvals:
+        path = tmp_path / f"{approval['role'].lower()}-approval.json"
+        path.write_text(json.dumps(approval, sort_keys=True) + "\n", encoding="utf-8")
+        command.extend(["--approval-entry", str(path)])
+    final_authorization = tmp_path / "authorized.json"
+    finalization_receipt = tmp_path / "authorized-receipt.json"
+    command.extend(
+        [
+            "--output",
+            str(final_authorization),
+            "--receipt-output",
+            str(finalization_receipt),
+        ]
+    )
+
+    completed = subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+
+    assert completed.returncode == 3
+    assert not final_authorization.exists()
+    assert not finalization_receipt.exists()
 
 
 def test_approval_policy_must_be_supplied_out_of_band(tmp_path: Path) -> None:

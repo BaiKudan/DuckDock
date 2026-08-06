@@ -196,6 +196,8 @@ def test_production_image_context_excludes_test_and_local_validation_artifacts()
         "scripts/ga_release_identity.py",
         "scripts/collect_ga_release_provenance.py",
         "scripts/ga_release_provenance.py",
+        "scripts/sign_ga_approval.py",
+        "scripts/finalize_ga_authorization.py",
         "scripts/probe_ga_target_tls.py",
         "scripts/verify_ga_production_authorization.py",
         "scripts/verify_*_dev.py",
@@ -246,6 +248,25 @@ def test_final_tag_reruns_full_gate_and_publishes_attested_images():
         "duckdock-alertmanager:0.33.1-duckdock.1",
     ):
         assert f"ghcr.io/baikudan/{image}" in workflow
+
+
+def test_ga_approval_tools_reverify_before_signing_and_before_final_output():
+    signer = _read("backend/scripts/sign_ga_approval.py")
+    finalizer = _read("backend/scripts/finalize_ga_authorization.py")
+    wrapper = _read("scripts/sign-ga-approval.sh")
+
+    assert "--digest" not in wrapper
+    assert 'preflight.get("campaign_stage") == "APPROVAL_COLLECTION"' in signer
+    assert 'preflight.get("evidence_ready_for_approval") is True' in signer
+    assert "approval policy does not authorize this exact identity" in signer
+    assert "every signer evaluates the same campaign" in signer
+    assert "new approval did not pass authoritative verification" in signer
+    assert 'result.get("status") == "GA_AUTHORIZED"' in finalizer
+    assert "base authorization approvals must be empty" in finalizer
+    assert "persisted final authorization did not re-verify" in finalizer
+    workflow = _read(".github/workflows/ci.yml")
+    assert "python3 backend/scripts/sign_ga_approval.py --help" in workflow
+    assert "python3 backend/scripts/finalize_ga_authorization.py --help" in workflow
 
 
 def test_production_frontend_runtime_image_contains_only_built_assets():

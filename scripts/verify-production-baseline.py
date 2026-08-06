@@ -169,6 +169,24 @@ def verify(env_file: Path) -> dict[str, Any]:
         "signed v2.0.0 after full CI; BuildKit attestations; retained SARIF; strict signed-report collector",
         "final tag reruns all CI gates and emits independently re-verifiable release evidence",
     )
+    approval_signer = REPO_ROOT / "backend/scripts/sign_ga_approval.py"
+    approval_finalizer = REPO_ROOT / "backend/scripts/finalize_ga_authorization.py"
+    signer_text = approval_signer.read_text(encoding="utf-8") if approval_signer.is_file() else ""
+    finalizer_text = (
+        approval_finalizer.read_text(encoding="utf-8")
+        if approval_finalizer.is_file()
+        else ""
+    )
+    add(
+        "ga_approval_campaign",
+        'preflight.get("campaign_stage") == "APPROVAL_COLLECTION"' in signer_text
+        and 'preflight.get("evidence_ready_for_approval") is True' in signer_text
+        and "new approval did not pass authoritative verification" in signer_text
+        and 'result.get("status") == "GA_AUTHORIZED"' in finalizer_text
+        and "persisted final authorization did not re-verify" in finalizer_text,
+        "each signer re-evaluates evidence; final assembly emits only after persisted GA_AUTHORIZED recheck",
+        "no arbitrary digest signing; four approvals and persisted authorization pass the same final gate",
+    )
 
     if shutil.which("kubectl"):
         rendered = _run(["kubectl", "kustomize", "ops/kubernetes/ha"])

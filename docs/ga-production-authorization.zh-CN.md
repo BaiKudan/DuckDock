@@ -697,16 +697,23 @@ next_action=collect_organizational_approvals
 `campaign_stage=EVIDENCE_COLLECTION`；版本、目标或发布机构策略无效时停在
 `campaign_stage=FOUNDATION`。这两种状态都禁止继续签字。
 
-预签字门禁通过后，四个不同负责人分别签署：
+预签字门禁通过后，将同一份只读授权文件、全部内容寻址证据和发布机构策略提供给
+四个不同负责人。授权文件的 `approvals` 此时必须为空；每位负责人都必须在自己的
+可信工作站重新执行完整预签字门禁。签字工具不接受人工复制的 `--digest`，而是从
+当前权威评估结果读取 release digest，核对 identity 仅属于指定角色，并用发布机构
+共享 trust store 立即反向验签：
 
 ```bash
 bash scripts/sign-ga-approval.sh \
-  --digest <release_digest> \
+  --authorization /secure/duckdock-2.0.0-authorization.json \
+  --approval-policy /release-authority/duckdock-ga-approval-policy.json \
   --role Product \
   --identity product-release-approver@example.com \
   --approved-at 2026-08-06T10:30:00+08:00 \
   --key ~/.ssh/product-ga-approval \
-  --output /secure/signatures/product.sig
+  --signature-output /secure/signatures/product.sig \
+  --approval-output /secure/product-approval.json \
+  --preflight-output /secure/product-preflight.json
 ```
 
 签名采用 OpenSSH namespace `duckdock-ga`。每个 identity 必须属于组织策略中对应
@@ -717,18 +724,43 @@ approval 或安全证据内提供替代 `allowed_signers_path`；所有签名只
 approved_at，授权包组装者不能事后改写审批角色、决定或时间。任何证据、目标、
 版本或审批策略摘要变化都会改变 release digest，使旧签名失效。
 
-最终执行：
+`product-preflight.json` 保留该签字人实际看到的授权文件/策略摘要、完整门禁结果和
+反向验签结果；它不是替代签名的信任根。四个签字人分别生成 Product、Architecture、
+Security、Operations 的 approval/preflight/signature，禁止共享私钥或由一个操作员
+代签。
+
+四份 approval 不再手工复制进 JSON。使用未签字的原授权文件作为 base；组装器要求
+base 与最终输出在同一目录，以保持相对证据路径语义，并且只有持久化后的文件再次
+得到 `GA_AUTHORIZED` 才会留下输出：
+
+```bash
+python backend/scripts/finalize_ga_authorization.py \
+  --authorization /secure/duckdock-2.0.0-authorization.json \
+  --approval-policy /release-authority/duckdock-ga-approval-policy.json \
+  --approval-entry /secure/product-approval.json \
+  --approval-entry /secure/architecture-approval.json \
+  --approval-entry /secure/security-approval.json \
+  --approval-entry /secure/operations-approval.json \
+  --output /secure/duckdock-2.0.0-authorized.json \
+  --receipt-output /secure/duckdock-2.0.0-finalization.json
+```
+
+组装器拒绝重复角色/identity、错误或过期 digest、错误密钥、签名缺失、base 已带审批、
+证据变化和非同目录输出；失败时不会留下看似可用的最终授权文件。
+
+最后仍需以独立命令对持久化授权文件执行同一权威门禁：
 
 ```bash
 python backend/scripts/verify_ga_production_authorization.py \
-  /secure/duckdock-2.0.0-authorization.json \
+  /secure/duckdock-2.0.0-authorized.json \
   --approval-policy /release-authority/duckdock-ga-approval-policy.json \
   --output /secure/duckdock-2.0.0-ga-authorization-result.json
 ```
 
 退出码 `0` 且状态 `GA_AUTHORIZED` 才是正式生产授权；退出码 `2` 是证据或签字
 阻断，退出码 `3` 是授权文件结构错误。授权结果、原文件、全部证据、签名和
-审批策略、共享 allowed-signers 应与授权结果一同不可变归档，但生产验证时仍必须
+四份 approval/preflight/signature、finalization receipt、审批策略、共享
+allowed-signers 应与授权结果一同不可变归档，但生产验证时仍必须
 从发布机构控制的独立只读路径选择策略，不能从待验证授权包自动发现信任根。
 
 授权结果还会固定输出 `failed_foundation_checks`、`failed_evidence_checks`、
