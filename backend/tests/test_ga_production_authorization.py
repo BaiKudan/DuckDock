@@ -15,6 +15,7 @@ import pytest
 
 import scripts.archive_ga_authorized_bundle as authorized_bundle_archiver
 import scripts.collect_ga_release_provenance as release_provenance_collector
+from scripts.ga_approval_campaign import derive_campaign_id
 
 from scripts.verify_ga_production_authorization import (
     ALERTING_POLICY_SCHEMA_VERSION,
@@ -2808,11 +2809,66 @@ def _add_signed_approvals(document: dict, tmp_path: Path, now: datetime) -> None
         document["controls"],
         document["approval_policy"],
     )
+    campaign_base_path = tmp_path / "approval-campaign-base.json"
+    campaign_base_path.write_text(
+        json.dumps(document, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    campaign_base_digest = hashlib.sha256(campaign_base_path.read_bytes()).hexdigest()
+    campaign_policy_path = tmp_path / "approval-policy.json"
+    campaign_policy_digest = hashlib.sha256(campaign_policy_path.read_bytes()).hexdigest()
+    campaign_frozen_at = (now - timedelta(minutes=2)).isoformat()
+    campaign_expires_at = (now + timedelta(hours=24)).isoformat()
+    campaign_id = derive_campaign_id(
+        authorization_sha256=campaign_base_digest,
+        approval_policy_sha256=campaign_policy_digest,
+        release_digest=digest,
+        frozen_at=campaign_frozen_at,
+        approvals_expire_at=campaign_expires_at,
+    )
+    campaign_evaluation = evaluate(
+        document,
+        authorization_path=campaign_base_path,
+        approval_policy_path=campaign_policy_path,
+        now=now,
+    )
+    campaign_freeze_path = tmp_path / "approval-campaign-freeze.json"
+    campaign_freeze_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "duckdock-ga-approval-campaign-freeze-v1",
+                "campaign_id": campaign_id,
+                "frozen_at": campaign_frozen_at,
+                "approvals_expire_at": campaign_expires_at,
+                "authorization": {
+                    "path": str(campaign_base_path),
+                    "sha256": campaign_base_digest,
+                },
+                "approval_policy": {
+                    "path": str(campaign_policy_path),
+                    "sha256": campaign_policy_digest,
+                },
+                "release_digest": digest,
+                "evaluation": campaign_evaluation,
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    campaign_freeze_digest = hashlib.sha256(campaign_freeze_path.read_bytes()).hexdigest()
+    document["approval_campaign"] = {
+        "path": str(campaign_freeze_path),
+        "sha256": campaign_freeze_digest,
+        "campaign_id": campaign_id,
+    }
     approvals: list[dict] = []
     for role in sorted(REQUIRED_APPROVAL_ROLES):
         identity = role_identities[role][0]
         key = signing_keys[role]
         approval = {
+            "campaign_id": campaign_id,
+            "campaign_freeze_sha256": campaign_freeze_digest,
             "role": role,
             "identity": identity,
             "decision": "APPROVED",
@@ -3350,6 +3406,7 @@ def test_complete_evidence_bundle_enters_approval_collection_only(
     document = _document(tmp_path, now)
     _add_signed_approvals(document, tmp_path, now)
     document["approvals"] = []
+    document.pop("approval_campaign", None)
 
     result = evaluate(
         document,
@@ -3368,6 +3425,7 @@ def test_complete_evidence_bundle_enters_approval_collection_only(
     assert set(result["failed_approval_checks"]) == {
         "approval_roles",
         "approval_four_eyes",
+        "approval_campaign",
         *(f"approval_{role}" for role in REQUIRED_APPROVAL_ROLES),
     }
     assert result["next_action"] == "collect_organizational_approvals"
@@ -3381,6 +3439,7 @@ def test_require_evidence_ready_cli_blocks_signing_until_evidence_is_complete(
     document = _document(tmp_path, now)
     _add_signed_approvals(document, tmp_path, now)
     document["approvals"] = []
+    document.pop("approval_campaign", None)
     authorization_path = tmp_path / "authorization.json"
     authorization_path.write_text(
         json.dumps(document, sort_keys=True) + "\n",
@@ -3450,6 +3509,192 @@ def test_campaign_cannot_enter_approvals_with_unusable_target_evidence(
     assert result["next_action"] == "collect_or_replace_external_evidence"
 
 
+def _freeze_approval_campaign(
+    tmp_path: Path,
+    authorization: Path,
+    now: datetime,
+    *,
+    stem: str = "campaign",
+    approval_window_hours: int = 24,
+) -> Path:
+    campaign_freeze = tmp_path / f"{stem}-freeze.json"
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).parents[1] / "scripts" / "freeze_ga_approval_campaign.py"),
+            "--authorization",
+            str(authorization),
+            "--approval-policy",
+            str(tmp_path / "approval-policy.json"),
+            "--receipt-output",
+            str(campaign_freeze),
+            "--frozen-at",
+            now.isoformat(),
+            "--approval-window-hours",
+            str(approval_window_hours),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stdout.decode()
+    return campaign_freeze
+
+
+def test_campaign_freeze_binds_exact_inputs_and_is_immutable(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _add_signed_approvals(document, tmp_path, now)
+    document["approvals"] = []
+    document.pop("approval_campaign", None)
+    authorization = tmp_path / "unsigned-authorization.json"
+    authorization.write_text(json.dumps(document, sort_keys=True) + "\n", encoding="utf-8")
+
+    campaign_freeze = _freeze_approval_campaign(tmp_path, authorization, now)
+    original_payload = campaign_freeze.read_bytes()
+    receipt = json.loads(original_payload)
+
+    assert receipt["schema_version"] == "duckdock-ga-approval-campaign-freeze-v1"
+    assert receipt["campaign_id"].startswith("gac_")
+    assert receipt["authorization"]["sha256"] == hashlib.sha256(
+        authorization.read_bytes()
+    ).hexdigest()
+    assert receipt["evaluation"]["campaign_stage"] == "APPROVAL_COLLECTION"
+
+    repeated = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).parents[1] / "scripts" / "freeze_ga_approval_campaign.py"),
+            "--authorization",
+            str(authorization),
+            "--approval-policy",
+            str(tmp_path / "approval-policy.json"),
+            "--receipt-output",
+            str(campaign_freeze),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+
+    assert repeated.returncode != 0
+    assert campaign_freeze.read_bytes() == original_payload
+
+
+def test_signing_tool_rejects_expired_campaign_freeze(tmp_path: Path) -> None:
+    if shutil.which("ssh-keygen") is None:
+        pytest.skip("ssh-keygen is required for production-approval signature verification")
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _add_signed_approvals(document, tmp_path, now)
+    document["approvals"] = []
+    document.pop("approval_campaign", None)
+    authorization = tmp_path / "unsigned-authorization.json"
+    authorization.write_text(json.dumps(document, sort_keys=True) + "\n", encoding="utf-8")
+    campaign_freeze = _freeze_approval_campaign(tmp_path, authorization, now)
+    receipt = json.loads(campaign_freeze.read_text(encoding="utf-8"))
+    receipt["frozen_at"] = (now - timedelta(hours=2)).isoformat()
+    receipt["approvals_expire_at"] = (now - timedelta(hours=1)).isoformat()
+    receipt["campaign_id"] = derive_campaign_id(
+        authorization_sha256=receipt["authorization"]["sha256"],
+        approval_policy_sha256=receipt["approval_policy"]["sha256"],
+        release_digest=receipt["release_digest"],
+        frozen_at=receipt["frozen_at"],
+        approvals_expire_at=receipt["approvals_expire_at"],
+    )
+    campaign_freeze.write_text(json.dumps(receipt, sort_keys=True) + "\n", encoding="utf-8")
+    outputs = [
+        tmp_path / "expired.sig",
+        tmp_path / "expired-approval.json",
+        tmp_path / "expired-preflight.json",
+    ]
+
+    completed = subprocess.run(
+        [
+            str(Path(__file__).parents[2] / "scripts" / "sign-ga-approval.sh"),
+            "--authorization",
+            str(authorization),
+            "--approval-policy",
+            str(tmp_path / "approval-policy.json"),
+            "--campaign-freeze",
+            str(campaign_freeze),
+            "--role",
+            "Product",
+            "--identity",
+            "product@example.com",
+            "--approved-at",
+            now.isoformat(),
+            "--key",
+            str(tmp_path / "product_key"),
+            "--signature-output",
+            str(outputs[0]),
+            "--approval-output",
+            str(outputs[1]),
+            "--preflight-output",
+            str(outputs[2]),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+
+    assert completed.returncode == 3
+    assert b"campaign has expired" in completed.stdout
+    assert not any(path.exists() for path in outputs)
+
+
+def test_signing_tool_rejects_evidence_changed_after_campaign_freeze(tmp_path: Path) -> None:
+    if shutil.which("ssh-keygen") is None:
+        pytest.skip("ssh-keygen is required for production-approval signature verification")
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _add_signed_approvals(document, tmp_path, now)
+    document["approvals"] = []
+    document.pop("approval_campaign", None)
+    authorization = tmp_path / "unsigned-authorization.json"
+    authorization.write_text(json.dumps(document, sort_keys=True) + "\n", encoding="utf-8")
+    campaign_freeze = _freeze_approval_campaign(tmp_path, authorization, now)
+    Path(document["controls"]["tls"]["evidence"]["path"]).unlink()
+    outputs = [
+        tmp_path / "changed.sig",
+        tmp_path / "changed-approval.json",
+        tmp_path / "changed-preflight.json",
+    ]
+
+    completed = subprocess.run(
+        [
+            str(Path(__file__).parents[2] / "scripts" / "sign-ga-approval.sh"),
+            "--authorization",
+            str(authorization),
+            "--approval-policy",
+            str(tmp_path / "approval-policy.json"),
+            "--campaign-freeze",
+            str(campaign_freeze),
+            "--role",
+            "Product",
+            "--identity",
+            "product@example.com",
+            "--approved-at",
+            now.isoformat(),
+            "--key",
+            str(tmp_path / "product_key"),
+            "--signature-output",
+            str(outputs[0]),
+            "--approval-output",
+            str(outputs[1]),
+            "--preflight-output",
+            str(outputs[2]),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+
+    assert completed.returncode == 3
+    assert b"authoritative preflight is not at APPROVAL_COLLECTION" in completed.stdout
+    assert not any(path.exists() for path in outputs)
+
+
 def test_signing_tool_reruns_preflight_and_emits_verified_approval(tmp_path: Path) -> None:
     if shutil.which("ssh-keygen") is None:
         pytest.skip("ssh-keygen is required for production-approval signature verification")
@@ -3457,8 +3702,10 @@ def test_signing_tool_reruns_preflight_and_emits_verified_approval(tmp_path: Pat
     document = _document(tmp_path, now)
     _add_signed_approvals(document, tmp_path, now)
     document["approvals"] = []
+    document.pop("approval_campaign", None)
     authorization = tmp_path / "unsigned-authorization.json"
     authorization.write_text(json.dumps(document, sort_keys=True) + "\n", encoding="utf-8")
+    campaign_freeze = _freeze_approval_campaign(tmp_path, authorization, now)
     signature = tmp_path / "product-tool.sig"
     approval_output = tmp_path / "product-approval.json"
     preflight_output = tmp_path / "product-preflight.json"
@@ -3469,6 +3716,8 @@ def test_signing_tool_reruns_preflight_and_emits_verified_approval(tmp_path: Pat
             str(authorization),
             "--approval-policy",
             str(tmp_path / "approval-policy.json"),
+            "--campaign-freeze",
+            str(campaign_freeze),
             "--role",
             "Product",
             "--identity",
@@ -3522,12 +3771,21 @@ def test_signing_tool_refuses_unverifiable_or_premature_approval(
     now = datetime.now(timezone.utc)
     document = _document(tmp_path, now)
     _add_signed_approvals(document, tmp_path, now)
-    if failure != "existing_approval":
-        document["approvals"] = []
+    existing_approvals = document["approvals"]
+    document["approvals"] = []
+    document.pop("approval_campaign", None)
     if failure == "blocked_evidence":
         Path(document["controls"]["tls"]["evidence"]["path"]).unlink()
     authorization = tmp_path / "unsigned-authorization.json"
     authorization.write_text(json.dumps(document, sort_keys=True) + "\n", encoding="utf-8")
+    if failure == "blocked_evidence":
+        campaign_freeze = tmp_path / "unusable-campaign-freeze.json"
+        campaign_freeze.write_text("{}\n", encoding="utf-8")
+    else:
+        campaign_freeze = _freeze_approval_campaign(tmp_path, authorization, now)
+    if failure == "existing_approval":
+        document["approvals"] = existing_approvals
+        authorization.write_text(json.dumps(document, sort_keys=True) + "\n", encoding="utf-8")
     key = tmp_path / ("architecture_key" if failure == "wrong_key" else "product_key")
     outputs = [
         tmp_path / "rejected.sig",
@@ -3542,6 +3800,8 @@ def test_signing_tool_refuses_unverifiable_or_premature_approval(
             str(authorization),
             "--approval-policy",
             str(tmp_path / "approval-policy.json"),
+            "--campaign-freeze",
+            str(campaign_freeze),
             "--role",
             "Product",
             "--identity",
@@ -3573,8 +3833,10 @@ def test_finalization_tool_emits_only_a_reverified_ga_authorization(tmp_path: Pa
     document = _document(tmp_path, now)
     _add_signed_approvals(document, tmp_path, now)
     document["approvals"] = []
+    document.pop("approval_campaign", None)
     authorization = tmp_path / "unsigned-authorization.json"
     authorization.write_text(json.dumps(document, sort_keys=True) + "\n", encoding="utf-8")
+    campaign_freeze = _freeze_approval_campaign(tmp_path, authorization, now)
     approval_paths: list[Path] = []
     for role in sorted(REQUIRED_APPROVAL_ROLES):
         role_slug = role.lower()
@@ -3586,6 +3848,8 @@ def test_finalization_tool_emits_only_a_reverified_ga_authorization(tmp_path: Pa
                 str(authorization),
                 "--approval-policy",
                 str(tmp_path / "approval-policy.json"),
+                "--campaign-freeze",
+                str(campaign_freeze),
                 "--role",
                 role,
                 "--identity",
@@ -3616,6 +3880,8 @@ def test_finalization_tool_emits_only_a_reverified_ga_authorization(tmp_path: Pa
         str(authorization),
         "--approval-policy",
         str(tmp_path / "approval-policy.json"),
+        "--campaign-freeze",
+        str(campaign_freeze),
     ]
     for path in approval_paths:
         command.extend(["--approval-entry", str(path)])
@@ -3639,6 +3905,13 @@ def test_finalization_tool_emits_only_a_reverified_ga_authorization(tmp_path: Pa
     receipt = json.loads(finalization_receipt.read_text(encoding="utf-8"))
     assert receipt["evaluation"]["status"] == "GA_AUTHORIZED"
     assert receipt["evaluation"]["block_count"] == 0
+    assert receipt["campaign_freeze"]["sha256"] == hashlib.sha256(
+        campaign_freeze.read_bytes()
+    ).hexdigest()
+    assert all(
+        entry["campaign_id"] == receipt["campaign_freeze"]["campaign_id"]
+        for entry in json.loads(final_authorization.read_text(encoding="utf-8"))["approvals"]
+    )
     assert receipt["authorization"]["sha256"] == hashlib.sha256(
         final_authorization.read_bytes()
     ).hexdigest()
@@ -3651,10 +3924,35 @@ def test_finalization_tool_refuses_one_cross_digest_approval(tmp_path: Path) -> 
     document = _document(tmp_path, now)
     _add_signed_approvals(document, tmp_path, now)
     approvals = document["approvals"]
-    approvals[0]["signed_digest"] = "f" * 64
     document["approvals"] = []
+    document.pop("approval_campaign", None)
     authorization = tmp_path / "unsigned-authorization.json"
     authorization.write_text(json.dumps(document, sort_keys=True) + "\n", encoding="utf-8")
+    campaign_freeze = _freeze_approval_campaign(tmp_path, authorization, now)
+    freeze_receipt = json.loads(campaign_freeze.read_text(encoding="utf-8"))
+    freeze_digest = hashlib.sha256(campaign_freeze.read_bytes()).hexdigest()
+    for approval in approvals:
+        approval["campaign_id"] = freeze_receipt["campaign_id"]
+        approval["campaign_freeze_sha256"] = freeze_digest
+        approval["approved_at"] = now.isoformat()
+        statement = tmp_path / f"campaign-{approval['role'].lower()}-statement"
+        statement.write_bytes(_approval_statement(approval, approval["signed_digest"]))
+        subprocess.run(
+            [
+                "ssh-keygen",
+                "-q",
+                "-Y",
+                "sign",
+                "-f",
+                str(tmp_path / f"{approval['role'].lower()}_key"),
+                "-n",
+                "duckdock-ga",
+                str(statement),
+            ],
+            check=True,
+        )
+        statement.with_suffix(".sig").replace(Path(approval["signature_path"]))
+    approvals[0]["signed_digest"] = "f" * 64
     command = [
         sys.executable,
         str(Path(__file__).parents[1] / "scripts" / "finalize_ga_authorization.py"),
@@ -3662,6 +3960,8 @@ def test_finalization_tool_refuses_one_cross_digest_approval(tmp_path: Path) -> 
         str(authorization),
         "--approval-policy",
         str(tmp_path / "approval-policy.json"),
+        "--campaign-freeze",
+        str(campaign_freeze),
     ]
     for approval in approvals:
         path = tmp_path / f"{approval['role'].lower()}-approval.json"
@@ -4291,6 +4591,78 @@ def test_valid_signature_from_wrong_policy_role_cannot_approve(tmp_path: Path) -
     assert "role_authorized=False" in security_check["observed"]
 
 
+def test_signed_approvals_from_two_campaigns_cannot_be_mixed(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _add_signed_approvals(document, tmp_path, now)
+    product = next(item for item in document["approvals"] if item["role"] == "Product")
+    product["campaign_id"] = f"gac_{'c' * 64}"
+    product["campaign_freeze_sha256"] = "d" * 64
+    statement = tmp_path / "second-campaign-product-statement"
+    statement.write_bytes(_approval_statement(product, product["signed_digest"]))
+    subprocess.run(
+        [
+            "ssh-keygen",
+            "-q",
+            "-Y",
+            "sign",
+            "-f",
+            str(tmp_path / "product_key"),
+            "-n",
+            "duckdock-ga",
+            str(statement),
+        ],
+        check=True,
+    )
+    statement.with_suffix(".sig").replace(Path(product["signature_path"]))
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    statuses = {item["key"]: item["status"] for item in result["checks"]}
+    assert statuses["approval_Product"] == "PASS"
+    assert statuses["approval_campaign"] == "BLOCK"
+    assert result["status"] == "AWAITING_EXTERNAL_APPROVALS"
+    assert result["failed_approval_checks"] == ["approval_campaign"]
+
+
+@pytest.mark.parametrize("mutation", ["missing_freeze", "changed_base"])
+def test_authorization_evaluator_reopens_frozen_campaign_inputs(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _add_signed_approvals(document, tmp_path, now)
+    freeze_path = Path(document["approval_campaign"]["path"])
+    freeze = json.loads(freeze_path.read_text(encoding="utf-8"))
+    if mutation == "missing_freeze":
+        freeze_path.unlink()
+    else:
+        base_path = Path(freeze["authorization"]["path"])
+        base_path.write_text(
+            base_path.read_text(encoding="utf-8") + "\n",
+            encoding="utf-8",
+        )
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    statuses = {item["key"]: item["status"] for item in result["checks"]}
+    assert all(statuses[f"approval_{role}"] == "PASS" for role in REQUIRED_APPROVAL_ROLES)
+    assert statuses["approval_campaign"] == "BLOCK"
+    assert result["status"] == "AWAITING_EXTERNAL_APPROVALS"
+    assert result["failed_approval_checks"] == ["approval_campaign"]
+
+
 def test_unsigned_approval_timestamp_edit_invalidates_signature(tmp_path: Path) -> None:
     now = datetime.now(timezone.utc)
     document = _document(tmp_path, now)
@@ -4348,7 +4720,7 @@ def test_valid_signature_before_latest_evidence_stays_in_approval_collection(
     assert result["evidence_ready_for_approval"] is True
     assert result["approvals_complete"] is False
     assert result["failed_evidence_checks"] == []
-    assert result["failed_approval_checks"] == ["approval_Product"]
+    assert result["failed_approval_checks"] == ["approval_Product", "approval_campaign"]
 
 
 def test_v2_rejects_per_approval_trust_store_override(tmp_path: Path) -> None:
@@ -4460,7 +4832,7 @@ def test_unrestricted_target_network_blocks_ga(tmp_path: Path) -> None:
     )
 
     assert result["status"] == "BLOCKED"
-    assert result["block_count"] == 1
+    assert result["block_count"] == 2
 
 
 @pytest.mark.parametrize("mutation", ["hidden_public_port", "unreachable_control", "broad_egress_spec"])

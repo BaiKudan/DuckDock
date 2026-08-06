@@ -30,6 +30,11 @@ except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
     from ga_path_resolution import ga_file_resolution_override
 
 try:
+    from scripts.ga_approval_campaign import validate_campaign_freeze
+except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
+    from ga_approval_campaign import validate_campaign_freeze
+
+try:
     from scripts.ga_capacity_evidence import (
         CAPACITY_EVIDENCE_SCHEMA_VERSION as CAPACITY_SCHEMA_VERSION,
         CAPACITY_POLICY_SCHEMA_VERSION,
@@ -127,7 +132,7 @@ except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
 
 SCHEMA_VERSION = "duckdock-ga-production-authorization-v2"
 APPROVAL_POLICY_SCHEMA_VERSION = "duckdock-ga-approval-policy-v2"
-APPROVAL_STATEMENT_SCHEMA_VERSION = "duckdock-ga-approval-statement-v1"
+APPROVAL_STATEMENT_SCHEMA_VERSION = "duckdock-ga-approval-statement-v2"
 ALERTING_SCHEMA_VERSION = "duckdock-ga-alerting-evidence-v2"
 ALERTING_POLICY_SCHEMA_VERSION = "duckdock-ga-alerting-trust-policy-v1"
 ALERT_DELIVERY_SCHEMA_VERSION = "duckdock-ga-alert-delivery-receipt-v1"
@@ -180,6 +185,7 @@ FOUNDATION_CHECK_KEYS = {
 APPROVAL_CHECK_KEYS = {
     "approval_roles",
     "approval_four_eyes",
+    "approval_campaign",
     "approval_Product",
     "approval_Architecture",
     "approval_Security",
@@ -187,6 +193,7 @@ APPROVAL_CHECK_KEYS = {
 }
 PLACEHOLDER_MARKERS = ("__CHANGE_ME", "example.invalid", "<", ">")
 DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
+CAMPAIGN_ID_RE = re.compile(r"^gac_[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 IMAGE_RE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
 REQUIRED_NETWORK_POLICIES = {
@@ -1307,6 +1314,8 @@ def _approval_statement(approval: dict[str, Any], release_digest: str) -> bytes:
                 "schema_version": APPROVAL_STATEMENT_SCHEMA_VERSION,
                 "authorization_schema_version": SCHEMA_VERSION,
                 "release_digest": release_digest,
+                "campaign_id": approval.get("campaign_id"),
+                "campaign_freeze_sha256": approval.get("campaign_freeze_sha256"),
                 "role": approval.get("role"),
                 "identity": approval.get("identity"),
                 "decision": approval.get("decision"),
@@ -5711,6 +5720,125 @@ def evaluate(
         expected="four distinct signer identities",
         detail="One person cannot satisfy multiple organizational approvals.",
     )
+    campaign_ids = [
+        item.get("campaign_id") for item in approvals if isinstance(item, dict)
+    ]
+    campaign_freeze_digests = [
+        item.get("campaign_freeze_sha256")
+        for item in approvals
+        if isinstance(item, dict)
+    ]
+    campaign_reference = document.get("approval_campaign")
+    campaign_reference_shape_ok = (
+        isinstance(campaign_reference, dict)
+        and set(campaign_reference) == {"path", "sha256", "campaign_id"}
+    )
+    campaign_freeze_path = (
+        _resolve_file(campaign_reference.get("path"), authorization_path)
+        if isinstance(campaign_reference, dict)
+        else None
+    )
+    campaign_reference_digest = (
+        _sha256(campaign_freeze_path)
+        if campaign_freeze_path is not None and campaign_freeze_path.is_file()
+        else "missing"
+    )
+    campaign_validation: dict[str, Any] | None = None
+    campaign_validation_detail = "missing or invalid campaign freeze reference"
+    base_matches = False
+    policy_path_matches = False
+    if (
+        campaign_reference_shape_ok
+        and campaign_reference_digest == campaign_reference.get("sha256")
+        and campaign_freeze_path is not None
+    ):
+        try:
+            campaign_receipt = _load_json(campaign_freeze_path)
+            receipt_authorization = _object(
+                campaign_receipt.get("authorization"),
+                "approval campaign authorization binding",
+            )
+            receipt_policy = _object(
+                campaign_receipt.get("approval_policy"),
+                "approval campaign policy binding",
+            )
+            frozen_base_path = _resolve_file(
+                receipt_authorization.get("path"), authorization_path
+            )
+            frozen_policy_path = _resolve_file(receipt_policy.get("path"), authorization_path)
+            if frozen_base_path is None or frozen_policy_path is None:
+                raise ValueError("campaign freeze bound files cannot be resolved")
+            campaign_validation = validate_campaign_freeze(
+                campaign_freeze_path,
+                authorization_path=frozen_base_path,
+                approval_policy_path=frozen_policy_path,
+                now=current,
+                require_active=False,
+                enforce_recorded_paths=False,
+            )
+            frozen_base = _load_json(frozen_base_path)
+            expected_base = dict(document)
+            expected_base.pop("approval_campaign", None)
+            expected_base["approvals"] = []
+            base_matches = frozen_base == expected_base and frozen_base.get("approvals") == []
+            policy_path_matches = (
+                approval_policy_path is not None
+                and frozen_policy_path.resolve() == approval_policy_path.resolve()
+            )
+            campaign_validation_detail = (
+                f"freeze={campaign_freeze_path}, base_matches={base_matches}, "
+                f"policy_path_matches={policy_path_matches}"
+            )
+        except (OSError, UnicodeError, ValueError) as exc:
+            campaign_validation_detail = str(exc)
+    approval_times = [
+        _parse_time(item.get("approved_at"))
+        for item in approvals
+        if isinstance(item, dict)
+    ]
+    campaign_times_ok = (
+        campaign_validation is not None
+        and len(approval_times) == len(approvals)
+        and all(
+            approved_at is not None
+            and approved_at >= campaign_validation["frozen_at"]
+            and approved_at <= campaign_validation["approvals_expire_at"]
+            for approved_at in approval_times
+        )
+    )
+    campaign_binding_ok = (
+        bool(approvals)
+        and len(campaign_ids) == len(approvals)
+        and len(campaign_freeze_digests) == len(approvals)
+        and len({str(item) for item in campaign_ids}) == 1
+        and len({str(item) for item in campaign_freeze_digests}) == 1
+        and all(CAMPAIGN_ID_RE.fullmatch(str(item)) for item in campaign_ids)
+        and all(DIGEST_RE.fullmatch(str(item)) for item in campaign_freeze_digests)
+        and campaign_validation is not None
+        and campaign_reference.get("campaign_id") == campaign_validation["campaign_id"]
+        and campaign_reference.get("sha256")
+        == campaign_validation["campaign_freeze_sha256"]
+        and set(campaign_ids) == {campaign_validation["campaign_id"]}
+        and set(campaign_freeze_digests)
+        == {campaign_validation["campaign_freeze_sha256"]}
+        and base_matches
+        and policy_path_matches
+        and campaign_times_ok
+    )
+    gate.add(
+        "approval_campaign",
+        owner="Operations",
+        passed=campaign_binding_ok,
+        observed=(
+            f"campaign_ids={campaign_ids}, campaign_freeze_sha256={campaign_freeze_digests}, "
+            f"{campaign_validation_detail}, approval_times_in_window={campaign_times_ok}"
+        ),
+        expected="one immutable campaign id and freeze receipt digest shared by every approval",
+        detail=(
+            "The signed campaign fields prevent approvals from separate collection windows from "
+            "being mixed even when they concern the same release digest."
+        ),
+    )
     latest_evidence = max(evidence_times, default=None)
     for role in sorted(REQUIRED_APPROVAL_ROLES):
         matches = [item for item in approvals if isinstance(item, dict) and item.get("role") == role]
@@ -5738,6 +5866,8 @@ def evaluate(
         approval_ok = (
             approval.get("decision") == "APPROVED"
             and approval.get("signed_digest") == release_digest
+            and CAMPAIGN_ID_RE.fullmatch(str(approval.get("campaign_id", ""))) is not None
+            and DIGEST_RE.fullmatch(str(approval.get("campaign_freeze_sha256", ""))) is not None
             and approved_at is not None
             and latest_evidence is not None
             and approved_at >= latest_evidence
@@ -5751,10 +5881,11 @@ def evaluate(
             passed=approval_ok,
             observed=(
                 f"identity={identity or 'missing'}, role_authorized={role_authorized}, "
+                f"campaign_id={approval.get('campaign_id', 'missing')}, "
                 f"approved_at={approved_at}, signature={signature_detail}"
             ),
             expected=(
-                f"policy-authorized {role} identity; APPROVED after latest evidence; "
+                f"policy-authorized {role} identity; immutable campaign; APPROVED after latest evidence; "
                 f"OpenSSH signature over {release_digest}"
             ),
             detail="Approvals are bound to the release, target, every evidence digest and the out-of-band role policy.",

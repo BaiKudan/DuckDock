@@ -161,8 +161,15 @@
     "policy_id": "__CHANGE_ME_RELEASE_AUTHORITY_POLICY_ID__",
     "sha256": "__CHANGE_ME_64_HEX__"
   },
+  "approval_campaign": {
+    "path": "__CHANGE_ME_CAMPAIGN_FREEZE_PATH__",
+    "sha256": "__CHANGE_ME_64_HEX__",
+    "campaign_id": "gac___CHANGE_ME_64_HEX__"
+  },
   "approvals": [
     {
+      "campaign_id": "gac___CHANGE_ME_64_HEX__",
+      "campaign_freeze_sha256": "__CHANGE_ME_64_HEX__",
       "role": "Product",
       "identity": "__CHANGE_ME_PRODUCT_SIGNER_IDENTITY__",
       "decision": "APPROVED",
@@ -171,6 +178,8 @@
       "signature_path": "__CHANGE_ME_SIGNATURE_PATH__"
     },
     {
+      "campaign_id": "gac___CHANGE_ME_64_HEX__",
+      "campaign_freeze_sha256": "__CHANGE_ME_64_HEX__",
       "role": "Architecture",
       "identity": "__CHANGE_ME_ARCHITECTURE_SIGNER_IDENTITY__",
       "decision": "APPROVED",
@@ -179,6 +188,8 @@
       "signature_path": "__CHANGE_ME_SIGNATURE_PATH__"
     },
     {
+      "campaign_id": "gac___CHANGE_ME_64_HEX__",
+      "campaign_freeze_sha256": "__CHANGE_ME_64_HEX__",
       "role": "Security",
       "identity": "__CHANGE_ME_SECURITY_SIGNER_IDENTITY__",
       "decision": "APPROVED",
@@ -187,6 +198,8 @@
       "signature_path": "__CHANGE_ME_SIGNATURE_PATH__"
     },
     {
+      "campaign_id": "gac___CHANGE_ME_64_HEX__",
+      "campaign_freeze_sha256": "__CHANGE_ME_64_HEX__",
       "role": "Operations",
       "identity": "__CHANGE_ME_OPERATIONS_SIGNER_IDENTITY__",
       "decision": "APPROVED",

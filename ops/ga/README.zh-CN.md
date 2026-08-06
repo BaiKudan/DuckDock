@@ -39,20 +39,30 @@ python backend/scripts/verify_ga_production_authorization.py \
 `EVIDENCE_COLLECTION` 均表示当前 release digest 禁止签字；`--allow-blocked` 只用于
 查看诊断，不是发布流水线成功条件。
 
-进入签字阶段后，`scripts/sign-ga-approval.sh` 必须接收授权文件和 out-of-band policy，
-每位负责人在本地重新运行完整证据门禁；工具不再接受人工传入 release digest。每次
+进入签字阶段后，发布机构必须先运行 `backend/scripts/freeze_ga_approval_campaign.py`，
+为同一空 approvals 授权文件、out-of-band policy 和 release digest 生成不可覆盖、限时
+campaign freeze。`scripts/sign-ga-approval.sh` 必须同时接收该 freeze；每位负责人在本地
+重新验证冻结绑定并运行完整证据门禁，工具不再接受人工传入 release digest。每次
 调用生成 signature、可组装 approval entry 和签字人 preflight receipt，并用组织 trust
-store 当场反向验签。四份 entry 由 `backend/scripts/finalize_ga_authorization.py` 组装；
+store 当场反向验签。签名同时覆盖 campaign ID 和 freeze SHA-256，禁止跨活动混用。
+四份 entry 由同样要求 freeze 的 `backend/scripts/finalize_ga_authorization.py` 组装；
 该工具只在持久化文件重验为 `GA_AUTHORIZED` 时保留输出，并生成 finalization receipt。
-原始 base 的 `approvals` 必须为空，最终输出必须与 base 同目录。
+原始 base 的 `approvals` 必须为空，全部签字和 finalization 必须位于冻结窗口内，最终
+输出必须与 base 同目录。最终授权的 `approval_campaign` 内容寻址 freeze；权威授权器
+会重新打开 freeze 和原始空 base 并比较全部非审批字段，不能通过绕过 finalizer 的手工
+JSON 拼装伪造活动。
+
+`production-authorization.example.json` 展示最终授权形态。创建冻结输入时必须将
+`approvals` 设为空数组并删除示例 `approval_campaign`；该引用只由 finalizer 写回。
 
 最终授权完成后，使用 `backend/scripts/archive_ga_authorized_bundle.py` 生成不可覆盖的
 确定性 tar.gz、外部 manifest 和 SHA-256 sidecar。归档器会在收集前后各重验一次
 `GA_AUTHORIZED`，只跟随显式内容摘要/签名引用并接收明确列出的
 `--supplemental-file`；它不扫描目录，因此不会把邻近私钥带入包。授权目录与独立策略
 目录是默认允许根，其他证据根必须用 `--include-root label=/absolute/path` 明确授权。
-发布前应在 supplemental 列表中加入 finalization receipt、四份 signer preflight 和
-最终授权结果，并把 bundle SHA-256 发布到独立不可变渠道。
+campaign freeze 与空 base 会从最终授权的内容寻址引用自动归档。发布前应在 supplemental
+列表中加入 finalization receipt、四份 signer preflight 和最终授权结果，并把 bundle
+SHA-256 发布到独立不可变渠道。
 
 接收方使用 `backend/scripts/verify_ga_authorized_archive.py`，同时传入 archive、外部
 manifest，以及从独立渠道取得的 `--digest` 或 `--expected-sha256`。manifest v2 的

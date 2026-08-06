@@ -196,6 +196,8 @@ def test_production_image_context_excludes_test_and_local_validation_artifacts()
         "scripts/ga_release_identity.py",
         "scripts/collect_ga_release_provenance.py",
         "scripts/ga_release_provenance.py",
+        "scripts/ga_approval_campaign.py",
+        "scripts/freeze_ga_approval_campaign.py",
         "scripts/sign_ga_approval.py",
         "scripts/finalize_ga_authorization.py",
         "scripts/archive_ga_authorized_bundle.py",
@@ -254,6 +256,7 @@ def test_final_tag_reruns_full_gate_and_publishes_attested_images():
 
 
 def test_ga_approval_tools_reverify_before_signing_and_before_final_output():
+    freezer = _read("backend/scripts/freeze_ga_approval_campaign.py")
     signer = _read("backend/scripts/sign_ga_approval.py")
     finalizer = _read("backend/scripts/finalize_ga_authorization.py")
     archiver = _read("backend/scripts/archive_ga_authorized_bundle.py")
@@ -262,6 +265,10 @@ def test_ga_approval_tools_reverify_before_signing_and_before_final_output():
     wrapper = _read("scripts/sign-ga-approval.sh")
 
     assert "--digest" not in wrapper
+    assert 'evaluation.get("campaign_stage") == "APPROVAL_COLLECTION"' in freezer
+    assert "campaign authorization approvals must be empty" in freezer
+    assert "validate_campaign_freeze" in signer
+    assert "approved-at cannot exceed the approval campaign expiry" in signer
     assert 'preflight.get("campaign_stage") == "APPROVAL_COLLECTION"' in signer
     assert 'preflight.get("evidence_ready_for_approval") is True' in signer
     assert "approval policy does not authorize this exact identity" in signer
@@ -269,6 +276,7 @@ def test_ga_approval_tools_reverify_before_signing_and_before_final_output():
     assert "new approval did not pass authoritative verification" in signer
     assert 'result.get("status") == "GA_AUTHORIZED"' in finalizer
     assert "base authorization approvals must be empty" in finalizer
+    assert "do not all belong to the frozen approval campaign" in finalizer
     assert "persisted final authorization did not re-verify" in finalizer
     assert 'result.get("status") == "GA_AUTHORIZED"' in archiver
     assert 'result.get("next_action") == "archive_authorized_bundle"' in archiver
@@ -284,6 +292,7 @@ def test_ga_approval_tools_reverify_before_signing_and_before_final_output():
     assert "ga_file_resolution_overrides(overrides, strict=True)" in archive_verifier
     assert "return (True, None) if strict" in path_resolution
     workflow = _read(".github/workflows/ci.yml")
+    assert "python3 backend/scripts/freeze_ga_approval_campaign.py --help" in workflow
     assert "python3 backend/scripts/sign_ga_approval.py --help" in workflow
     assert "python3 backend/scripts/finalize_ga_authorization.py --help" in workflow
     assert "python3 backend/scripts/archive_ga_authorized_bundle.py --help" in workflow

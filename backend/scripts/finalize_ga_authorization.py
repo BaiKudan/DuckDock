@@ -15,6 +15,11 @@ from pathlib import Path
 from typing import Any, Sequence
 
 try:
+    from scripts.ga_approval_campaign import (
+        parse_rfc3339,
+        sha256_path,
+        validate_campaign_freeze,
+    )
     from scripts.sign_ga_approval import APPROVAL_KEYS
     from scripts.verify_ga_production_authorization import (
         REQUIRED_APPROVAL_ROLES,
@@ -22,6 +27,7 @@ try:
         lint_authorization,
     )
 except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
+    from ga_approval_campaign import parse_rfc3339, sha256_path, validate_campaign_freeze
     from sign_ga_approval import APPROVAL_KEYS
     from verify_ga_production_authorization import (
         REQUIRED_APPROVAL_ROLES,
@@ -30,7 +36,7 @@ except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
     )
 
 
-FINALIZATION_RECEIPT_SCHEMA_VERSION = "duckdock-ga-authorization-finalization-v1"
+FINALIZATION_RECEIPT_SCHEMA_VERSION = "duckdock-ga-authorization-finalization-v2"
 
 
 def _load_object(path: Path, label: str) -> dict[str, Any]:
@@ -96,6 +102,7 @@ def finalize(
     current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     base_digest = _sha256(args.authorization)
     policy_digest = _sha256(args.approval_policy)
+    campaign_freeze_digest = sha256_path(args.campaign_freeze)
     approval_entry_digests = [_sha256(path) for path in args.approval_entry]
     base = _load_object(args.authorization, "base GA authorization")
     lint_errors = lint_authorization(base)
@@ -107,6 +114,12 @@ def finalize(
         raise ValueError(
             "final authorization must stay beside the base file so relative evidence paths remain stable"
         )
+    campaign = validate_campaign_freeze(
+        args.campaign_freeze,
+        authorization_path=args.authorization,
+        approval_policy_path=args.approval_policy,
+        now=current,
+    )
 
     entry_records = [
         _approval_entry(path.resolve(), output_parent=args.output.resolve().parent)
@@ -120,8 +133,29 @@ def finalize(
         and len(set(identities)) == 4
     ):
         raise ValueError("exactly four unique role and identity approval entries are required")
+    if any(
+        entry.get("campaign_id") != campaign["campaign_id"]
+        or entry.get("campaign_freeze_sha256") != campaign["campaign_freeze_sha256"]
+        for entry in entry_records
+    ):
+        raise ValueError("approval entries do not all belong to the frozen approval campaign")
+    approval_times = [
+        parse_rfc3339(entry.get("approved_at"), f"{entry.get('role')} approved_at")
+        for entry in entry_records
+    ]
+    if any(
+        approved_at < campaign["frozen_at"]
+        or approved_at > campaign["approvals_expire_at"]
+        for approved_at in approval_times
+    ):
+        raise ValueError("approval entry timestamp is outside the frozen campaign window")
 
     candidate = copy.deepcopy(base)
+    candidate["approval_campaign"] = {
+        "path": os.path.relpath(args.campaign_freeze.resolve(), args.output.resolve().parent),
+        "sha256": campaign["campaign_freeze_sha256"],
+        "campaign_id": campaign["campaign_id"],
+    }
     candidate["approvals"] = entry_records
     result = evaluate(
         candidate,
@@ -147,6 +181,7 @@ def finalize(
     if (
         _sha256(args.authorization) != base_digest
         or _sha256(args.approval_policy) != policy_digest
+        or sha256_path(args.campaign_freeze) != campaign_freeze_digest
         or any(
             _sha256(path) != expected
             for path, expected in zip(
@@ -168,6 +203,13 @@ def finalize(
         "approval_policy": {
             "path": str(args.approval_policy.resolve()),
             "sha256": policy_digest,
+        },
+        "campaign_freeze": {
+            "path": str(args.campaign_freeze.resolve()),
+            "sha256": campaign_freeze_digest,
+            "campaign_id": campaign["campaign_id"],
+            "frozen_at": campaign["freeze"]["frozen_at"],
+            "approvals_expire_at": campaign["freeze"]["approvals_expire_at"],
         },
         "approval_entries": [
             {
@@ -192,6 +234,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--authorization", type=Path, required=True)
     parser.add_argument("--approval-policy", type=Path, required=True)
+    parser.add_argument("--campaign-freeze", type=Path, required=True)
     parser.add_argument(
         "--approval-entry",
         type=Path,
@@ -206,6 +249,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         for path, label in (
             (args.authorization, "base authorization"),
             (args.approval_policy, "approval policy"),
+            (args.campaign_freeze, "approval campaign freeze"),
             *((path, "approval entry") for path in args.approval_entry),
         ):
             if not path.is_file():

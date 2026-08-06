@@ -697,7 +697,22 @@ next_action=collect_organizational_approvals
 `campaign_stage=EVIDENCE_COLLECTION`；版本、目标或发布机构策略无效时停在
 `campaign_stage=FOUNDATION`。这两种状态都禁止继续签字。
 
-预签字门禁通过后，将同一份只读授权文件、全部内容寻址证据和发布机构策略提供给
+预签字门禁通过后，先冻结一次有时限的审批活动。冻结工具再次执行权威门禁，将空
+`approvals` 授权文件、发布机构策略、release digest、冻结时间和审批截止时间写入
+不可覆盖的回执；窗口默认 24 小时，最大 72 小时：
+
+```bash
+python backend/scripts/freeze_ga_approval_campaign.py \
+  --authorization /secure/duckdock-2.0.0-authorization.json \
+  --approval-policy /release-authority/duckdock-ga-approval-policy.json \
+  --approval-window-hours 24 \
+  --receipt-output /secure/duckdock-2.0.0-campaign-freeze.json
+```
+
+冻结输入不能预先包含 `approval_campaign`；该字段由 finalizer 在四份签字完成后写入
+最终授权文件。若从完整 example 复制底稿，冻结前应同时移除示例 approvals 和该示例引用。
+
+然后将同一份只读授权文件、全部内容寻址证据、发布机构策略和 campaign freeze 回执提供给
 四个不同负责人。授权文件的 `approvals` 此时必须为空；每位负责人都必须在自己的
 可信工作站重新执行完整预签字门禁。签字工具不接受人工复制的 `--digest`，而是从
 当前权威评估结果读取 release digest，核对 identity 仅属于指定角色，并用发布机构
@@ -707,6 +722,7 @@ next_action=collect_organizational_approvals
 bash scripts/sign-ga-approval.sh \
   --authorization /secure/duckdock-2.0.0-authorization.json \
   --approval-policy /release-authority/duckdock-ga-approval-policy.json \
+  --campaign-freeze /secure/duckdock-2.0.0-campaign-freeze.json \
   --role Product \
   --identity product-release-approver@example.com \
   --approved-at 2026-08-06T10:30:00+08:00 \
@@ -720,11 +736,12 @@ bash scripts/sign-ga-approval.sh \
 角色，四个 approval 必须使用不同 identity，并在最新证据之后签署。v2 禁止在
 approval 或安全证据内提供替代 `allowed_signers_path`；所有签名只信任组织策略绑定的
 共享信任库。
-规范化签名 statement 同时覆盖 release digest、role、identity、decision 和
-approved_at，授权包组装者不能事后改写审批角色、决定或时间。任何证据、目标、
+规范化签名 statement 同时覆盖 release digest、campaign ID、freeze 回执摘要、role、
+identity、decision 和 approved_at，授权包组装者不能事后改写审批活动、角色、决定或时间。
+签字时间必须位于冻结窗口内；任何证据、目标、
 版本或审批策略摘要变化都会改变 release digest，使旧签名失效。
 
-`product-preflight.json` 保留该签字人实际看到的授权文件/策略摘要、完整门禁结果和
+`product-preflight.json` 保留该签字人实际看到的授权文件/策略/freeze 摘要、完整门禁结果和
 反向验签结果；它不是替代签名的信任根。四个签字人分别生成 Product、Architecture、
 Security、Operations 的 approval/preflight/signature，禁止共享私钥或由一个操作员
 代签。
@@ -737,6 +754,7 @@ base 与最终输出在同一目录，以保持相对证据路径语义，并且
 python backend/scripts/finalize_ga_authorization.py \
   --authorization /secure/duckdock-2.0.0-authorization.json \
   --approval-policy /release-authority/duckdock-ga-approval-policy.json \
+  --campaign-freeze /secure/duckdock-2.0.0-campaign-freeze.json \
   --approval-entry /secure/product-approval.json \
   --approval-entry /secure/architecture-approval.json \
   --approval-entry /secure/security-approval.json \
@@ -745,8 +763,12 @@ python backend/scripts/finalize_ga_authorization.py \
   --receipt-output /secure/duckdock-2.0.0-finalization.json
 ```
 
-组装器拒绝重复角色/identity、错误或过期 digest、错误密钥、签名缺失、base 已带审批、
-证据变化和非同目录输出；失败时不会留下看似可用的最终授权文件。
+组装器拒绝重复角色/identity、跨 campaign 混签、freeze 过期、窗口外签字、错误或过期
+digest、错误密钥、签名缺失、base 已带审批、证据变化和非同目录输出；失败时不会留下
+看似可用的最终授权文件。成功时会在最终授权的 `approval_campaign` 中保留 freeze
+回执的 path/SHA-256/campaign ID；权威授权器会重新打开 freeze 和其绑定的原始空
+approvals base，核对最终文件除审批与该引用外完全一致。因此即使绕过 finalizer 手工
+拼 JSON，也不能用虚构或缺失的 freeze 得到 `GA_AUTHORIZED`。
 
 最后仍需以独立命令对持久化授权文件执行同一权威门禁：
 
@@ -779,7 +801,8 @@ python backend/scripts/archive_ga_authorized_bundle.py \
 `GA_AUTHORIZED` 才写出结果；三个输出均不可覆盖，持久化后会重新读取并验证。
 它不会扫描目录，只沿 JSON 中显式的 `path+sha256`、`path+manifest_sha256`、
 `allowed_signers_path+allowed_signers_sha256`、`signature_path` 引用闭包，并加入明确
-传入的 supplemental receipt/result。因此同目录审批私钥、builder 私钥和未引用文件
+传入的 supplemental receipt/result。campaign freeze 及其空 base 由最终授权中的
+内容寻址引用自动进入闭包，不需要作为 supplemental 重复传入。因此同目录审批私钥、builder 私钥和未引用文件
 不会进入归档；即使显式引用，常见 OpenSSH/PEM/age 私钥材料也会被拒绝。授权文件
 目录和策略目录自动成为允许根；引用位于其他受控目录时，
 必须显式追加 `--include-root evidence=/absolute/evidence/root`，越界引用、符号链接、
@@ -796,7 +819,7 @@ python backend/scripts/archive_ga_authorized_bundle.py \
 SHA-256；tar/gzip 元数据固定，因此相同输入和相同 `--created-at` 生成字节级一致的
 bundle。`--created-at` 只固定 manifest 时间，不会回拨权威门禁的当前时间或延长证据
 有效期。发布机构应把 `.sha256` 发布到独立不可变渠道。授权结果、原文件、全部证据、
-签名、四份 approval/preflight/signature、finalization receipt、审批策略和共享
+签名、campaign freeze、四份 approval/preflight/signature、finalization receipt、审批策略和共享
 allowed-signers 均应在 manifest 中可追溯。生产验证时仍必须从发布机构控制的独立
 只读路径选择策略，不能从待验证授权包自动发现信任根。
 

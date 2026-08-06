@@ -169,15 +169,25 @@ def verify(env_file: Path) -> dict[str, Any]:
         "signed v2.0.0 after full CI; BuildKit attestations; retained SARIF; strict signed-report collector",
         "final tag reruns all CI gates and emits independently re-verifiable release evidence",
     )
+    approval_freezer = REPO_ROOT / "backend/scripts/freeze_ga_approval_campaign.py"
     approval_signer = REPO_ROOT / "backend/scripts/sign_ga_approval.py"
     approval_finalizer = REPO_ROOT / "backend/scripts/finalize_ga_authorization.py"
+    authorization_verifier = REPO_ROOT / "backend/scripts/verify_ga_production_authorization.py"
     authorized_archiver = REPO_ROOT / "backend/scripts/archive_ga_authorized_bundle.py"
     authorized_archive_verifier = REPO_ROOT / "backend/scripts/verify_ga_authorized_archive.py"
     ga_path_resolution = REPO_ROOT / "backend/scripts/ga_path_resolution.py"
+    freezer_text = (
+        approval_freezer.read_text(encoding="utf-8") if approval_freezer.is_file() else ""
+    )
     signer_text = approval_signer.read_text(encoding="utf-8") if approval_signer.is_file() else ""
     finalizer_text = (
         approval_finalizer.read_text(encoding="utf-8")
         if approval_finalizer.is_file()
+        else ""
+    )
+    authorization_verifier_text = (
+        authorization_verifier.read_text(encoding="utf-8")
+        if authorization_verifier.is_file()
         else ""
     )
     archiver_text = (
@@ -197,13 +207,19 @@ def verify(env_file: Path) -> dict[str, Any]:
     )
     add(
         "ga_approval_campaign",
-        'preflight.get("campaign_stage") == "APPROVAL_COLLECTION"' in signer_text
+        'evaluation.get("campaign_stage") == "APPROVAL_COLLECTION"' in freezer_text
+        and "campaign authorization approvals must be empty" in freezer_text
+        and 'preflight.get("campaign_stage") == "APPROVAL_COLLECTION"' in signer_text
         and 'preflight.get("evidence_ready_for_approval") is True' in signer_text
+        and "approved-at cannot exceed the approval campaign expiry" in signer_text
         and "new approval did not pass authoritative verification" in signer_text
         and 'result.get("status") == "GA_AUTHORIZED"' in finalizer_text
-        and "persisted final authorization did not re-verify" in finalizer_text,
-        "each signer re-evaluates evidence; final assembly emits only after persisted GA_AUTHORIZED recheck",
-        "no arbitrary digest signing; four approvals and persisted authorization pass the same final gate",
+        and "do not all belong to the frozen approval campaign" in finalizer_text
+        and "persisted final authorization did not re-verify" in finalizer_text
+        and "campaign freeze bound files cannot be resolved" in authorization_verifier_text
+        and 'expected_base.pop("approval_campaign", None)' in authorization_verifier_text,
+        "immutable expiring freeze; each signer re-evaluates; mixed campaigns rejected; persisted GA_AUTHORIZED recheck",
+        "one bounded campaign binds the base/policy/digest; four approvals and final output pass the same gate",
     )
     add(
         "ga_authorized_archive",

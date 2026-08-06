@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 try:
+    from scripts.ga_approval_campaign import sha256_path, validate_campaign_freeze
     from scripts.verify_ga_production_authorization import (
         APPROVAL_STATEMENT_SCHEMA_VERSION,
         REQUIRED_APPROVAL_ROLES,
@@ -25,6 +26,7 @@ try:
         lint_authorization,
     )
 except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
+    from ga_approval_campaign import sha256_path, validate_campaign_freeze
     from verify_ga_production_authorization import (
         APPROVAL_STATEMENT_SCHEMA_VERSION,
         REQUIRED_APPROVAL_ROLES,
@@ -35,9 +37,11 @@ except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
     )
 
 
-PREFLIGHT_RECEIPT_SCHEMA_VERSION = "duckdock-ga-approval-preflight-v1"
+PREFLIGHT_RECEIPT_SCHEMA_VERSION = "duckdock-ga-approval-preflight-v2"
 APPROVAL_SIGNATURE_NAMESPACE = "duckdock-ga"
 APPROVAL_KEYS = {
+    "campaign_id",
+    "campaign_freeze_sha256",
     "role",
     "identity",
     "decision",
@@ -116,6 +120,7 @@ def create_approval(
     current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     authorization_digest = _sha256(args.authorization)
     policy_digest = _sha256(args.approval_policy)
+    campaign_freeze_digest = sha256_path(args.campaign_freeze)
     authorization = _load_object(args.authorization, "GA authorization")
     lint_errors = lint_authorization(authorization)
     if lint_errors:
@@ -130,6 +135,13 @@ def create_approval(
         raise ValueError(
             "base authorization approvals must be empty so every signer evaluates the same campaign"
         )
+
+    campaign = validate_campaign_freeze(
+        args.campaign_freeze,
+        authorization_path=args.authorization,
+        approval_policy_path=args.approval_policy,
+        now=current,
+    )
 
     preflight = evaluate(
         authorization,
@@ -150,12 +162,20 @@ def create_approval(
             "authoritative preflight is not at APPROVAL_COLLECTION; signing is forbidden"
         )
     release_digest = str(preflight.get("release_digest", ""))
+    if release_digest != campaign["release_digest"]:
+        raise ValueError("current release digest does not match the approval campaign freeze")
     approved_at = args.approved_at or current.isoformat()
     approved_time = _parse_time(approved_at)
     if approved_time > current:
         raise ValueError("approved-at cannot be in the future")
+    if approved_time < campaign["frozen_at"]:
+        raise ValueError("approved-at cannot precede the approval campaign freeze")
+    if approved_time > campaign["approvals_expire_at"]:
+        raise ValueError("approved-at cannot exceed the approval campaign expiry")
 
     approval = {
+        "campaign_id": campaign["campaign_id"],
+        "campaign_freeze_sha256": campaign["campaign_freeze_sha256"],
         "role": args.role,
         "identity": args.identity,
         "decision": "APPROVED",
@@ -170,6 +190,8 @@ def create_approval(
                 "schema_version": APPROVAL_STATEMENT_SCHEMA_VERSION,
                 "authorization_schema_version": SCHEMA_VERSION,
                 "release_digest": release_digest,
+                "campaign_id": campaign["campaign_id"],
+                "campaign_freeze_sha256": campaign["campaign_freeze_sha256"],
                 "role": args.role,
                 "identity": args.identity,
                 "decision": "APPROVED",
@@ -214,6 +236,11 @@ def create_approval(
         signature = signature_path.read_bytes()
 
         candidate = copy.deepcopy(authorization)
+        candidate["approval_campaign"] = {
+            "path": str(args.campaign_freeze.resolve()),
+            "sha256": campaign["campaign_freeze_sha256"],
+            "campaign_id": campaign["campaign_id"],
+        }
         candidate_approval = {**approval, "signature_path": str(signature_path)}
         candidate["approvals"] = [*approvals, candidate_approval]
         candidate_result = evaluate(
@@ -237,8 +264,11 @@ def create_approval(
     if (
         _sha256(args.authorization) != authorization_digest
         or _sha256(args.approval_policy) != policy_digest
+        or sha256_path(args.campaign_freeze) != campaign_freeze_digest
     ):
-        raise ValueError("authorization or approval policy changed while the approval was signing")
+        raise ValueError(
+            "authorization, approval policy or campaign freeze changed while the approval was signing"
+        )
 
     receipt = {
         "schema_version": PREFLIGHT_RECEIPT_SCHEMA_VERSION,
@@ -249,6 +279,13 @@ def create_approval(
         "approval_policy": {
             "path": str(args.approval_policy.resolve()),
             "sha256": policy_digest,
+        },
+        "campaign_freeze": {
+            "path": str(args.campaign_freeze.resolve()),
+            "sha256": campaign_freeze_digest,
+            "campaign_id": campaign["campaign_id"],
+            "frozen_at": campaign["freeze"]["frozen_at"],
+            "approvals_expire_at": campaign["freeze"]["approvals_expire_at"],
         },
         "role": args.role,
         "identity": args.identity,
@@ -264,6 +301,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--authorization", type=Path, required=True)
     parser.add_argument("--approval-policy", type=Path, required=True)
+    parser.add_argument("--campaign-freeze", type=Path, required=True)
     parser.add_argument("--role", choices=sorted(REQUIRED_APPROVAL_ROLES), required=True)
     parser.add_argument("--identity", required=True)
     parser.add_argument("--approved-at")
@@ -276,6 +314,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         for path, label in (
             (args.authorization, "authorization"),
             (args.approval_policy, "approval policy"),
+            (args.campaign_freeze, "approval campaign freeze"),
             (args.key, "private signing key"),
         ):
             if not path.is_file():
