@@ -38,8 +38,9 @@ zone 后 API 仍满足 SLO，Beat 在约定 RTO 内恢复，MySQL/Redis/S3/RWX �
 TCP 扫描、私有数据端口、CNI/NetworkPolicy 快照及 ingress/egress 正反向探针的
 由发布机构策略约束且外部探测者签名的 `duckdock-ga-network-evidence-v3`。目标 HA 执行器为
 `backend/scripts/collect_ga_target_ha.py`；它需要显式 target disruption 确认、精确
-kube context、该 v3 网络报告，以及由组织 Operations 身份签名的四类状态服务故障
-切换报告，并输出 v2 快照。完整参数、探针前置条件和签名流程见
+kube context、该 v3 网络报告，以及 provider 与独立 verifier 分别签署、最后由组织
+Operations 身份确认的四类状态服务 v2 故障切换报告，并输出 v2 快照。完整参数、
+探针前置条件和签名流程见
 `docs/ga-production-authorization.zh-CN.md`。
 
 跨区约束同时使用 `nodeTaintsPolicy: Honor` 和

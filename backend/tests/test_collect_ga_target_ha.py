@@ -88,6 +88,9 @@ def _network_report() -> dict:
         "status": "PASS",
         "passed": True,
         "observed_at": "2026-08-06T00:02:00Z",
+        "provider_observed_at": "2026-08-06T00:00:00Z",
+        "verification_observed_at": "2026-08-06T00:01:00Z",
+        "exercise_id": "state-ha-20260806",
         "external_scan": {
             "transport": "nmap TCP scan from acknowledged external vantage",
             "scanner_id": "external-scanner-01",
@@ -196,14 +199,36 @@ def _state_report() -> dict:
         "services": {
             name: {
                 "provider": f"Managed {name}",
-                "failover_receipt_id": f"receipt-{name}",
+                "service_instance_id": f"instance-{name}",
+                "topology_id": f"topology-{name}",
+                "fault_domain_count": 2,
+                "failover_event_id": f"event-{name}",
+                "source_fault_domain": "zone-a",
+                "destination_fault_domain": "zone-b",
                 "ha_enabled": True,
+                "automatic_failover": True,
                 "failover_exercised": True,
                 "data_integrity_passed": True,
-                "started_at": "2026-08-06T00:00:00Z",
-                "recovered_at": "2026-08-06T00:01:00Z",
+                "read_probe_passed": True,
+                "write_probe_passed": True,
+                "started_at": "2026-08-05T23:58:00Z",
+                "recovered_at": "2026-08-06T00:00:00Z",
+                "verified_at": "2026-08-06T00:01:00Z",
+                "provider_event_sha256": hashlib.sha256(
+                    f"provider-{name}".encode()
+                ).hexdigest(),
+                "verification_log_sha256": hashlib.sha256(
+                    f"verification-{name}".encode()
+                ).hexdigest(),
             }
             for name in target_ha.STATE_SERVICES
+        },
+        "state_services_policy": {"policy_id": "state-policy"},
+        "provider_receipt": {
+            "signed_evidence": {"signer_identity": "provider@example.com"}
+        },
+        "verification_receipt": {
+            "signed_evidence": {"signer_identity": "verifier@example.com"}
         },
     }
 
@@ -435,7 +460,7 @@ def test_network_and_state_receipts_are_content_validated(tmp_path: Path) -> Non
         target_ha.validate_network_evidence(network_path, _binding())
 
     state = _state_report()
-    state["services"]["mysql"]["failover_receipt_id"] = ""
+    state["services"]["mysql"]["failover_event_id"] = ""
     state_path.write_text(json.dumps(state), encoding="utf-8")
     with pytest.raises(ValueError, match="mysql receipt"):
         target_ha.validate_state_services_report(state_path, _binding())

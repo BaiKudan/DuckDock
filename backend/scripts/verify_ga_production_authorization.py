@@ -47,6 +47,17 @@ try:
         NETWORK_SIGNATURE_NAMESPACE,
         validate_network_probe_envelope,
     )
+    from scripts.ga_state_services_evidence import (
+        OPERATIONS_SIGNATURE_NAMESPACE as STATE_OPERATIONS_SIGNATURE_NAMESPACE,
+        PROVIDER_SIGNATURE_NAMESPACE as STATE_PROVIDER_SIGNATURE_NAMESPACE,
+        REQUIRED_SERVICES as STATE_REQUIRED_SERVICES,
+        STATE_EVIDENCE_SCHEMA_VERSION,
+        STATE_POLICY_SCHEMA_VERSION,
+        VERIFICATION_SIGNATURE_NAMESPACE as STATE_VERIFICATION_SIGNATURE_NAMESPACE,
+        build_service_projection as build_state_service_projection,
+        validate_provider_receipt as validate_state_provider_receipt,
+        validate_verification_receipt as validate_state_verification_receipt,
+    )
     from scripts.ga_tls_evidence import (
         TLS_EVIDENCE_SCHEMA_VERSION,
         TLS_POLICY_SCHEMA_VERSION,
@@ -75,6 +86,17 @@ except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
         NETWORK_POLICY_SCHEMA_VERSION,
         NETWORK_SIGNATURE_NAMESPACE,
         validate_network_probe_envelope,
+    )
+    from ga_state_services_evidence import (
+        OPERATIONS_SIGNATURE_NAMESPACE as STATE_OPERATIONS_SIGNATURE_NAMESPACE,
+        PROVIDER_SIGNATURE_NAMESPACE as STATE_PROVIDER_SIGNATURE_NAMESPACE,
+        REQUIRED_SERVICES as STATE_REQUIRED_SERVICES,
+        STATE_EVIDENCE_SCHEMA_VERSION,
+        STATE_POLICY_SCHEMA_VERSION,
+        VERIFICATION_SIGNATURE_NAMESPACE as STATE_VERIFICATION_SIGNATURE_NAMESPACE,
+        build_service_projection as build_state_service_projection,
+        validate_provider_receipt as validate_state_provider_receipt,
+        validate_verification_receipt as validate_state_verification_receipt,
     )
     from ga_tls_evidence import (
         TLS_EVIDENCE_SCHEMA_VERSION,
@@ -1015,6 +1037,126 @@ def _network_policy_context(
         f"trust={policy_trust_path or 'missing'}, trust_digest={trust_digest}, {signer_detail}"
     )
     return valid, policy_trust_path, identities, detail
+
+
+def _state_services_policy_context(
+    reference: Any,
+    *,
+    authorization_path: Path,
+) -> tuple[
+    bool,
+    Path | None,
+    set[str],
+    set[str],
+    dict[str, set[str]],
+    str,
+]:
+    if not isinstance(reference, dict):
+        return False, None, set(), set(), {}, "missing state-services trust policy"
+    policy_path = _resolve_file(reference.get("path"), authorization_path)
+    trust_path_from_reference = _resolve_file(
+        reference.get("allowed_signers_path"), authorization_path
+    )
+    policy: dict[str, Any] = {}
+    if policy_path is not None and policy_path.is_file():
+        try:
+            loaded = json.loads(policy_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            loaded = None
+        if isinstance(loaded, dict):
+            policy = loaded
+    expected_policy_keys = {
+        "schema_version",
+        "policy_id",
+        "organization",
+        "allowed_signers_path",
+        "allowed_signers_sha256",
+        "provider_identities",
+        "verifier_identities",
+        "required_services",
+        "approved_providers",
+    }
+    expected_reference_keys = {
+        "path",
+        "sha256",
+        "policy_id",
+        "allowed_signers_path",
+        "allowed_signers_sha256",
+    }
+
+    def exact_values(value: Any) -> set[str]:
+        if not (
+            isinstance(value, list)
+            and value
+            and all(_meaningful_string(item) for item in value)
+            and len(value) == len(set(value))
+        ):
+            return set()
+        return {str(item) for item in value}
+
+    provider_identities = exact_values(policy.get("provider_identities"))
+    verifier_identities = exact_values(policy.get("verifier_identities"))
+    approved_providers: dict[str, set[str]] = {}
+    raw_providers = policy.get("approved_providers")
+    if isinstance(raw_providers, dict) and set(raw_providers) == set(STATE_REQUIRED_SERVICES):
+        approved_providers = {
+            name: exact_values(values) for name, values in raw_providers.items()
+        }
+    providers_valid = (
+        set(approved_providers) == set(STATE_REQUIRED_SERVICES)
+        and all(approved_providers.values())
+    )
+    policy_digest = (
+        _sha256(policy_path) if policy_path is not None and policy_path.is_file() else "missing"
+    )
+    policy_trust_path = (
+        _resolve_file(policy.get("allowed_signers_path"), policy_path)
+        if policy_path is not None
+        else None
+    )
+    trust_digest = (
+        _sha256(policy_trust_path)
+        if policy_trust_path is not None and policy_trust_path.is_file()
+        else "missing"
+    )
+    signer_bindings: dict[str, set[str]] | None = None
+    signer_detail = "missing trust store"
+    if policy_trust_path is not None and policy_trust_path.is_file():
+        signer_bindings, signer_detail = _allowed_signer_bindings(policy_trust_path)
+    valid = (
+        set(reference) == expected_reference_keys
+        and bool(DIGEST_RE.fullmatch(str(reference.get("sha256", ""))))
+        and policy_digest == reference.get("sha256")
+        and set(policy) == expected_policy_keys
+        and policy.get("schema_version") == STATE_POLICY_SCHEMA_VERSION
+        and _meaningful_string(policy.get("policy_id"))
+        and policy.get("policy_id") == reference.get("policy_id")
+        and _meaningful_string(policy.get("organization"))
+        and provider_identities
+        and verifier_identities
+        and not provider_identities.intersection(verifier_identities)
+        and policy.get("required_services") == list(STATE_REQUIRED_SERVICES)
+        and providers_valid
+        and policy_trust_path is not None
+        and trust_path_from_reference == policy_trust_path
+        and bool(DIGEST_RE.fullmatch(str(reference.get("allowed_signers_sha256", ""))))
+        and trust_digest == reference.get("allowed_signers_sha256")
+        and trust_digest == policy.get("allowed_signers_sha256")
+        and signer_bindings is not None
+        and set(signer_bindings) == provider_identities.union(verifier_identities)
+    )
+    detail = (
+        f"policy={policy_path or 'missing'}, digest={policy_digest}, "
+        f"trust={policy_trust_path or 'missing'}, trust_digest={trust_digest}, {signer_detail}"
+    )
+    return (
+        valid,
+        policy_trust_path,
+        provider_identities,
+        verifier_identities,
+        approved_providers,
+        detail,
+    )
 
 
 def _approval_statement(approval: dict[str, Any], release_digest: str) -> bytes:
@@ -4686,7 +4828,7 @@ def evaluate(
     state_signature_ok, state_signature_detail, state_evidence_report = _verify_policy_signed_evidence_file(
         state_reference if isinstance(state_reference, dict) else {},
         authorization_path=authorization_path,
-        namespace="duckdock-ha-state-services",
+        namespace=STATE_OPERATIONS_SIGNATURE_NAMESPACE,
         allowed_signers=allowed_signers,
         allowed_identities=role_identities.get("Operations", set()),
         approval_policy_reference=approval_policy_reference,
@@ -4697,8 +4839,129 @@ def evaluate(
         owner="Operations",
         passed=state_signature_ok,
         observed=state_signature_detail,
-        expected="Operations policy identity signature over a release-bound state-services failover report",
-        detail="Managed MySQL/Redis/object/RWX HA cannot be established by booleans copied into the Kubernetes report.",
+        expected="Operations policy identity signature over independently verified state-services evidence",
+        detail="Operations attests the assembled wrapper; provider and verifier signatures are checked separately.",
+    )
+    (
+        state_policy_ok,
+        state_trust_store,
+        state_provider_identities,
+        state_verifier_identities,
+        state_approved_providers,
+        state_policy_detail,
+    ) = _state_services_policy_context(
+        state_evidence_report.get("state_services_policy")
+        if isinstance(state_evidence_report, dict)
+        else None,
+        authorization_path=authorization_path,
+    )
+    state_signer_bindings: dict[str, set[str]] | None = None
+    if state_trust_store is not None and state_trust_store.is_file():
+        state_signer_bindings, _ = _allowed_signer_bindings(state_trust_store)
+    approval_key_material = (
+        set().union(*signer_bindings.values()) if signer_bindings else set()
+    )
+    state_key_material = (
+        set().union(*state_signer_bindings.values()) if state_signer_bindings else set()
+    )
+    state_roles_separated = (
+        state_provider_identities.isdisjoint(configured_identities)
+        and state_verifier_identities.isdisjoint(configured_identities)
+        and approval_key_material.isdisjoint(state_key_material)
+    )
+    provider_embedded = (
+        state_evidence_report.get("provider_receipt")
+        if isinstance(state_evidence_report, dict)
+        else None
+    )
+    verification_embedded = (
+        state_evidence_report.get("verification_receipt")
+        if isinstance(state_evidence_report, dict)
+        else None
+    )
+    provider_signature_ok, provider_receipt, provider_signature_detail = (
+        _verified_embedded_receipt(
+            provider_embedded,
+            authorization_path=authorization_path,
+            allowed_signers=state_trust_store if state_policy_ok else None,
+            allowed_identities=state_provider_identities,
+            namespace=STATE_PROVIDER_SIGNATURE_NAMESPACE,
+        )
+    )
+    verifier_signature_ok, verification_receipt, verifier_signature_detail = (
+        _verified_embedded_receipt(
+            verification_embedded,
+            authorization_path=authorization_path,
+            allowed_signers=state_trust_store if state_policy_ok else None,
+            allowed_identities=state_verifier_identities,
+            namespace=STATE_VERIFICATION_SIGNATURE_NAMESPACE,
+        )
+    )
+    state_provider_signer = (
+        provider_embedded.get("signed_evidence", {}).get("signer_identity")
+        if isinstance(provider_embedded, dict)
+        and isinstance(provider_embedded.get("signed_evidence"), dict)
+        else None
+    )
+    state_verifier_signer = (
+        verification_embedded.get("signed_evidence", {}).get("signer_identity")
+        if isinstance(verification_embedded, dict)
+        and isinstance(verification_embedded.get("signed_evidence"), dict)
+        else None
+    )
+    state_provider_derived: dict[str, Any] = {}
+    state_verification_derived: dict[str, Any] = {}
+    state_receipt_validation_detail = "signed provider/verifier receipts unavailable"
+    try:
+        if not (provider_signature_ok and verifier_signature_ok):
+            raise ValueError(state_receipt_validation_detail)
+        state_provider_derived = validate_state_provider_receipt(
+            provider_receipt,
+            target_environment=str(target.get("target_id")),
+            source_commit=str(release.get("git_commit")),
+            backend_image=str(release.get("backend_image")),
+            frontend_image=str(release.get("frontend_image")),
+            exercise_id=str(state_evidence_report.get("exercise_id", "")),
+            approved_providers=state_approved_providers,
+            now=current,
+        )
+        state_verification_derived = validate_state_verification_receipt(
+            verification_receipt,
+            target_environment=str(target.get("target_id")),
+            source_commit=str(release.get("git_commit")),
+            backend_image=str(release.get("backend_image")),
+            frontend_image=str(release.get("frontend_image")),
+            exercise_id=str(state_evidence_report.get("exercise_id", "")),
+            provider_services=state_provider_derived["services"],
+            now=current,
+        )
+    except (TypeError, ValueError) as exc:
+        state_receipt_validation_detail = str(exc)
+    else:
+        state_receipt_validation_detail = "provider failover and independent integrity receipts validated"
+    state_receipts_ok = (
+        state_policy_ok
+        and state_roles_separated
+        and provider_signature_ok
+        and verifier_signature_ok
+        and state_provider_signer != state_verifier_signer
+        and bool(state_provider_derived)
+        and bool(state_verification_derived)
+    )
+    gate.add(
+        "high_availability_state_services_independent_verification",
+        owner="Architecture",
+        passed=state_receipts_ok,
+        observed=(
+            f"provider={state_provider_signer}, verifier={state_verifier_signer}, "
+            f"validation={state_receipt_validation_detail}"
+        ),
+        expected="distinct approved provider and verifier signatures over failover and data-integrity receipts",
+        detail=(
+            f"provider_signature=({provider_signature_detail}); "
+            f"verifier_signature=({verifier_signature_detail}); roles_separated={state_roles_separated}; "
+            f"policy=({state_policy_detail})"
+        ),
     )
     state_services = (
         state_evidence_report.get("services") if isinstance(state_evidence_report, dict) else None
@@ -4706,10 +4969,53 @@ def evaluate(
     state_evidence_observed_at = _parse_time(
         state_evidence_report.get("observed_at") if isinstance(state_evidence_report, dict) else None
     )
+    state_provider_observed_at = _parse_time(
+        state_evidence_report.get("provider_observed_at")
+        if isinstance(state_evidence_report, dict)
+        else None
+    )
+    state_verification_observed_at = _parse_time(
+        state_evidence_report.get("verification_observed_at")
+        if isinstance(state_evidence_report, dict)
+        else None
+    )
+    state_service_projection = (
+        build_state_service_projection(
+            state_provider_derived["services"],
+            state_verification_derived["services"],
+        )
+        if state_receipts_ok
+        else {}
+    )
     state_evidence_matches = (
         state_signature_ok
+        and state_receipts_ok
         and isinstance(state_evidence_report, dict)
-        and state_evidence_report.get("schema_version") == "duckdock-ga-state-services-failover-v1"
+        and set(state_evidence_report)
+        == {
+            "schema_version",
+            "scope",
+            "target_environment",
+            "source_commit",
+            "images",
+            "status",
+            "passed",
+            "observed_at",
+            "provider_observed_at",
+            "verification_observed_at",
+            "exercise_id",
+            "managed_mysql_ha",
+            "managed_redis_ha",
+            "object_store_ha",
+            "rwx_repository_storage_ha",
+            "failover_exercised",
+            "data_integrity_passed",
+            "services",
+            "state_services_policy",
+            "provider_receipt",
+            "verification_receipt",
+        }
+        and state_evidence_report.get("schema_version") == STATE_EVIDENCE_SCHEMA_VERSION
         and state_evidence_report.get("scope") == "target-production"
         and state_evidence_report.get("status") == "PASS"
         and state_evidence_report.get("passed") is True
@@ -4721,25 +5027,27 @@ def evaluate(
         and state_evidence_report["images"]["backend"].get("name") == release.get("backend_image")
         and state_evidence_report["images"]["frontend"].get("name") == release.get("frontend_image")
         and state_evidence_observed_at is not None
+        and state_provider_observed_at == state_provider_derived.get("observed_at")
+        and state_verification_observed_at == state_verification_derived.get("observed_at")
+        and state_provider_observed_at is not None
+        and state_verification_observed_at is not None
+        and state_provider_observed_at
+        <= state_verification_observed_at
+        <= state_evidence_observed_at
+        and state_verification_observed_at - state_provider_observed_at <= timedelta(hours=4)
+        and state_evidence_observed_at - state_verification_observed_at <= timedelta(minutes=5)
         and evidence_observed_at is not None
         and timedelta(0) <= evidence_observed_at - state_evidence_observed_at <= timedelta(days=30)
         and isinstance(state_services, dict)
         and isinstance(report_state, dict)
-        and set(state_services) == {"mysql", "redis", "object_store", "rwx_repository_storage"}
-        and all(
-            isinstance(state_services.get(name), dict)
-            and _meaningful_string(state_services[name].get("provider"))
-            and _meaningful_string(state_services[name].get("failover_receipt_id"))
-            and state_services[name].get("ha_enabled") is True
-            and state_services[name].get("failover_exercised") is True
-            and state_services[name].get("data_integrity_passed") is True
-            and _ordered_report_times(
-                state_services[name].get("started_at"),
-                state_services[name].get("recovered_at"),
-                no_later_than=state_evidence_observed_at,
-            )
-            for name in ("mysql", "redis", "object_store", "rwx_repository_storage")
-        )
+        and state_services == state_service_projection
+        and provider_receipt is not None
+        and verification_receipt is not None
+        and state_evidence_report.get("provider_observed_at")
+        == provider_receipt.get("observed_at")
+        and state_evidence_report.get("verification_observed_at")
+        == verification_receipt.get("observed_at")
+        and not _contains_secret_material_key(state_evidence_report)
         and all(
             state_evidence_report.get(key) is True and report_state.get(key) is True
             for key in (

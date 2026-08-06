@@ -80,8 +80,14 @@ python backend/scripts/verify_ga_production_authorization.py \
   `collect_ga_independent_security.py` 输出的 v2 wrapper；只信任组织 approval policy
   预授权的 provider/identity，门禁重读原始签名报告并重算统计；
 - `high-availability-evidence.example.json`：目标多故障域故障注入。
-- `state-services-ha-evidence.example.json`：托管 MySQL、Redis、对象存储与 RWX
-  的真实故障切换回执；必须由审批策略中的 Operations 身份签名。
+- `state-services-trust-policy.example.json`：固定四类托管状态服务 provider、provider
+  signer 与独立 verifier 的职责分离和独立公钥；两类身份/公钥还必须与审批和安全
+  评估信任库完全分离；
+- `state-services-provider-receipt.example.json`、
+  `state-services-verification-receipt.example.json`：分别由基础设施提供方签署真实
+  跨故障域切换事件，由独立验证人签署故障前后数据摘要及写后读结果；
+  `collect_ga_state_services_ha.py` 验证两份签名并生成 v2 wrapper，再由 approval
+  policy 中的 Operations 身份签署后交给目标 HA 演练。
 
 所有最终目标报告以及 readiness v1、TLS/network evidence v3、容量 v3 报告都必须绑定
 相同 target ID、source commit、backend/frontend 镜像摘要；最终 wrapper 的

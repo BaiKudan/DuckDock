@@ -77,6 +77,15 @@ from scripts.ga_network_evidence import (
     NETWORK_RAW_SCHEMA_VERSION,
     NETWORK_SIGNATURE_NAMESPACE,
 )
+from scripts.ga_state_services_evidence import (
+    PROVIDER_RECEIPT_SCHEMA_VERSION as STATE_PROVIDER_RECEIPT_SCHEMA_VERSION,
+    PROVIDER_SIGNATURE_NAMESPACE as STATE_PROVIDER_SIGNATURE_NAMESPACE,
+    REQUIRED_SERVICES as STATE_REQUIRED_SERVICES,
+    STATE_EVIDENCE_SCHEMA_VERSION,
+    STATE_POLICY_SCHEMA_VERSION,
+    VERIFICATION_RECEIPT_SCHEMA_VERSION as STATE_VERIFICATION_RECEIPT_SCHEMA_VERSION,
+    VERIFICATION_SIGNATURE_NAMESPACE as STATE_VERIFICATION_SIGNATURE_NAMESPACE,
+)
 
 
 def _evidence(tmp_path: Path, name: str, observed_at: datetime) -> dict[str, str]:
@@ -2175,13 +2184,184 @@ def _add_signed_approvals(document: dict, tmp_path: Path, now: datetime) -> None
         security_report_path.read_bytes()
     ).hexdigest()
     state_observed_at = now - timedelta(minutes=5)
+    state_provider_observed_at = now - timedelta(minutes=7)
+    state_verification_observed_at = now - timedelta(minutes=6)
+    state_exercise_id = "state-ha-20260806"
+    state_provider_identity = "state-provider@example.com"
+    state_verifier_identity = "state-verifier@example.com"
+    state_provider_key = tmp_path / "state_provider_key"
+    state_verifier_key = tmp_path / "state_verifier_key"
+    for key in (state_provider_key, state_verifier_key):
+        subprocess.run(
+            ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)],
+            check=True,
+        )
+    state_allowed_signers = tmp_path / "state_allowed_signers"
+    state_allowed_signers.write_text(
+        (
+            f"{state_provider_identity} "
+            f"{state_provider_key.with_suffix('.pub').read_text(encoding='utf-8').strip()}\n"
+            f"{state_verifier_identity} "
+            f"{state_verifier_key.with_suffix('.pub').read_text(encoding='utf-8').strip()}\n"
+        ),
+        encoding="utf-8",
+    )
+    state_provider_names = {
+        "mysql": "Managed MySQL",
+        "redis": "Managed Redis",
+        "object_store": "Managed S3",
+        "rwx_repository_storage": "Managed RWX CSI",
+    }
+    state_policy = {
+        "schema_version": STATE_POLICY_SCHEMA_VERSION,
+        "policy_id": "duckdock-state-services-authority",
+        "organization": "DuckDock Test Architecture",
+        "allowed_signers_path": str(state_allowed_signers),
+        "allowed_signers_sha256": hashlib.sha256(
+            state_allowed_signers.read_bytes()
+        ).hexdigest(),
+        "provider_identities": [state_provider_identity],
+        "verifier_identities": [state_verifier_identity],
+        "required_services": list(STATE_REQUIRED_SERVICES),
+        "approved_providers": {
+            name: [provider] for name, provider in state_provider_names.items()
+        },
+    }
+    state_policy_path = tmp_path / "state-services-policy.json"
+    state_policy_path.write_text(
+        json.dumps(state_policy, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    provider_services = {
+        name: {
+            "provider": provider,
+            "service_instance_id": f"instance-{name}-prod",
+            "topology_id": f"topology-{name}-multi-zone",
+            "fault_domain_count": 2,
+            "failover_event_id": f"event-{name}-123",
+            "source_fault_domain": "zone-a",
+            "destination_fault_domain": "zone-b",
+            "ha_enabled": True,
+            "automatic_failover": True,
+            "started_at": (now - timedelta(minutes=12)).isoformat(),
+            "recovered_at": (now - timedelta(minutes=8)).isoformat(),
+            "provider_event_sha256": hashlib.sha256(
+                f"provider-event-{name}".encode()
+            ).hexdigest(),
+        }
+        for name, provider in state_provider_names.items()
+    }
+    state_provider_receipt = {
+        "schema_version": STATE_PROVIDER_RECEIPT_SCHEMA_VERSION,
+        "target_environment": document["target"]["target_id"],
+        "source_commit": document["release"]["git_commit"],
+        "images": {
+            "backend": {"name": document["release"]["backend_image"]},
+            "frontend": {"name": document["release"]["frontend_image"]},
+        },
+        "exercise_id": state_exercise_id,
+        "observed_at": state_provider_observed_at.isoformat(),
+        "services": provider_services,
+    }
+    state_provider_path = tmp_path / "state-provider-receipt.json"
+    state_provider_path.write_text(
+        json.dumps(state_provider_receipt, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            "ssh-keygen",
+            "-q",
+            "-Y",
+            "sign",
+            "-f",
+            str(state_provider_key),
+            "-n",
+            STATE_PROVIDER_SIGNATURE_NAMESPACE,
+            str(state_provider_path),
+        ],
+        check=True,
+    )
+    verification_services = {}
+    state_service_projection = {}
+    for name, provider_service in provider_services.items():
+        existing_digest = hashlib.sha256(f"existing-data-{name}".encode()).hexdigest()
+        write_digest = hashlib.sha256(f"write-probe-{name}".encode()).hexdigest()
+        verification_log = hashlib.sha256(f"verification-log-{name}".encode()).hexdigest()
+        verification_services[name] = {
+            "failover_event_id": provider_service["failover_event_id"],
+            "verification_id": f"verification-{name}-123",
+            "verified_at": (now - timedelta(minutes=6, seconds=30)).isoformat(),
+            "pre_failover_data_sha256": existing_digest,
+            "post_failover_data_sha256": existing_digest,
+            "write_probe_sha256": write_digest,
+            "read_back_sha256": write_digest,
+            "read_probe_passed": True,
+            "write_probe_passed": True,
+            "data_integrity_passed": True,
+            "verification_log_sha256": verification_log,
+        }
+        state_service_projection[name] = {
+            "provider": provider_service["provider"],
+            "service_instance_id": provider_service["service_instance_id"],
+            "topology_id": provider_service["topology_id"],
+            "fault_domain_count": provider_service["fault_domain_count"],
+            "failover_event_id": provider_service["failover_event_id"],
+            "source_fault_domain": provider_service["source_fault_domain"],
+            "destination_fault_domain": provider_service["destination_fault_domain"],
+            "ha_enabled": True,
+            "automatic_failover": True,
+            "failover_exercised": True,
+            "data_integrity_passed": True,
+            "read_probe_passed": True,
+            "write_probe_passed": True,
+            "started_at": provider_service["started_at"],
+            "recovered_at": provider_service["recovered_at"],
+            "verified_at": verification_services[name]["verified_at"],
+            "provider_event_sha256": provider_service["provider_event_sha256"],
+            "verification_log_sha256": verification_log,
+        }
+    state_verification_receipt = {
+        "schema_version": STATE_VERIFICATION_RECEIPT_SCHEMA_VERSION,
+        "target_environment": document["target"]["target_id"],
+        "source_commit": document["release"]["git_commit"],
+        "images": {
+            "backend": {"name": document["release"]["backend_image"]},
+            "frontend": {"name": document["release"]["frontend_image"]},
+        },
+        "exercise_id": state_exercise_id,
+        "observed_at": state_verification_observed_at.isoformat(),
+        "services": verification_services,
+    }
+    state_verifier_path = tmp_path / "state-verification-receipt.json"
+    state_verifier_path.write_text(
+        json.dumps(state_verification_receipt, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            "ssh-keygen",
+            "-q",
+            "-Y",
+            "sign",
+            "-f",
+            str(state_verifier_key),
+            "-n",
+            STATE_VERIFICATION_SIGNATURE_NAMESPACE,
+            str(state_verifier_path),
+        ],
+        check=True,
+    )
     state_report_path = tmp_path / "state-services-failover.json"
     state_report = {
-        "schema_version": "duckdock-ga-state-services-failover-v1",
+        "schema_version": STATE_EVIDENCE_SCHEMA_VERSION,
         "scope": "target-production",
         "status": "PASS",
         "passed": True,
         "observed_at": state_observed_at.isoformat(),
+        "provider_observed_at": state_provider_observed_at.isoformat(),
+        "verification_observed_at": state_verification_observed_at.isoformat(),
+        "exercise_id": state_exercise_id,
         "target_environment": document["target"]["target_id"],
         "source_commit": document["release"]["git_commit"],
         "images": {
@@ -2194,22 +2374,31 @@ def _add_signed_approvals(document: dict, tmp_path: Path, now: datetime) -> None
         "rwx_repository_storage_ha": True,
         "failover_exercised": True,
         "data_integrity_passed": True,
-        "services": {
-            name: {
-                "provider": provider,
-                "failover_receipt_id": f"receipt-{name}-123",
-                "ha_enabled": True,
-                "failover_exercised": True,
-                "data_integrity_passed": True,
-                "started_at": (now - timedelta(minutes=9)).isoformat(),
-                "recovered_at": (now - timedelta(minutes=6)).isoformat(),
-            }
-            for name, provider in (
-                ("mysql", "Managed MySQL"),
-                ("redis", "Managed Redis"),
-                ("object_store", "Managed S3"),
-                ("rwx_repository_storage", "Managed RWX CSI"),
-            )
+        "services": state_service_projection,
+        "state_services_policy": {
+            "path": str(state_policy_path),
+            "sha256": hashlib.sha256(state_policy_path.read_bytes()).hexdigest(),
+            "policy_id": state_policy["policy_id"],
+            "allowed_signers_path": str(state_allowed_signers),
+            "allowed_signers_sha256": state_policy["allowed_signers_sha256"],
+        },
+        "provider_receipt": {
+            **state_provider_receipt,
+            "signed_evidence": {
+                "path": str(state_provider_path),
+                "sha256": hashlib.sha256(state_provider_path.read_bytes()).hexdigest(),
+                "signature_path": f"{state_provider_path}.sig",
+                "signer_identity": state_provider_identity,
+            },
+        },
+        "verification_receipt": {
+            **state_verification_receipt,
+            "signed_evidence": {
+                "path": str(state_verifier_path),
+                "sha256": hashlib.sha256(state_verifier_path.read_bytes()).hexdigest(),
+                "signature_path": f"{state_verifier_path}.sig",
+                "signer_identity": state_verifier_identity,
+            },
         },
     }
     state_report_path.write_text(json.dumps(state_report, sort_keys=True) + "\n", encoding="utf-8")
@@ -4040,7 +4229,7 @@ def test_ha_state_service_receipt_tamper_fails_operations_signature(tmp_path: Pa
     state_reference = ha_report["state_services"]["evidence"]
     state_path = Path(state_reference["path"])
     state_report = json.loads(state_path.read_text(encoding="utf-8"))
-    state_report["services"]["mysql"]["failover_receipt_id"] = "tampered-receipt"
+    state_report["services"]["mysql"]["failover_event_id"] = "tampered-event"
     state_path.write_text(json.dumps(state_report, sort_keys=True) + "\n", encoding="utf-8")
     state_reference["sha256"] = hashlib.sha256(state_path.read_bytes()).hexdigest()
     ha_path.write_text(json.dumps(ha_report, sort_keys=True) + "\n", encoding="utf-8")
@@ -4059,6 +4248,100 @@ def test_ha_state_service_receipt_tamper_fails_operations_signature(tmp_path: Pa
     high_availability = next(item for item in result["checks"] if item["key"] == "high_availability")
     assert signature["status"] == "BLOCK"
     assert high_availability["status"] == "BLOCK"
+
+
+def test_ha_provider_raw_receipt_modified_after_signature_is_rejected(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _add_signed_approvals(document, tmp_path, now)
+    ha_path = Path(document["controls"]["high_availability"]["evidence"]["path"])
+    ha_report = json.loads(ha_path.read_text(encoding="utf-8"))
+    state_path = Path(ha_report["state_services"]["evidence"]["path"])
+    state_report = json.loads(state_path.read_text(encoding="utf-8"))
+    provider_path = Path(
+        state_report["provider_receipt"]["signed_evidence"]["path"]
+    )
+    provider_receipt = json.loads(provider_path.read_text(encoding="utf-8"))
+    provider_receipt["services"]["mysql"]["destination_fault_domain"] = "zone-c"
+    provider_path.write_text(
+        json.dumps(provider_receipt, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    operations_signature = next(
+        item
+        for item in result["checks"]
+        if item["key"] == "high_availability_state_services_signature"
+    )
+    independent = next(
+        item
+        for item in result["checks"]
+        if item["key"] == "high_availability_state_services_independent_verification"
+    )
+    assert operations_signature["status"] == "PASS"
+    assert independent["status"] == "BLOCK"
+    assert result["status"] == "BLOCKED"
+
+
+def test_ha_validly_resigned_verifier_receipt_cannot_drift_from_operations_wrapper(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _add_signed_approvals(document, tmp_path, now)
+    ha_path = Path(document["controls"]["high_availability"]["evidence"]["path"])
+    ha_report = json.loads(ha_path.read_text(encoding="utf-8"))
+    state_path = Path(ha_report["state_services"]["evidence"]["path"])
+    state_report = json.loads(state_path.read_text(encoding="utf-8"))
+    signed = state_report["verification_receipt"]["signed_evidence"]
+    receipt_path = Path(signed["path"])
+    signature_path = Path(signed["signature_path"])
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt["services"]["mysql"]["verification_log_sha256"] = "f" * 64
+    receipt_path.write_text(json.dumps(receipt, sort_keys=True) + "\n", encoding="utf-8")
+    signature_path.unlink()
+    subprocess.run(
+        [
+            "ssh-keygen",
+            "-q",
+            "-Y",
+            "sign",
+            "-f",
+            str(tmp_path / "state_verifier_key"),
+            "-n",
+            STATE_VERIFICATION_SIGNATURE_NAMESPACE,
+            str(receipt_path),
+        ],
+        check=True,
+    )
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    operations_signature = next(
+        item
+        for item in result["checks"]
+        if item["key"] == "high_availability_state_services_signature"
+    )
+    independent = next(
+        item
+        for item in result["checks"]
+        if item["key"] == "high_availability_state_services_independent_verification"
+    )
+    assert operations_signature["status"] == "PASS"
+    assert independent["status"] == "BLOCK"
+    assert result["status"] == "BLOCKED"
 
 
 def test_ha_network_claim_must_bind_the_network_control_evidence(tmp_path: Path) -> None:

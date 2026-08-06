@@ -201,10 +201,48 @@ bash scripts/rehearse-kubernetes-ha.sh
    DuckDock/Langfuse 栈，演练结束后再恢复，避免宿主 OOM 污染结果。
 
    目标生产演练必须使用 `collect_ga_target_ha.py`，不能手填 PASS 模板。先按后续
-   网络步骤取得同一 release 的目标 CNI/外部扫描报告；再按
-   `ops/ga/state-services-ha-evidence.example.json` 记录托管 MySQL、Redis、S3 和
-   RWX 的真实 provider receipt、切换时段与数据完整性，由组织审批策略中的
-   Operations 身份签署原文件：
+   网络步骤取得同一 release 的目标 CNI/外部扫描报告。状态服务必须使用 v2 多方
+   证据，不能由 Operations 单方填写汇总：发布机构先从
+   `ops/ga/state-services-trust-policy.example.json` 建立内容寻址策略，固定 provider
+   与独立 verifier 的精确身份/不同公钥、四类 approved provider；这两类 identity/key
+   也不得与四方审批人或独立安全评估人复用。基础设施提供方按
+   `state-services-provider-receipt.example.json` 签署真实 topology、来源/目标故障域、
+   自动切换 event 和原始事件摘要；独立验证人按
+   `state-services-verification-receipt.example.json` 签署故障前后既有数据摘要、写入
+   probe 与读回摘要。两类 receipt 使用不同 namespace：
+
+```bash
+ssh-keygen -Y sign \
+  -f /release-authority/state-provider-key \
+  -n duckdock-ha-provider-failover-receipt \
+  /secure/evidence/state-provider-receipt.json
+
+ssh-keygen -Y sign \
+  -f /release-authority/state-verifier-key \
+  -n duckdock-ha-state-verification-receipt \
+  /secure/evidence/state-verification-receipt.json
+
+python backend/scripts/collect_ga_state_services_ha.py \
+  --target-environment customer-production \
+  --source-commit "$DUCKDOCK_GA_SOURCE_COMMIT" \
+  --backend-image "$DUCKDOCK_GA_BACKEND_IMAGE" \
+  --frontend-image "$DUCKDOCK_GA_FRONTEND_IMAGE" \
+  --exercise-id ga-state-ha-20260806 \
+  --state-services-policy /release-authority/duckdock-state-services-policy.json \
+  --provider-signer-identity state-provider@example.com \
+  --verifier-signer-identity state-verifier@example.com \
+  --provider-receipt /secure/evidence/state-provider-receipt.json \
+  --provider-signature /secure/evidence/state-provider-receipt.json.sig \
+  --verification-receipt /secure/evidence/state-verification-receipt.json \
+  --verification-signature /secure/evidence/state-verification-receipt.json.sig \
+  --output /secure/evidence/state-services-ha.json
+```
+
+   组合器只输出 `duckdock-ga-state-services-failover-v2`：四类服务都必须至少跨两个
+   故障域，provider event 与 verification receipt 一一对应，故障前后摘要和写后读
+   摘要必须相等；单次切换不得超过 4 小时，provider 到 verifier 也必须在同一 4 小时
+   窗口内，receipt 与最终 wrapper 均须在完成后 5 分钟内收口。随后由组织审批策略中
+   的 Operations 身份签署最终 wrapper：
 
 ```bash
 ssh-keygen -Y sign \
@@ -240,8 +278,10 @@ python backend/scripts/collect_ga_target_ha.py \
 
    只有 `duckdock-kubernetes-ha-failover-v2` 可授权生产。报告保留 before/drain/
    rebalance Pod→node→zone 原始快照、全部 drained node、每次 HTTPS 状态码、cleanup
-   结果，并内容寻址地绑定网络证据和 Operations 签名的状态服务回执。旧 v1、仅有
-   YAML 的声明、手填 Pod 名称或清理不完整的报告都会被门禁拒绝。
+   结果，并内容寻址地绑定网络证据和 Operations 签名的状态服务 v2 wrapper。最终
+   门禁还会重读状态服务策略、provider/verifier 原始 JSON 与签名，重算故障域、事件
+   对应、数据连续性和时间线。旧 v1、单方 Operations 汇总、共享密钥、仅有 YAML 的
+   声明、手填 Pod 名称或清理不完整的报告都会被拒绝。
 7. 使用 `collect_ga_target_secrets.py` 在目标 Kubernetes 环境采集
    `duckdock-ga-secrets-evidence-v2`，不能手填 PASS 模板。先由发布机构从
    `ops/ga/secrets-trust-policy.example.json` 建立只读、内容寻址的信任策略；策略

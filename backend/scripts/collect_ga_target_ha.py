@@ -29,17 +29,29 @@ from urllib.parse import urlparse
 try:
     from scripts.ga_network_evidence import NETWORK_EVIDENCE_SCHEMA_VERSION
     from scripts.ga_release_identity import build_release_binding
+    from scripts.ga_state_services_evidence import (
+        DIGEST_RE as STATE_DIGEST_RE,
+        REQUIRED_SERVICES as STATE_REQUIRED_SERVICES,
+        STATE_EVIDENCE_SCHEMA_VERSION,
+        contains_secret_material_key as state_contains_secret_material_key,
+    )
 except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
     from ga_network_evidence import NETWORK_EVIDENCE_SCHEMA_VERSION
     from ga_release_identity import build_release_binding
+    from ga_state_services_evidence import (
+        DIGEST_RE as STATE_DIGEST_RE,
+        REQUIRED_SERVICES as STATE_REQUIRED_SERVICES,
+        STATE_EVIDENCE_SCHEMA_VERSION,
+        contains_secret_material_key as state_contains_secret_material_key,
+    )
 
 
 SCHEMA_VERSION = "duckdock-kubernetes-ha-failover-v2"
-STATE_SCHEMA_VERSION = "duckdock-ga-state-services-failover-v1"
+STATE_SCHEMA_VERSION = STATE_EVIDENCE_SCHEMA_VERSION
 NETWORK_SCHEMA_VERSION = NETWORK_EVIDENCE_SCHEMA_VERSION
 APPROVAL_POLICY_SCHEMA_VERSION = "duckdock-ga-approval-policy-v2"
 COMPONENTS = ("backend", "frontend", "worker", "beat")
-STATE_SERVICES = ("mysql", "redis", "object_store", "rwx_repository_storage")
+STATE_SERVICES = STATE_REQUIRED_SERVICES
 TAINT = "duckdock.io/fault-domain-unavailable=true:NoSchedule"
 TAINT_KEY = "duckdock.io/fault-domain-unavailable"
 NETWORK_REQUIRED_POLICIES = {
@@ -283,6 +295,16 @@ def validate_network_evidence(path: Path, binding: dict[str, Any]) -> dict[str, 
 def validate_state_services_report(path: Path, binding: dict[str, Any]) -> dict[str, Any]:
     report = _load_object(path, "state-services evidence")
     services = report.get("services")
+    provider_receipt = report.get("provider_receipt")
+    verification_receipt = report.get("verification_receipt")
+    provider_signed = (
+        provider_receipt.get("signed_evidence") if isinstance(provider_receipt, dict) else None
+    )
+    verifier_signed = (
+        verification_receipt.get("signed_evidence")
+        if isinstance(verification_receipt, dict)
+        else None
+    )
     if not (
         report.get("schema_version") == STATE_SCHEMA_VERSION
         and report.get("status") == "PASS"
@@ -297,6 +319,11 @@ def validate_state_services_report(path: Path, binding: dict[str, Any]) -> dict[
         and report.get("data_integrity_passed") is True
         and isinstance(services, dict)
         and set(services) == set(STATE_SERVICES)
+        and isinstance(report.get("state_services_policy"), dict)
+        and isinstance(provider_signed, dict)
+        and isinstance(verifier_signed, dict)
+        and provider_signed.get("signer_identity") != verifier_signed.get("signer_identity")
+        and not state_contains_secret_material_key(report)
     ):
         raise ValueError("state-services evidence is not a passing release-bound target report")
     for name in STATE_SERVICES:
@@ -305,13 +332,33 @@ def validate_state_services_report(path: Path, binding: dict[str, Any]) -> dict[
             isinstance(service, dict)
             and isinstance(service.get("provider"), str)
             and bool(service["provider"].strip())
-            and isinstance(service.get("failover_receipt_id"), str)
-            and bool(service["failover_receipt_id"].strip())
+            and isinstance(service.get("service_instance_id"), str)
+            and bool(service["service_instance_id"].strip())
+            and isinstance(service.get("topology_id"), str)
+            and bool(service["topology_id"].strip())
+            and isinstance(service.get("fault_domain_count"), int)
+            and not isinstance(service.get("fault_domain_count"), bool)
+            and service["fault_domain_count"] >= 2
+            and isinstance(service.get("failover_event_id"), str)
+            and bool(service["failover_event_id"].strip())
+            and isinstance(service.get("source_fault_domain"), str)
+            and isinstance(service.get("destination_fault_domain"), str)
+            and bool(service["source_fault_domain"].strip())
+            and bool(service["destination_fault_domain"].strip())
+            and service["source_fault_domain"] != service["destination_fault_domain"]
             and service.get("ha_enabled") is True
+            and service.get("automatic_failover") is True
             and service.get("failover_exercised") is True
             and service.get("data_integrity_passed") is True
+            and service.get("read_probe_passed") is True
+            and service.get("write_probe_passed") is True
             and _ordered_times(service.get("started_at"), service.get("recovered_at"))
-            and _ordered_times(service.get("recovered_at"), report.get("observed_at"))
+            and _ordered_times(service.get("recovered_at"), service.get("verified_at"))
+            and _ordered_times(service.get("verified_at"), report.get("observed_at"))
+            and bool(STATE_DIGEST_RE.fullmatch(str(service.get("provider_event_sha256", ""))))
+            and bool(
+                STATE_DIGEST_RE.fullmatch(str(service.get("verification_log_sha256", "")))
+            )
         ):
             raise ValueError(f"state-services evidence has an invalid {name} receipt")
     return report

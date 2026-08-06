@@ -37,7 +37,7 @@ Runtime/Reporter
 | SLO | PASS | `HEALTHY`；142 个发布窗口请求、0 错误；ingest p95 7.729 ms、timeline p95 12.636 ms、policy p95 54.426 ms |
 | Readiness | PASS | `READY`；14 PASS / 0 WARN / 0 BLOCK |
 | 浏览器 | PASS | Playwright 3/3：未登录守卫、登录表单、审批→执行→回执→验证→完成；应用内浏览器复核 Operations/Release Control，console 0 warning/error |
-| 后端回归 | PASS | 1158 passed、19 skipped；核心覆盖率历史门禁 81.04%（门槛 65%） |
+| 后端回归 | PASS | 1166 passed、19 skipped；核心覆盖率历史门禁 81.04%（门槛 65%） |
 | Python 3.12 锁定环境 | PASS | hashed dev lock；runtime lock `pip-audit` 0 已知漏洞；Ruff/compile 通过 |
 | 真实 MySQL 测试 lane | PASS | 独立临时数据库 17/17；验证后数据库与用户均已删除 |
 | 前端 | PASS | npm audit 0；lint 0 warning；11 files / 56 tests；生产 build 最大入口块 569.69 kB（门槛 600 kB） |
@@ -80,7 +80,7 @@ Langfuse 保持可替换的 provider adapter：关闭或不可用时，依赖它
 
 1. **独立安全审计尚未由第三方执行。** 仓库现提供 `collect_ga_independent_security.py` 和 v2 门禁：组织发布策略预先固定评估机构 identity/公钥，评估方签署逐条 finding 的原始 JSON 并绑定最终 PDF，门禁重算严重度统计且拒绝自选信任根、隐藏 High、投影篡改或签名后改 PDF。但仍没有与最终 target/contract/commit/镜像摘要绑定的真实第三方渗透测试或审计报告。
 2. **目标 TLS 与网络隔离尚未取得真实回执。** TLS 已升级为 v3 双层证据：发布机构策略固定外部 probe identity/key、probe/vantage ID 与全球可路由来源 CIDR，探测者签署含证书指纹、有效期、HSTS header 和旧协议 OpenSSL 原始输出的报告，组合器与最终门禁重新验签并重算；它能拒绝 wrapper 投影篡改、签名后改报告、伪造 legacy 摘要和未批准来源，但尚未从真实外部探测点运行。网络也已升级为 v3 双层证据：发布机构策略额外固定精确 kube context、Namespace 与 CNI，外部执行者签署含 1–65535 TCP、三个数据端口 nmap 原始 XML、CNI/Namespace/Pod/NetworkPolicy 身份和 ingress/egress 正反例的报告；组合器和最终门禁重新验签、验证来源/cluster 身份并重算原始字段，能拒绝签名后篡改、未批准观测点、wrapper 投影和伪造扫描摘要。但该执行器同样尚未在真实目标网络/CNI 上运行。
-3. **HA 已完成本机真实 Kubernetes 无状态演练，但未完成目标环境承诺。** `ops/kubernetes/ha` 的受限镜像、PDB/HPA、严格且 taint-aware/revision-aware 的拓扑分散已经在三模拟 zone 中执行节点/整区 drain、Beat 迁移与恢复后再均衡；仓库现提供 fail-closed 的目标 v2 执行器，可校验精确 context/镜像、整区节点、持续公网 HTTPS、自动清理、网络证据和 Operations 签名的状态服务回执，但尚未在真实目标集群运行。本地单节点 MySQL/Redis/MinIO、`emptyDir` 和未证明 enforcement 的 kindnet 不代表托管 MySQL/Redis/S3/RWX/CNI。
+3. **HA 已完成本机真实 Kubernetes 无状态演练，但未完成目标环境承诺。** `ops/kubernetes/ha` 的受限镜像、PDB/HPA、严格且 taint-aware/revision-aware 的拓扑分散已经在三模拟 zone 中执行节点/整区 drain、Beat 迁移与恢复后再均衡；仓库现提供 fail-closed 的目标 v2 执行器，可校验精确 context/镜像、整区节点、持续公网 HTTPS、自动清理和网络证据。托管 MySQL/Redis/S3/RWX 也已升级为多方 v2：发布策略固定 provider/verifier 身份与公钥，provider 签署自动跨域切换事件，独立 verifier 签署故障前后数据摘要与写后读结果，Operations 只签署组合 wrapper，最终门禁重验三层签名；但尚未在真实目标集群和服务商上运行。本地单节点 MySQL/Redis/MinIO、`emptyDir` 和未证明 enforcement 的 kindnet 不代表托管 MySQL/Redis/S3/RWX/CNI。
 4. **目标容量尚未证明。** 本地真实 MySQL 工程基线通过，300 rps 边界探针也能 fail closed；仓库现提供容量 v3 闭环：负载执行人签署 G2 原始报告，存储观察人签署压测前后 MySQL 行数/bytes/outbox/lag，独立清理验证人签署 Namespace 删除、凭证撤销与残留归零，组合器和最终门禁重算三份原始证据。它能拒绝只靠 HTTP 201、篡改汇总、合法重签但增长不足或清理不完整的报告，但尚未在真实目标 HTTPS、负载均衡器和托管数据服务上执行。
 5. **目标运维回执缺失。** 仓库现提供主动 Alertmanager firing→人工 ack→resolved 的 v2 采集器，并要求 delivery 服务与值班人员用不同身份签署三份原始回执；Secret 轮换也已升级为 metadata-only v2 采集器，要求 provider 与独立 verifier 分别签署轮换/停用和旧拒绝/新可用回执，并重算 Secret resourceVersion、Deployment generation 与 Pod UID 全量替换。异地恢复已升级为 v2：存储服务、恢复执行人、独立验证人分别签署 Object Lock/对象版本、恢复阶段结果与 MySQL/对象/Git/服务验证，门禁重算 RPO/RTO。但这些执行器尚未在真实通知供应商、on-call schedule、生产 Secret Manager、异地不可变备份介质和非生产恢复目标上运行。
 6. **随 Compose 打包的第三方数据镜像不属于 GA 路径。** 本地扫描发现 MySQL/MinIO 官方镜像仍含 Critical/High；单机 Compose 仅作加固参考，GA 强制使用经独立评估的外部 HA MySQL/Redis/S3。Prometheus 的 1 个 High 需要独立评估/VEX 确认，项目不得自行豁免。
