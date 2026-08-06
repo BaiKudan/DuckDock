@@ -439,7 +439,7 @@ def _verify_signed_evidence_file(
     allowed_signers = _resolve_file(signed_file.get("allowed_signers_path"), authorization_path)
     signature = _resolve_file(signed_file.get("signature_path"), authorization_path)
     identity = signed_file.get("signer_identity")
-    expected_digest = str(signed_file.get("sha256", ""))
+    expected_digest = str(signed_file.get("sha256") or signed_file.get("manifest_sha256") or "")
     exists = path is not None and path.is_file()
     actual_digest = _sha256(path) if exists else "missing"
     digest_ok = bool(DIGEST_RE.fullmatch(expected_digest)) and actual_digest == expected_digest
@@ -463,6 +463,55 @@ def _verify_signed_evidence_file(
     return (
         exists and digest_ok and artifacts_ok and signature_ok,
         f"path={path or 'missing'}, digest={actual_digest}, signer={identity or 'missing'}, signature={signature_detail}",
+    )
+
+
+def _signed_backup_manifest(
+    signed_file: dict[str, Any],
+    *,
+    authorization_path: Path,
+) -> dict[str, Any] | None:
+    path = _resolve_file(signed_file.get("path"), authorization_path)
+    if path is None or not path.is_file():
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _positive_int(value: Any) -> bool:
+    try:
+        return int(value) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _backup_manifest_matches_release(
+    manifest: dict[str, Any] | None,
+    *,
+    release_commit: str,
+) -> bool:
+    if not isinstance(manifest, dict):
+        return False
+    expected_names = {"mysql.sql.gz.age", "repos.tar.gz.age", "minio.tar.gz.age"}
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, dict) or set(artifacts) != expected_names:
+        return False
+    return (
+        manifest.get("schema_version") == "duckdock-secure-backup-v1"
+        and manifest.get("release_commit") == release_commit
+        and manifest.get("encryption") == "age-x25519"
+        and _parse_time(manifest.get("created_at")) is not None
+        and all(
+            isinstance(artifacts.get(name), dict)
+            and bool(DIGEST_RE.fullmatch(str(artifacts[name].get("encrypted_sha256", ""))))
+            and bool(DIGEST_RE.fullmatch(str(artifacts[name].get("plaintext_sha256", ""))))
+            and _positive_int(artifacts[name].get("encrypted_size_bytes"))
+            and _positive_int(artifacts[name].get("plaintext_size_bytes"))
+            for name in expected_names
+        )
     )
 
 
@@ -874,6 +923,27 @@ def evaluate(
         if isinstance(recovery_report, dict) and isinstance(recovery_report.get("verification"), dict)
         else {}
     )
+    signed_backup_ok, signed_backup_detail = _verify_signed_evidence_file(
+        backup_report,
+        authorization_path=authorization_path,
+        namespace="duckdock-backup",
+    )
+    backup_manifest = _signed_backup_manifest(
+        backup_report,
+        authorization_path=authorization_path,
+    )
+    backup_manifest_ok = _backup_manifest_matches_release(
+        backup_manifest,
+        release_commit=commit,
+    )
+    gate.add(
+        "recovery_backup_signature",
+        owner="Operations",
+        passed=signed_backup_ok and backup_manifest_ok,
+        observed=signed_backup_detail,
+        expected="release-bound duckdock-secure-backup-v1 manifest with valid duckdock-backup OpenSSH signature",
+        detail="The gate verifies the retained manifest bytes, signer identity, encrypted/plaintext artifact metadata and exact release commit; a signature_verified boolean is not evidence.",
+    )
     recovery_claims_match = isinstance(recovery_report, dict) and all(
         recovery_report.get(key) == recovery.get(key)
         for key in (
@@ -899,7 +969,8 @@ def evaluate(
         and recovery_claims_match
         and backup_report.get("manifest_schema_version") == "duckdock-secure-backup-v1"
         and bool(DIGEST_RE.fullmatch(str(backup_report.get("manifest_sha256", ""))))
-        and backup_report.get("signature_verified") is True
+        and signed_backup_ok
+        and backup_manifest_ok
         and backup_report.get("decryption_key_external") is True
         and restore_report.get("destructive_restore") is True
         and _meaningful_string(restore_report.get("target_environment"))

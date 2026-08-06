@@ -190,6 +190,11 @@ bash scripts/restore.sh \
 The script verifies the manifest OpenSSH signature, verifies encrypted digests,
 decrypts into a restrictive temporary directory, verifies plaintext digests,
 stops application services, restores MySQL/repos/MinIO, then starts the stack.
+The GA recovery evidence must retain the same `manifest.json`,
+`manifest.json.sig`, signer identity and allowed-signers file. The production
+authorization gate independently verifies the `duckdock-backup` signature and
+binds the manifest's release commit and all three artifact metadata records;
+a copied `signature_verified` boolean is rejected.
 The legacy three-plaintext-file flags remain available only for staging and old
 backup migration; they cannot pass the GA offsite/encryption gate.
 

@@ -20,8 +20,11 @@
   "git_repositories_verified": true,
   "backup": {
     "manifest_schema_version": "duckdock-secure-backup-v1",
+    "path": "__CHANGE_ME_SIGNED_BACKUP_MANIFEST_PATH__",
     "manifest_sha256": "__CHANGE_ME_64_HEX__",
-    "signature_verified": true,
+    "signer_identity": "__CHANGE_ME_BACKUP_SIGNER_IDENTITY__",
+    "allowed_signers_path": "__CHANGE_ME_BACKUP_ALLOWED_SIGNERS_PATH__",
+    "signature_path": "__CHANGE_ME_BACKUP_MANIFEST_SIGNATURE_PATH__",
     "decryption_key_external": true
   },
   "restore": {

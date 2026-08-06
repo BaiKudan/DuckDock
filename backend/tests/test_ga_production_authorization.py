@@ -413,6 +413,73 @@ def _document(tmp_path: Path, now: datetime) -> dict:
     )
     write_target_report("alerting", alerting_report)
 
+    if shutil.which("ssh-keygen") is None:
+        pytest.skip("ssh-keygen is required for signed backup verification")
+    backup_manifest_path = tmp_path / "backup-manifest.json"
+    backup_manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "duckdock-secure-backup-v1",
+                "created_at": (now - timedelta(hours=2)).isoformat(),
+                "timestamp": "20260805-080000",
+                "release_commit": commit,
+                "encryption": "age-x25519",
+                "artifacts": {
+                    name: {
+                        "encrypted_sha256": digest * 64,
+                        "encrypted_size_bytes": 1024,
+                        "plaintext_sha256": plaintext_digest * 64,
+                        "plaintext_size_bytes": 512,
+                    }
+                    for name, digest, plaintext_digest in (
+                        ("mysql.sql.gz.age", "1", "4"),
+                        ("repos.tar.gz.age", "2", "5"),
+                        ("minio.tar.gz.age", "3", "6"),
+                    )
+                },
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    backup_signing_key = tmp_path / "backup_signing_key"
+    subprocess.run(
+        [
+            "ssh-keygen",
+            "-q",
+            "-t",
+            "ed25519",
+            "-N",
+            "",
+            "-f",
+            str(backup_signing_key),
+        ],
+        check=True,
+    )
+    backup_signer_identity = "backup-operator@example.com"
+    backup_allowed_signers = tmp_path / "backup_allowed_signers"
+    backup_public_key = backup_signing_key.with_suffix(".pub").read_text(encoding="utf-8").strip()
+    backup_allowed_signers.write_text(
+        f"{backup_signer_identity} {backup_public_key}\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            "ssh-keygen",
+            "-q",
+            "-Y",
+            "sign",
+            "-f",
+            str(backup_signing_key),
+            "-n",
+            "duckdock-backup",
+            str(backup_manifest_path),
+        ],
+        check=True,
+    )
+    backup_signature_path = Path(f"{backup_manifest_path}.sig")
+
     recovery_report = target_report("duckdock-ga-recovery-evidence-v1", "PASSED")
     recovery_report.update(
         {
@@ -426,8 +493,11 @@ def _document(tmp_path: Path, now: datetime) -> dict:
             "git_repositories_verified": True,
             "backup": {
                 "manifest_schema_version": "duckdock-secure-backup-v1",
-                "manifest_sha256": "e" * 64,
-                "signature_verified": True,
+                "path": str(backup_manifest_path),
+                "manifest_sha256": hashlib.sha256(backup_manifest_path.read_bytes()).hexdigest(),
+                "signer_identity": backup_signer_identity,
+                "allowed_signers_path": str(backup_allowed_signers),
+                "signature_path": str(backup_signature_path),
                 "decryption_key_external": True,
             },
             "restore": {
@@ -448,8 +518,6 @@ def _document(tmp_path: Path, now: datetime) -> dict:
     )
     write_target_report("recovery", recovery_report)
 
-    if shutil.which("ssh-keygen") is None:
-        pytest.skip("ssh-keygen is required for independent-assessment verification")
     assessment_path = tmp_path / "independent-assessment-report"
     assessment_path.write_text(
         "Independent DuckDock 2.0 assessment: no open critical or high findings.\n",
@@ -752,6 +820,30 @@ def test_secrets_evidence_rejects_embedded_secret_material(tmp_path: Path) -> No
     assert result["status"] == "BLOCKED"
     check = next(item for item in result["checks"] if item["key"] == "secrets")
     assert check["status"] == "BLOCK"
+
+
+def test_tampered_backup_manifest_fails_even_when_digest_claim_is_updated(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    evidence = document["controls"]["recovery"]["evidence"]
+    evidence_path = Path(evidence["path"])
+    report = json.loads(evidence_path.read_text(encoding="utf-8"))
+    manifest_path = Path(report["backup"]["path"])
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["artifacts"]["mysql.sql.gz.age"]["plaintext_size_bytes"] = 999
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True) + "\n", encoding="utf-8")
+    report["backup"]["manifest_sha256"] = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    evidence_path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+    evidence["sha256"] = hashlib.sha256(evidence_path.read_bytes()).hexdigest()
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(document, authorization_path=tmp_path / "authorization.json", now=now)
+
+    assert result["status"] == "BLOCKED"
+    signature_check = next(item for item in result["checks"] if item["key"] == "recovery_backup_signature")
+    assert signature_check["status"] == "BLOCK"
 
 
 def test_tampered_assessor_report_fails_even_when_digest_claim_is_updated(

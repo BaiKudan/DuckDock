@@ -110,7 +110,11 @@ bash scripts/rehearse-kubernetes-ha.sh
    数据服务外部不可达测试。配置文件或 server dry-run 本身不是运行证据。
 9. 按 `ops/ga/recovery-evidence.example.json` 从异地、加密、不可变备份介质对
    非生产恢复目标进行破坏性恢复。验证备份签名、manifest 摘要、外部解密密钥、
-   MySQL 行、对象和 Git 仓库，并记录 RPO/RTO；禁止覆盖生产数据。
+   MySQL 行、对象和 Git 仓库，并记录 RPO/RTO；禁止覆盖生产数据。`backup` 必须
+   引用 `seal-backup.sh` 生成的原始 `manifest.json`、`.sig`、备份 signer identity
+   与 allowed-signers。生产门禁会在 namespace `duckdock-backup` 实际验签，并解析
+   manifest 的 release commit、age 加密方式和三类 artifact digest/size；不接受
+   `signature_verified: true` 自报字段。
 10. 触发测试告警，由命名 on-call schedule 实际确认，再恢复告警。按
     `ops/ga/alerting-evidence.example.json` 保留三个不同且有时序的 firing、ack、
     resolved receipt。加载规则或仅送达 webhook 不能证明有人值守。
