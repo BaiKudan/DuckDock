@@ -467,6 +467,9 @@ def test_state_services_report_must_be_signed_by_policy_operations_identity(tmp_
             "Security": ["security@example.com"],
             "Operations": [identity],
         },
+        "independent_security_assessors": {
+            "Independent Security Lab": ["assessor@independent-security.example"]
+        },
     }
     policy_path = tmp_path / "policy.json"
     policy_path.write_text(json.dumps(policy) + "\n", encoding="utf-8")

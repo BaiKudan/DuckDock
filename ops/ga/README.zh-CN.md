@@ -5,9 +5,10 @@
 allowed-signers 误提交到公开仓库。
 
 `approval-policy.example.json` 是独立的组织信任根模板。它必须由发布机构而非
-任一审批者通过只读控制路径提供，绑定唯一共享 allowed-signers 文件及四个角色
-允许的精确身份。授权文件只保存 policy ID 和 SHA-256；个人 approval 不允许覆盖
-信任库。正式验证必须使用 `--approval-policy` 显式选择受控策略文件。
+任一审批者通过只读控制路径提供，绑定唯一共享 allowed-signers 文件、四个审批角色
+以及批准的外部安全评估机构/identity。内部审批人与外部评估人的 identity、公钥均
+不得复用。授权文件只保存 policy ID 和 SHA-256；个人 approval 和安全证据都不允许
+覆盖信任库。正式验证必须使用 `--approval-policy` 显式选择受控策略文件。
 
 结构检查：
 
@@ -46,7 +47,11 @@ python backend/scripts/verify_ga_production_authorization.py \
 - `backup-media-receipt.example.json`、`restore-execution-receipt.example.json`、
   `recovery-verification-receipt.example.json`：分别保留对象版本/Object Lock、实际
   恢复阶段 exit code/日志摘要，以及 MySQL/对象/Git/服务就绪的独立验证结果；
-- `independent-security-evidence.example.json`：独立渗透/代码审查和签名报告；
+- `security-assessment-report.example.json`：由外部评估方填写并直接签名的原始 JSON；
+  逐条 findings、重测时间和严重度统计，并内容寻址绑定最终 PDF；
+- `independent-security-evidence.example.json`：
+  `collect_ga_independent_security.py` 输出的 v2 wrapper；只信任组织 approval policy
+  预授权的 provider/identity，门禁重读原始签名报告并重算统计；
 - `high-availability-evidence.example.json`：目标多故障域故障注入。
 - `state-services-ha-evidence.example.json`：托管 MySQL、Redis、对象存储与 RWX
   的真实故障切换回执；必须由审批策略中的 Operations 身份签名。

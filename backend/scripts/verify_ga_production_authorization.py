@@ -24,9 +24,22 @@ from pathlib import Path
 from typing import Any, Sequence
 from urllib.parse import urlparse
 
+try:
+    from scripts.ga_security_assessment import (
+        ASSESSMENT_EVIDENCE_SCHEMA_VERSION as SECURITY_EVIDENCE_SCHEMA_VERSION,
+        ASSESSMENT_SIGNATURE_NAMESPACE as SECURITY_ASSESSMENT_SIGNATURE_NAMESPACE,
+        validate_assessment_report,
+    )
+except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
+    from ga_security_assessment import (
+        ASSESSMENT_EVIDENCE_SCHEMA_VERSION as SECURITY_EVIDENCE_SCHEMA_VERSION,
+        ASSESSMENT_SIGNATURE_NAMESPACE as SECURITY_ASSESSMENT_SIGNATURE_NAMESPACE,
+        validate_assessment_report,
+    )
+
 
 SCHEMA_VERSION = "duckdock-ga-production-authorization-v2"
-APPROVAL_POLICY_SCHEMA_VERSION = "duckdock-ga-approval-policy-v1"
+APPROVAL_POLICY_SCHEMA_VERSION = "duckdock-ga-approval-policy-v2"
 APPROVAL_STATEMENT_SCHEMA_VERSION = "duckdock-ga-approval-statement-v1"
 ALERTING_SCHEMA_VERSION = "duckdock-ga-alerting-evidence-v2"
 ALERTING_POLICY_SCHEMA_VERSION = "duckdock-ga-alerting-trust-policy-v1"
@@ -968,14 +981,20 @@ def _verified_embedded_receipt(
     signature = _resolve_file(signed_evidence.get("signature_path"), authorization_path)
     identity = signed_evidence.get("signer_identity")
     expected_digest = str(signed_evidence.get("sha256", ""))
-    exists = path is not None and path.is_file()
-    actual_digest = _sha256(path) if exists else "missing"
+    payload: bytes | None = None
+    if path is not None and path.is_file():
+        try:
+            payload = path.read_bytes()
+        except OSError:
+            payload = None
+    exists = payload is not None
+    actual_digest = hashlib.sha256(payload).hexdigest() if payload is not None else "missing"
     digest_ok = bool(DIGEST_RE.fullmatch(expected_digest)) and actual_digest == expected_digest
     signer_ok = _meaningful_string(identity) and identity in allowed_identities
     signature_ok = False
     signature_detail = "missing or unauthorized signature artifacts"
     if (
-        exists
+        payload is not None
         and digest_ok
         and signer_ok
         and allowed_signers is not None
@@ -988,13 +1007,13 @@ def _verified_embedded_receipt(
             allowed_signers=allowed_signers,
             signature=signature,
             namespace=namespace,
-            payload=path.read_bytes(),
+            payload=payload,
         )
     raw: dict[str, Any] | None = None
-    if exists:
+    if payload is not None:
         try:
-            value = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError):
+            value = json.loads(payload.decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError):
             value = None
         raw = value if isinstance(value, dict) else None
     embedded_raw = {key: value for key, value in embedded.items() if key != "signed_evidence"}
@@ -2178,6 +2197,7 @@ def evaluate(
         "allowed_signers_path",
         "allowed_signers_sha256",
         "roles",
+        "independent_security_assessors",
     }
     expected_reference_keys = {"policy_id", "sha256"}
     policy_roles_raw = policy.get("roles")
@@ -2198,11 +2218,41 @@ def evaluate(
                 roles_valid = False
                 break
             role_identities[role] = identities_for_role
-    configured_identities = set().union(*role_identities.values()) if role_identities else set()
+    configured_role_identities = set().union(*role_identities.values()) if role_identities else set()
     identities_are_role_exclusive = (
         roles_valid
-        and len(configured_identities) == sum(len(items) for items in role_identities.values())
+        and len(configured_role_identities) == sum(len(items) for items in role_identities.values())
     )
+    assessor_mappings_raw = policy.get("independent_security_assessors")
+    assessor_provider_identities: dict[str, set[str]] = {}
+    assessors_valid = isinstance(assessor_mappings_raw, dict) and bool(assessor_mappings_raw)
+    if assessors_valid:
+        for provider, raw_identities in assessor_mappings_raw.items():
+            if (
+                not _meaningful_string(provider)
+                or not isinstance(raw_identities, list)
+                or not raw_identities
+                or not all(_meaningful_string(identity) for identity in raw_identities)
+            ):
+                assessors_valid = False
+                break
+            identities_for_provider = {str(identity) for identity in raw_identities}
+            if len(identities_for_provider) != len(raw_identities):
+                assessors_valid = False
+                break
+            assessor_provider_identities[str(provider)] = identities_for_provider
+    configured_assessor_identities = (
+        set().union(*assessor_provider_identities.values())
+        if assessor_provider_identities
+        else set()
+    )
+    assessors_are_exclusive = (
+        assessors_valid
+        and len(configured_assessor_identities)
+        == sum(len(items) for items in assessor_provider_identities.values())
+        and not configured_role_identities.intersection(configured_assessor_identities)
+    )
+    configured_identities = configured_role_identities.union(configured_assessor_identities)
     expected_policy_digest = str(approval_policy_reference.get("sha256", ""))
     actual_policy_digest = _sha256(policy_path) if policy_path is not None and policy_path.is_file() else "missing"
     approval_policy_ok = (
@@ -2216,6 +2266,8 @@ def evaluate(
         and _meaningful_string(policy.get("organization"))
         and roles_valid
         and identities_are_role_exclusive
+        and assessors_valid
+        and assessors_are_exclusive
     )
     gate.add(
         "approval_policy",
@@ -2227,7 +2279,7 @@ def evaluate(
         ),
         expected=(
             f"out-of-band {APPROVAL_POLICY_SCHEMA_VERSION}; digest={expected_policy_digest or 'missing'}; "
-            "exactly four non-overlapping role mappings"
+            "four non-overlapping approval roles plus independent assessor mappings"
         ),
         detail="The release authority, not an individual approver, must provision the content-addressed role policy.",
     )
@@ -2259,8 +2311,14 @@ def evaluate(
         observed=(
             f"path={allowed_signers or 'missing'}, digest={actual_trust_digest}, {principals_detail}"
         ),
-        expected="policy-bound shared allowed-signers digest with exactly the configured role identities",
-        detail="Per-approval trust stores are forbidden; every signature must chain to this one release-authority trust store.",
+        expected=(
+            "policy-bound shared allowed-signers digest with exactly the configured role and "
+            "independent-assessor identities"
+        ),
+        detail=(
+            "Per-approval and per-assessment trust stores are forbidden; every signature must "
+            "chain to this one release-authority trust store."
+        ),
     )
 
     evidence_times: list[datetime] = []
@@ -3837,57 +3895,154 @@ def evaluate(
 
     security = controls["security_assessment"]
     security_report = _evidence_json(security, authorization_path)
-    assessment_report = (
+    assessment_projection = (
         security_report.get("assessment")
-        if isinstance(security_report, dict) and isinstance(security_report.get("assessment"), dict)
+        if isinstance(security_report, dict)
+        and isinstance(security_report.get("assessment"), dict)
         else {}
     )
-    findings_report = (
+    findings_projection = (
         security_report.get("findings")
-        if isinstance(security_report, dict) and isinstance(security_report.get("findings"), dict)
+        if isinstance(security_report, dict)
+        and isinstance(security_report.get("findings"), dict)
         else {}
     )
-    signed_report = (
-        security_report.get("signed_report")
-        if isinstance(security_report, dict) and isinstance(security_report.get("signed_report"), dict)
+    release_authority = (
+        security_report.get("release_authority")
+        if isinstance(security_report, dict)
+        and isinstance(security_report.get("release_authority"), dict)
         else {}
     )
-    assessment_scope = assessment_report.get("scope")
-    methodologies = assessment_report.get("methodologies")
-    assessment_scope_values = (
-        set(assessment_scope)
-        if isinstance(assessment_scope, list) and all(isinstance(item, str) for item in assessment_scope)
+    signed_assessment = (
+        security_report.get("signed_assessment")
+        if isinstance(security_report, dict)
+        and isinstance(security_report.get("signed_assessment"), dict)
+        else {}
+    )
+    security_provider = security.get("provider")
+    approved_assessor_identities = (
+        assessor_provider_identities.get(str(security_provider), set())
+        if isinstance(security_provider, str)
         else set()
     )
-    methodology_values = (
-        set(methodologies)
-        if isinstance(methodologies, list) and all(isinstance(item, str) for item in methodologies)
-        else set()
+    signed_assessment_ok, raw_assessment, signed_assessment_detail = (
+        _verified_embedded_receipt(
+            signed_assessment,
+            authorization_path=authorization_path,
+            allowed_signers=allowed_signers if trust_store_ok else None,
+            allowed_identities=approved_assessor_identities,
+            namespace=SECURITY_ASSESSMENT_SIGNATURE_NAMESPACE,
+        )
     )
-    required_assessment_scope = {
-        "application-and-api",
-        "identity-and-access",
-        "kubernetes-infrastructure",
-        "supply-chain",
-        "agent-security",
-    }
-    signed_report_ok, signed_report_detail = _verify_signed_evidence_file(
-        signed_report,
-        authorization_path=authorization_path,
-        namespace="duckdock-security-assessment",
+    signed_evidence = (
+        signed_assessment.get("signed_evidence")
+        if isinstance(signed_assessment, dict)
+        and isinstance(signed_assessment.get("signed_evidence"), dict)
+        else {}
+    )
+    assessor_identity = signed_evidence.get("signer_identity")
+    assessment_path = _resolve_file(signed_evidence.get("path"), authorization_path)
+    derived_assessment: dict[str, Any] = {}
+    assessment_validation_detail = "signed raw assessment unavailable"
+    if raw_assessment is not None and assessment_path is not None:
+        try:
+            derived_assessment = validate_assessment_report(
+                raw_assessment,
+                assessment_path=assessment_path,
+                expected_provider=str(security_provider),
+                expected_assessor_identity=str(assessor_identity),
+                target_environment=str(target.get("target_id")),
+                source_commit=str(release.get("git_commit")),
+                backend_image=str(release.get("backend_image")),
+                frontend_image=str(release.get("frontend_image")),
+                contract_digest=str(release.get("contract_digest")),
+                now=current,
+            )
+        except (OSError, UnicodeError, ValueError) as exc:
+            assessment_validation_detail = str(exc)
+        else:
+            assessment_validation_detail = "raw assessment and report artifact validated"
+    release_authority_ok = (
+        set(release_authority)
+        == {
+            "policy_id",
+            "policy_sha256",
+            "allowed_signers_path",
+            "allowed_signers_sha256",
+        }
+        and release_authority.get("policy_id") == approval_policy_reference.get("policy_id")
+        and release_authority.get("policy_sha256") == approval_policy_reference.get("sha256")
+        and _resolve_file(release_authority.get("allowed_signers_path"), authorization_path)
+        == allowed_signers
+        and release_authority.get("allowed_signers_sha256") == actual_trust_digest
+        and approval_policy_ok
+        and trust_store_ok
     )
     gate.add(
         "security_assessment_signature",
         owner="Security",
-        passed=signed_report_ok,
-        observed=signed_report_detail,
-        expected="digest-matched assessor report with valid OpenSSH signature",
-        detail="The independent assessor, not the DuckDock implementation team, must sign the retained report in namespace duckdock-security-assessment.",
+        passed=signed_assessment_ok and release_authority_ok,
+        observed=(
+            f"provider={security_provider}, approved_identities={sorted(approved_assessor_identities)}, "
+            f"release_authority={release_authority_ok}, {signed_assessment_detail}"
+        ),
+        expected=(
+            "raw assessor JSON signed by a provider identity pre-authorized in the out-of-band "
+            "release-authority policy"
+        ),
+        detail=(
+            "The evidence cannot choose its own allowed-signers file. The assessor identity and key "
+            "must be distinct from every internal approver and chain to the shared policy trust store."
+        ),
+    )
+    expected_assessment_projection = (
+        {
+            "assessment_id": derived_assessment.get("assessment_id"),
+            "scope": derived_assessment.get("scope"),
+            "methodologies": derived_assessment.get("methodologies"),
+            "started_at": raw_assessment.get("started_at"),
+            "completed_at": raw_assessment.get("completed_at"),
+        }
+        if isinstance(raw_assessment, dict) and derived_assessment
+        else {}
+    )
+    expected_findings_projection = (
+        {
+            "total_findings": derived_assessment.get("total_findings"),
+            "open_by_severity": derived_assessment.get("open_by_severity"),
+            "closed_by_severity": derived_assessment.get("closed_by_severity"),
+            "critical_high_retest_completed": derived_assessment.get(
+                "critical_high_retest_completed"
+            ),
+        }
+        if derived_assessment
+        else {}
     )
     security_report_matches = (
-        _report_release_target_binding(
+        isinstance(security_report, dict)
+        and set(security_report)
+        == {
+            "schema_version",
+            "scope",
+            "status",
+            "passed",
+            "observed_at",
+            "target_environment",
+            "source_commit",
+            "images",
+            "contract_digest",
+            "independent",
+            "provider",
+            "open_critical",
+            "open_high",
+            "assessment",
+            "findings",
+            "release_authority",
+            "signed_assessment",
+        }
+        and _report_release_target_binding(
             security_report,
-            schema_version="duckdock-ga-independent-security-evidence-v1",
+            schema_version=SECURITY_EVIDENCE_SCHEMA_VERSION,
             status="PASS",
             control=security,
             target=target,
@@ -3895,38 +4050,44 @@ def evaluate(
         )
         and security_report.get("independent") is security.get("independent")
         and security_report.get("provider") == security.get("provider")
+        and isinstance(security_report.get("open_critical"), int)
+        and not isinstance(security_report.get("open_critical"), bool)
+        and isinstance(security_report.get("open_high"), int)
+        and not isinstance(security_report.get("open_high"), bool)
         and security_report.get("open_critical") == security.get("open_critical")
         and security_report.get("open_high") == security.get("open_high")
         and security_report.get("contract_digest") == release.get("contract_digest")
-        and assessment_report.get("independence_attested") is True
-        and _meaningful_string(assessment_report.get("assessment_id"))
-        and isinstance(assessment_scope, list)
-        and required_assessment_scope.issubset(assessment_scope_values)
-        and isinstance(methodologies, list)
-        and {"penetration-test", "manual-code-review"}.issubset(methodology_values)
+        and assessment_projection == expected_assessment_projection
+        and findings_projection == expected_findings_projection
+        and security_report.get("open_critical") == derived_assessment.get("open_critical")
+        and security_report.get("open_high") == derived_assessment.get("open_high")
         and _ordered_report_times(
-            assessment_report.get("started_at"),
-            assessment_report.get("completed_at"),
+            raw_assessment.get("started_at") if isinstance(raw_assessment, dict) else None,
+            raw_assessment.get("completed_at") if isinstance(raw_assessment, dict) else None,
             no_later_than=_control_observed_at(security),
         )
-        and findings_report.get("open_critical") == security.get("open_critical")
-        and findings_report.get("open_high") == security.get("open_high")
-        and findings_report.get("retest_completed") is True
-        and bool(DIGEST_RE.fullmatch(str(signed_report.get("sha256", ""))))
-        and _meaningful_string(signed_report.get("signer_identity"))
+        and signed_assessment_ok
+        and release_authority_ok
+        and bool(derived_assessment)
+        and not _contains_secret_material_key(security_report)
     )
     security_ok = (
         security.get("status") == "PASS"
         and security.get("independent") is True
         and isinstance(security.get("provider"), str)
         and not any(marker in str(security.get("provider")) for marker in PLACEHOLDER_MARKERS)
-        and int(security.get("open_critical", -1)) == 0
-        and int(security.get("open_high", -1)) == 0
+        and isinstance(security.get("open_critical"), int)
+        and not isinstance(security.get("open_critical"), bool)
+        and security.get("open_critical") == 0
+        and isinstance(security.get("open_high"), int)
+        and not isinstance(security.get("open_high"), bool)
+        and security.get("open_high") == 0
         and security.get("source_commit") == commit
         and security.get("backend_image") == release.get("backend_image")
         and security.get("frontend_image") == release.get("frontend_image")
         and security_report_matches
-        and signed_report_ok
+        and signed_assessment_ok
+        and derived_assessment.get("critical_high_retest_completed") is True
     )
     gate.add(
         "security_assessment",
@@ -3934,7 +4095,11 @@ def evaluate(
         passed=security_ok,
         observed=f"status={security.get('status')}, independent={security.get('independent')}, C={security.get('open_critical')}, H={security.get('open_high')}",
         expected="independent scoped assessment; 0 open critical/high; exact commit and image digests",
-        detail="The independent signed report must bind the exact target, contract, commit and images; cover application, IAM, Kubernetes, supply-chain and agent risks; and record completed retesting.",
+        detail=(
+            "The signed raw assessor JSON and linked PDF must bind the exact target, contract, "
+            "commit and images. Finding counts, Critical/High closure and projections are recomputed "
+            f"instead of trusted from wrapper fields. Validation={assessment_validation_detail}."
+        ),
     )
 
     release_digest = _release_digest(release, target, controls, approval_policy_reference)

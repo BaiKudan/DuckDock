@@ -35,7 +35,7 @@ except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
 SCHEMA_VERSION = "duckdock-kubernetes-ha-failover-v2"
 STATE_SCHEMA_VERSION = "duckdock-ga-state-services-failover-v1"
 NETWORK_SCHEMA_VERSION = "duckdock-ga-network-evidence-v2"
-APPROVAL_POLICY_SCHEMA_VERSION = "duckdock-ga-approval-policy-v1"
+APPROVAL_POLICY_SCHEMA_VERSION = "duckdock-ga-approval-policy-v2"
 COMPONENTS = ("backend", "frontend", "worker", "beat")
 STATE_SERVICES = ("mysql", "redis", "object_store", "rwx_repository_storage")
 TAINT = "duckdock.io/fault-domain-unavailable=true:NoSchedule"
@@ -324,6 +324,7 @@ def load_approval_policy(path: Path, signer_identity: str) -> tuple[dict[str, An
         "allowed_signers_path",
         "allowed_signers_sha256",
         "roles",
+        "independent_security_assessors",
     }
     roles = policy.get("roles")
     required_roles = {"Product", "Architecture", "Security", "Operations"}
@@ -346,10 +347,34 @@ def load_approval_policy(path: Path, signer_identity: str) -> tuple[dict[str, An
         )
         and len(role_identities) == len(set(role_identities))
     )
+    assessors = policy.get("independent_security_assessors")
+    assessors_valid = (
+        isinstance(assessors, dict)
+        and bool(assessors)
+        and all(
+            isinstance(provider, str)
+            and bool(provider.strip())
+            and isinstance(identities, list)
+            and bool(identities)
+            and all(isinstance(identity, str) and bool(identity.strip()) for identity in identities)
+            and len(identities) == len(set(identities))
+            for provider, identities in assessors.items()
+        )
+    )
+    assessor_identities = (
+        [identity for identities in assessors.values() for identity in identities]
+        if assessors_valid
+        else []
+    )
+    identities_exclusive = len(role_identities + assessor_identities) == len(
+        set(role_identities + assessor_identities)
+    )
     if not (
         set(policy) == expected_keys
         and policy.get("schema_version") == APPROVAL_POLICY_SCHEMA_VERSION
         and roles_valid
+        and assessors_valid
+        and identities_exclusive
         and signer_identity in roles.get("Operations", [])
     ):
         raise ValueError("state-services signer is not an Operations identity in the approval policy")

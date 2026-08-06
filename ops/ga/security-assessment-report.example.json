@@ -1,0 +1,62 @@
+{
+  "schema_version": "duckdock-ga-security-assessment-report-v1",
+  "assessment_id": "__CHANGE_ME_ASSESSMENT_ID__",
+  "provider": "__CHANGE_ME_INDEPENDENT_ASSESSOR_PROVIDER__",
+  "assessor_identity": "__CHANGE_ME_INDEPENDENT_ASSESSOR_SIGNER_IDENTITY__",
+  "independence": {
+    "independent_of_implementation": true,
+    "conflict_check_completed": true,
+    "implementation_contributors": 0
+  },
+  "target_environment": "__CHANGE_ME_TARGET_ID__",
+  "source_commit": "__CHANGE_ME_40_HEX_GIT_COMMIT__",
+  "images": {
+    "backend": {"name": "registry.example.invalid/duckdock/backend@sha256:__CHANGE_ME_64_HEX__"},
+    "frontend": {"name": "registry.example.invalid/duckdock/frontend@sha256:__CHANGE_ME_64_HEX__"}
+  },
+  "contract_digest": "aa260f301acc5c3a8004d14980952a03ce0197f9d70dcdd78cd62e986c3b1a83",
+  "scope": [
+    "application-and-api",
+    "identity-and-access",
+    "kubernetes-infrastructure",
+    "supply-chain",
+    "agent-security"
+  ],
+  "methodologies": ["penetration-test", "manual-code-review", "dependency-analysis"],
+  "started_at": "2026-07-15T00:00:00Z",
+  "completed_at": "2026-08-04T00:00:00Z",
+  "findings": [
+    {
+      "finding_id": "DD-SEC-001",
+      "severity": "high",
+      "status": "closed",
+      "affected_components": ["backend-api"],
+      "discovered_at": "2026-07-20T00:00:00Z",
+      "retested_at": "2026-08-03T00:00:00Z"
+    }
+  ],
+  "summary": {
+    "total_findings": 1,
+    "open_by_severity": {
+      "critical": 0,
+      "high": 0,
+      "medium": 0,
+      "low": 0,
+      "informational": 0
+    },
+    "closed_by_severity": {
+      "critical": 0,
+      "high": 1,
+      "medium": 0,
+      "low": 0,
+      "informational": 0
+    },
+    "critical_high_retest_completed": true
+  },
+  "report_artifact": {
+    "path": "__CHANGE_ME_FINAL_ASSESSMENT_PDF_PATH__",
+    "sha256": "__CHANGE_ME_64_HEX__",
+    "format": "pdf"
+  },
+  "completed": true
+}

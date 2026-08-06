@@ -1,7 +1,7 @@
 # DuckDock 2.0 Production GA Authorization
 
 **Status**: Technical implementation complete; target authorization pending
-**Date**: 2026-08-05
+**Date**: 2026-08-06
 **Depends on**: `015-ga-candidate`
 
 ## Goal
@@ -21,16 +21,18 @@ deployment authorization.
 | PGA-04 | DB, Git repo and object backups are age encrypted, signed, uploaded offsite and destructively restored only into an explicitly acknowledged non-production target. The gate verifies the original release-bound manifest, then requires separate exact-principal signatures from the storage service, restore executor and independent verifier. Offsite object versions/digests/sizes must match the manifest and remain Object-Locked for at least 30 days; restore stages retain exit-code/log digests; MySQL rows, object inventory, Git refs and service readiness are independently verified. RPO/RTO are recomputed from the signed recovery-point/failure/verification timeline. | `duckdock-ga-recovery-evidence-v2`, `duckdock-ga-recovery-trust-policy-v1`, signed backup manifest plus storage, restore-execution and independent-verification receipts. |
 | PGA-05 | A portable HA reference runs three backend/frontend/worker replicas across fault domains with PDB/HPA/default-deny policy; a disruptive target collector verifies exact context/images, drains every worker in one Beat-hosting zone under continuous public HTTPS probes, restores/rebalances the zone, binds the target network evidence, and requires an Operations-policy signature over managed state-service/RWX failover receipts. | Kustomize baseline plus `duckdock-kubernetes-ha-failover-v2` and `duckdock-ga-state-services-failover-v1`. |
 | PGA-06 | A 900-second-or-longer capacity gate sustains the declared floor, materializes at least 50,000 runs, and proves post-growth timeline p95 through the real target HTTPS endpoint for the exact target, commit and immutable images. | `duckdock-target-capacity-gate-v2` JSON. |
-| PGA-07 | An assessor independent of implementation tests the exact commit/images; no Critical/High remains. | Independent report bound by SHA-256. |
-| PGA-08 | Product, Architecture, Security and Operations use four distinct OpenSSH identities and distinct public keys, each authorized for exactly that role by an out-of-band, content-addressed release-authority policy and one shared trust store, to approve the exact release/target/evidence/policy digest after evidence completion. Each signature also covers role, identity, decision and approval time. | `duckdock-ga-approval-policy-v1`, shared allowed-signers digest and four verified `duckdock-ga-approval-statement-v1` signatures. |
+| PGA-07 | An assessor independent of implementation and all internal approvers tests the exact target/contract/commit/images. The release authority pre-authorizes the provider and exact assessor identity/key; the gate re-verifies the signed raw JSON, its content-addressed PDF, every finding timeline and recomputed severity counts. No Critical/High remains open. | `duckdock-ga-independent-security-evidence-v2`, signed `duckdock-ga-security-assessment-report-v1` and linked PDF. |
+| PGA-08 | Product, Architecture, Security and Operations use four distinct OpenSSH identities and distinct public keys, each authorized for exactly that role by an out-of-band, content-addressed release-authority policy and one shared trust store. External assessor identities/keys are also exact-policy-bound and disjoint from all approvers. The four roles approve the exact release/target/evidence/policy digest after evidence completion; each signature covers role, identity, decision and approval time. | `duckdock-ga-approval-policy-v2`, shared allowed-signers digest and four verified `duckdock-ga-approval-statement-v1` signatures. |
 | PGA-09 | Final version is `2.0.0`, images use immutable `@sha256`, all RC gates are rerun through a release-bound target HTTPS readiness collector, and the production authorization result is `GA_AUTHORIZED`. | `duckdock-ga-target-readiness-v1` plus `duckdock-ga-production-authorization-v2` input/result bundle. |
 
 ## Truthful current boundary
 
 PGA-01 through the repository portion of PGA-06 and the complete PGA-07/PGA-08
-protocol are implemented and automated. PGA-08 now requires an out-of-band
-release-authority policy, forbids per-approval trust-store overrides and binds
-the policy digest into every signature. PGA-05 now also has a disruptive,
+protocol are implemented and automated. PGA-07 now has a fail-closed v2 collector and parser:
+the organization policy fixes external provider identities/keys, the assessor signs a raw finding-level
+JSON that content-addresses the PDF, and the gate reopens both instead of trusting projections.
+PGA-08 requires the same out-of-band release-authority policy, forbids per-approval/per-assessment
+trust-store overrides and binds the policy digest into every signature. PGA-05 now also has a disruptive,
 fail-closed target collector and v2 evidence parser; the target network path now also has a
 fail-closed v2 collector and a GA parser that revalidates raw nmap, CNI, probe identity,
 NetworkPolicy and connection results rather than trusting summary booleans. PGA-02 now has a

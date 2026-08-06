@@ -37,7 +37,7 @@ Runtime/Reporter
 | SLO | PASS | `HEALTHY`；142 个发布窗口请求、0 错误；ingest p95 7.729 ms、timeline p95 12.636 ms、policy p95 54.426 ms |
 | Readiness | PASS | `READY`；14 PASS / 0 WARN / 0 BLOCK |
 | 浏览器 | PASS | Playwright 3/3：未登录守卫、登录表单、审批→执行→回执→验证→完成；应用内浏览器复核 Operations/Release Control，console 0 warning/error |
-| 后端回归 | PASS | 1113 passed、19 skipped；核心覆盖率历史门禁 81.04%（门槛 65%） |
+| 后端回归 | PASS | 1124 passed、19 skipped；核心覆盖率历史门禁 81.04%（门槛 65%） |
 | Python 3.12 锁定环境 | PASS | hashed dev lock；runtime lock `pip-audit` 0 已知漏洞；Ruff/compile 通过 |
 | 真实 MySQL 测试 lane | PASS | 独立临时数据库 17/17；验证后数据库与用户均已删除 |
 | 前端 | PASS | npm audit 0；lint 0 warning；11 files / 56 tests；生产 build 最大入口块 569.69 kB（门槛 600 kB） |
@@ -78,7 +78,7 @@ Langfuse 保持可替换的 provider adapter：关闭或不可用时，依赖它
 
 ## 5. RC 后仍存在的风险
 
-1. **独立安全审计未完成。** 当前有代码、依赖和镜像门禁，但没有与最终 commit/镜像摘要绑定的第三方渗透测试或审计报告。
+1. **独立安全审计尚未由第三方执行。** 仓库现提供 `collect_ga_independent_security.py` 和 v2 门禁：组织发布策略预先固定评估机构 identity/公钥，评估方签署逐条 finding 的原始 JSON 并绑定最终 PDF，门禁重算严重度统计且拒绝自选信任根、隐藏 High、投影篡改或签名后改 PDF。但仍没有与最终 target/contract/commit/镜像摘要绑定的真实第三方渗透测试或审计报告。
 2. **目标网络隔离尚未取得真实回执。** 仓库现提供 fail-closed 的 `duckdock-ga-network-evidence-v2` 执行器：从已确认的集群外视角执行 1–65535 TCP 与三个数据端口 nmap 扫描，记录 CNI/Namespace/Pod/NetworkPolicy 原始身份，并用可达对照目标验证 ingress/egress 正反向路径；GA 门禁会重新解析原始字段，不能靠手填 PASS 绕过。但该执行器尚未在真实目标网络/CNI 上运行。
 3. **HA 已完成本机真实 Kubernetes 无状态演练，但未完成目标环境承诺。** `ops/kubernetes/ha` 的受限镜像、PDB/HPA、严格且 taint-aware/revision-aware 的拓扑分散已经在三模拟 zone 中执行节点/整区 drain、Beat 迁移与恢复后再均衡；仓库现提供 fail-closed 的目标 v2 执行器，可校验精确 context/镜像、整区节点、持续公网 HTTPS、自动清理、网络证据和 Operations 签名的状态服务回执，但尚未在真实目标集群运行。本地单节点 MySQL/Redis/MinIO、`emptyDir` 和未证明 enforcement 的 kindnet 不代表托管 MySQL/Redis/S3/RWX/CNI。
 4. **目标容量尚未证明。** 本地真实 MySQL 工程基线通过，300 rps 边界探针也能 fail closed；仍需通过真实目标 HTTPS、负载均衡器和目标数据服务重跑 G2。
@@ -96,7 +96,7 @@ Langfuse 保持可替换的 provider adapter：关闭或不可用时，依赖它
 - 用 `collect_ga_target_recovery.py` 从异地、加密、至少 30 天 Object Lock 的介质做破坏性 staging 恢复，取得存储/执行/独立验证三类签名回执；
 - 用 `collect_ga_target_secrets.py` 采集生产 Secret Manager 轮换，取得 provider/verifier 不同密钥的原始签名回执，并证明 backend/worker/beat 全量滚动；
 - 用 `collect_ga_target_alerting.py` 触发和恢复目标告警，由 delivery 服务签署投递回执、实际值班人员签署 ack，并证明目标接收人与 on-call schedule；
-- 完成独立安全评审/VEX，关闭最终应用镜像和依赖中的全部 Critical/High；
+- 由组织策略预授权的第三方使用 `security-assessment-report.example.json` 交付并签署原始报告，再运行 `collect_ga_independent_security.py`，关闭最终应用镜像和依赖中的全部 Critical/High；
 - 将版本冻结为 `2.0.0`，使用 registry `@sha256` 镜像，在最终 commit 上重跑全部门禁；
 - 由发布机构通过受控、内容寻址的组织策略固定共享信任库和角色身份，再由 Product、Architecture、Security、Operations 四个不同身份签署同一 release/target/evidence/policy 摘要；
 - 运行生产授权器并取得唯一可接受结果 `GA_AUTHORIZED`。

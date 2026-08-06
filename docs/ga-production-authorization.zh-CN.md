@@ -20,6 +20,7 @@ DuckDock 有两个刻意分离的门禁：
 export DUCKDOCK_GA_SOURCE_COMMIT='40-character Git commit'
 export DUCKDOCK_GA_BACKEND_IMAGE='registry.example.com/duckdock/backend@sha256:64-hex-digest'
 export DUCKDOCK_GA_FRONTEND_IMAGE='registry.example.com/duckdock/frontend@sha256:64-hex-digest'
+export DUCKDOCK_GA_CONTRACT_DIGEST='64-character frozen API contract SHA-256'
 ```
 
 3. 运行 `python3 scripts/verify-production-baseline.py`，保留 JSON；在目标
@@ -362,21 +363,51 @@ python backend/scripts/collect_ga_target_alerting.py \
     的 receipt、自报 `signature_verified` 或 delivery 服务代替人签 ack 均不能通过。
     若任一阶段失败，采集器会尽力自动 resolve 已注入的告警；重试必须使用新的
     exercise ID 和全新的 receipt/signature 路径，不能复用失败演练留下的文件。
-11. 委托与项目实现方独立的安全机构按指定范围执行渗透测试和人工代码审查，
-    关闭并复测全部 Critical/High。按
-    `ops/ga/independent-security-evidence.example.json` 记录独立性、五类必测范围、
-    签名报告摘要，并绑定相同 target、contract、commit 和两个镜像摘要。评估方需
-    用自己的 OpenSSH key 在 namespace `duckdock-security-assessment` 对报告原文件
-    签名；门禁会读取 allowed-signers 和 `.sig` 实际验签，不接受布尔值自报验签。
+11. 委托与项目实现方、四方审批人均独立的安全机构按指定范围执行渗透测试和人工
+    代码审查，关闭并复测全部 Critical/High。组织发布策略必须先升级为
+    `duckdock-ga-approval-policy-v2`，在 `independent_security_assessors` 中把机构名称
+    映射到评估方精确 identity，并将其公钥放入与四方审批共享的 allowed-signers；
+    外部评估人与内部审批人不得复用 identity 或公钥。
+
+    评估方按 `ops/ga/security-assessment-report.example.json` 交付机器可读原始 JSON，
+    逐条列出 findings 并绑定最终 PDF SHA-256、相同 target、contract、commit 和两个
+    镜像摘要。评估方直接对该 JSON 签名：
+
+```bash
+ssh-keygen -Y sign \
+  -n duckdock-security-assessment \
+  -f /secure/assessor-signing-key \
+  /secure/duckdock-2.0-final-assessment.json
+
+python backend/scripts/collect_ga_independent_security.py \
+  --target-environment customer-production \
+  --source-commit "$DUCKDOCK_GA_SOURCE_COMMIT" \
+  --backend-image "$DUCKDOCK_GA_BACKEND_IMAGE" \
+  --frontend-image "$DUCKDOCK_GA_FRONTEND_IMAGE" \
+  --contract-digest "$DUCKDOCK_GA_CONTRACT_DIGEST" \
+  --provider "Independent Security Lab" \
+  --assessor-signer-identity assessor@independent-security.example \
+  --assessment-report /secure/duckdock-2.0-final-assessment.json \
+  --assessment-signature /secure/duckdock-2.0-final-assessment.json.sig \
+  --approval-policy /release-authority/duckdock-ga-approval-policy.json \
+  --output /secure/evidence/independent-security.json
+```
+
+    v2 采集器和最终门禁都只信任显式传入的组织策略，重新验签原始 JSON、重算 PDF
+    digest 和逐级 finding 统计，并核对 wrapper 投影。自选 allowed-signers、隐藏 High、
+    修改投影或签名后改 PDF 均不能通过。
 12. 为每份证据填绝对或授权文件相对路径、SHA-256 与 UTC 时间。Readiness、TLS、
     Secrets、网络、告警、恢复、容量、HA 和独立安全报告内部 `observed_at` 必须与
     各自授权证据时间相同，且 `scope` 只能是 `target-production`。本地 dev/kind
     回执不能转换成该 scope。
-13. 先由组织发布机构（不能是任一审批者临时自建）从
+13. 由组织发布机构（不能是任一审批者临时自建；且必须在 HA 状态服务和第 11 步
+    独立安全证据签署前完成）从
     `ops/ga/approval-policy.example.json` 建立受控审批策略。策略必须使用
-    `duckdock-ga-approval-policy-v1`，为 Product、Architecture、Security、
-    Operations 分配互不重叠的精确 identity，并引用同一份 OpenSSH
-    allowed-signers。信任库不得使用通配 principal；其 SHA-256 写入策略，策略
+    `duckdock-ga-approval-policy-v2`，为 Product、Architecture、Security、
+    Operations 分配互不重叠的精确 identity，并在
+    `independent_security_assessors` 中预授权外部评估 provider/identity。全部内部与
+    外部 identity、公钥必须互不重叠并引用同一份 OpenSSH allowed-signers。信任库
+    不得使用通配 principal；其 SHA-256 写入策略，策略
     SHA-256 和 policy ID 再写入生产授权文件的 `approval_policy`。策略与信任库
     应由发布流水线/发布负责人以只读方式注入验证器，不能接受审批者随授权包提交
     的任意替代路径。例如：
@@ -407,7 +438,8 @@ bash scripts/sign-ga-approval.sh \
 
 签名采用 OpenSSH namespace `duckdock-ga`。每个 identity 必须属于组织策略中对应
 角色，四个 approval 必须使用不同 identity，并在最新证据之后签署。v2 禁止在
-approval 内提供 `allowed_signers_path`；所有签名只信任组织策略绑定的共享信任库。
+approval 或安全证据内提供替代 `allowed_signers_path`；所有签名只信任组织策略绑定的
+共享信任库。
 规范化签名 statement 同时覆盖 release digest、role、identity、decision 和
 approved_at，授权包组装者不能事后改写审批角色、决定或时间。任何证据、目标、
 版本或审批策略摘要变化都会改变 release digest，使旧签名失效。

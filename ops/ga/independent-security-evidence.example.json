@@ -1,9 +1,9 @@
 {
-  "schema_version": "duckdock-ga-independent-security-evidence-v1",
+  "schema_version": "duckdock-ga-independent-security-evidence-v2",
   "scope": "target-production",
   "status": "PASS",
   "passed": true,
-  "observed_at": "2026-08-05T00:00:00Z",
+  "observed_at": "2026-08-06T00:00:00Z",
   "target_environment": "__CHANGE_ME_TARGET_ID__",
   "source_commit": "__CHANGE_ME_40_HEX_GIT_COMMIT__",
   "images": {
@@ -12,12 +12,11 @@
   },
   "contract_digest": "aa260f301acc5c3a8004d14980952a03ce0197f9d70dcdd78cd62e986c3b1a83",
   "independent": true,
-  "provider": "__CHANGE_ME_INDEPENDENT_ASSESSOR__",
+  "provider": "__CHANGE_ME_INDEPENDENT_ASSESSOR_PROVIDER__",
   "open_critical": 0,
   "open_high": 0,
   "assessment": {
     "assessment_id": "__CHANGE_ME_ASSESSMENT_ID__",
-    "independence_attested": true,
     "scope": [
       "application-and-api",
       "identity-and-access",
@@ -25,20 +24,100 @@
       "supply-chain",
       "agent-security"
     ],
-    "methodologies": ["penetration-test", "manual-code-review"],
+    "methodologies": ["penetration-test", "manual-code-review", "dependency-analysis"],
     "started_at": "2026-07-15T00:00:00Z",
     "completed_at": "2026-08-04T00:00:00Z"
   },
   "findings": {
-    "open_critical": 0,
-    "open_high": 0,
-    "retest_completed": true
+    "total_findings": 1,
+    "open_by_severity": {
+      "critical": 0,
+      "high": 0,
+      "medium": 0,
+      "low": 0,
+      "informational": 0
+    },
+    "closed_by_severity": {
+      "critical": 0,
+      "high": 1,
+      "medium": 0,
+      "low": 0,
+      "informational": 0
+    },
+    "critical_high_retest_completed": true
   },
-  "signed_report": {
-    "path": "__CHANGE_ME_SIGNED_REPORT_PATH__",
-    "sha256": "__CHANGE_ME_64_HEX__",
-    "signer_identity": "__CHANGE_ME_ASSESSOR_SIGNER_IDENTITY__",
-    "allowed_signers_path": "__CHANGE_ME_ASSESSOR_ALLOWED_SIGNERS_PATH__",
-    "signature_path": "__CHANGE_ME_ASSESSOR_SIGNATURE_PATH__"
+  "release_authority": {
+    "policy_id": "__CHANGE_ME_RELEASE_AUTHORITY_POLICY_ID__",
+    "policy_sha256": "__CHANGE_ME_64_HEX__",
+    "allowed_signers_path": "__CHANGE_ME_RELEASE_AUTHORITY_ALLOWED_SIGNERS_PATH__",
+    "allowed_signers_sha256": "__CHANGE_ME_64_HEX__"
+  },
+  "signed_assessment": {
+    "schema_version": "duckdock-ga-security-assessment-report-v1",
+    "assessment_id": "__CHANGE_ME_ASSESSMENT_ID__",
+    "provider": "__CHANGE_ME_INDEPENDENT_ASSESSOR_PROVIDER__",
+    "assessor_identity": "__CHANGE_ME_INDEPENDENT_ASSESSOR_SIGNER_IDENTITY__",
+    "independence": {
+      "independent_of_implementation": true,
+      "conflict_check_completed": true,
+      "implementation_contributors": 0
+    },
+    "target_environment": "__CHANGE_ME_TARGET_ID__",
+    "source_commit": "__CHANGE_ME_40_HEX_GIT_COMMIT__",
+    "images": {
+      "backend": {"name": "registry.example.invalid/duckdock/backend@sha256:__CHANGE_ME_64_HEX__"},
+      "frontend": {"name": "registry.example.invalid/duckdock/frontend@sha256:__CHANGE_ME_64_HEX__"}
+    },
+    "contract_digest": "aa260f301acc5c3a8004d14980952a03ce0197f9d70dcdd78cd62e986c3b1a83",
+    "scope": [
+      "application-and-api",
+      "identity-and-access",
+      "kubernetes-infrastructure",
+      "supply-chain",
+      "agent-security"
+    ],
+    "methodologies": ["penetration-test", "manual-code-review", "dependency-analysis"],
+    "started_at": "2026-07-15T00:00:00Z",
+    "completed_at": "2026-08-04T00:00:00Z",
+    "findings": [
+      {
+        "finding_id": "DD-SEC-001",
+        "severity": "high",
+        "status": "closed",
+        "affected_components": ["backend-api"],
+        "discovered_at": "2026-07-20T00:00:00Z",
+        "retested_at": "2026-08-03T00:00:00Z"
+      }
+    ],
+    "summary": {
+      "total_findings": 1,
+      "open_by_severity": {
+        "critical": 0,
+        "high": 0,
+        "medium": 0,
+        "low": 0,
+        "informational": 0
+      },
+      "closed_by_severity": {
+        "critical": 0,
+        "high": 1,
+        "medium": 0,
+        "low": 0,
+        "informational": 0
+      },
+      "critical_high_retest_completed": true
+    },
+    "report_artifact": {
+      "path": "__CHANGE_ME_FINAL_ASSESSMENT_PDF_PATH__",
+      "sha256": "__CHANGE_ME_64_HEX__",
+      "format": "pdf"
+    },
+    "completed": true,
+    "signed_evidence": {
+      "path": "__CHANGE_ME_SIGNED_ASSESSMENT_JSON_PATH__",
+      "sha256": "__CHANGE_ME_64_HEX__",
+      "signature_path": "__CHANGE_ME_ASSESSMENT_SIGNATURE_PATH__",
+      "signer_identity": "__CHANGE_ME_INDEPENDENT_ASSESSOR_SIGNER_IDENTITY__"
+    }
   }
 }

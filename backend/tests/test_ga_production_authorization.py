@@ -36,6 +36,7 @@ from scripts.verify_ga_production_authorization import (
     SECRET_VERIFICATION_SCHEMA_VERSION,
     SECRET_VERIFICATION_SIGNATURE_NAMESPACE,
     SECRET_WORKLOAD_COMPONENTS,
+    SECURITY_EVIDENCE_SCHEMA_VERSION,
     RESTORE_EXECUTION_SCHEMA_VERSION,
     RESTORE_EXECUTION_SIGNATURE_NAMESPACE,
     _approval_statement,
@@ -43,6 +44,12 @@ from scripts.verify_ga_production_authorization import (
     _verify_ssh_signature,
     evaluate,
     lint_authorization,
+)
+from scripts.ga_security_assessment import (
+    ASSESSMENT_REPORT_SCHEMA_VERSION,
+    ASSESSMENT_SIGNATURE_NAMESPACE,
+    FINDING_SEVERITIES,
+    REQUIRED_ASSESSMENT_SCOPE,
 )
 
 
@@ -1382,10 +1389,9 @@ def _document(tmp_path: Path, now: datetime) -> dict:
     )
     write_target_report("recovery", recovery_report)
 
-    assessment_path = tmp_path / "independent-assessment-report"
-    assessment_path.write_text(
-        "Independent DuckDock 2.0 assessment: no open critical or high findings.\n",
-        encoding="utf-8",
+    assessment_artifact_path = tmp_path / "independent-assessment-report.pdf"
+    assessment_artifact_path.write_bytes(
+        b"%PDF-1.7\nIndependent DuckDock 2.0 assessment\n%%EOF\n"
     )
     assessment_key = tmp_path / "independent_assessor_key"
     subprocess.run(
@@ -1393,10 +1399,49 @@ def _document(tmp_path: Path, now: datetime) -> dict:
         check=True,
     )
     assessor_identity = "assessor@independent-security.example"
-    assessor_allowed_signers = tmp_path / "independent_assessor_allowed_signers"
-    assessor_public_key = assessment_key.with_suffix(".pub").read_text(encoding="utf-8").strip()
-    assessor_allowed_signers.write_text(
-        f"{assessor_identity} {assessor_public_key}\n",
+    zero_findings = {severity: 0 for severity in FINDING_SEVERITIES}
+    raw_assessment = {
+        "schema_version": ASSESSMENT_REPORT_SCHEMA_VERSION,
+        "assessment_id": "ISL-DD-2026-08",
+        "provider": "Independent Security Lab",
+        "assessor_identity": assessor_identity,
+        "independence": {
+            "independent_of_implementation": True,
+            "conflict_check_completed": True,
+            "implementation_contributors": 0,
+        },
+        "target_environment": "customer-production",
+        "source_commit": commit,
+        "images": {
+            "backend": {"name": backend_image},
+            "frontend": {"name": frontend_image},
+        },
+        "contract_digest": "d" * 64,
+        "scope": list(REQUIRED_ASSESSMENT_SCOPE),
+        "methodologies": [
+            "penetration-test",
+            "manual-code-review",
+            "dependency-analysis",
+        ],
+        "started_at": (now - timedelta(days=14)).isoformat(),
+        "completed_at": (now - timedelta(days=1)).isoformat(),
+        "findings": [],
+        "summary": {
+            "total_findings": 0,
+            "open_by_severity": zero_findings,
+            "closed_by_severity": zero_findings,
+            "critical_high_retest_completed": True,
+        },
+        "report_artifact": {
+            "path": str(assessment_artifact_path),
+            "sha256": hashlib.sha256(assessment_artifact_path.read_bytes()).hexdigest(),
+            "format": "pdf",
+        },
+        "completed": True,
+    }
+    assessment_path = tmp_path / "independent-assessment.json"
+    assessment_path.write_text(
+        json.dumps(raw_assessment, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     subprocess.run(
@@ -1408,14 +1453,14 @@ def _document(tmp_path: Path, now: datetime) -> dict:
             "-f",
             str(assessment_key),
             "-n",
-            "duckdock-security-assessment",
+            ASSESSMENT_SIGNATURE_NAMESPACE,
             str(assessment_path),
         ],
         check=True,
     )
-    assessment_signature = assessment_path.with_suffix(".sig")
+    assessment_signature = Path(f"{assessment_path}.sig")
 
-    security_report = target_report("duckdock-ga-independent-security-evidence-v1")
+    security_report = target_report(SECURITY_EVIDENCE_SCHEMA_VERSION)
     security_report.update(
         {
             "independent": True,
@@ -1425,29 +1470,31 @@ def _document(tmp_path: Path, now: datetime) -> dict:
             "open_high": 0,
             "assessment": {
                 "assessment_id": "ISL-DD-2026-08",
-                "independence_attested": True,
-                "scope": [
-                    "application-and-api",
-                    "identity-and-access",
-                    "kubernetes-infrastructure",
-                    "supply-chain",
-                    "agent-security",
-                ],
-                "methodologies": ["penetration-test", "manual-code-review"],
+                "scope": list(REQUIRED_ASSESSMENT_SCOPE),
+                "methodologies": raw_assessment["methodologies"],
                 "started_at": (now - timedelta(days=14)).isoformat(),
                 "completed_at": (now - timedelta(days=1)).isoformat(),
             },
             "findings": {
-                "open_critical": 0,
-                "open_high": 0,
-                "retest_completed": True,
+                "total_findings": 0,
+                "open_by_severity": zero_findings,
+                "closed_by_severity": zero_findings,
+                "critical_high_retest_completed": True,
             },
-            "signed_report": {
-                "path": str(assessment_path),
-                "sha256": hashlib.sha256(assessment_path.read_bytes()).hexdigest(),
-                "signer_identity": assessor_identity,
-                "allowed_signers_path": str(assessor_allowed_signers),
-                "signature_path": str(assessment_signature),
+            "release_authority": {
+                "policy_id": "pending",
+                "policy_sha256": "0" * 64,
+                "allowed_signers_path": "pending",
+                "allowed_signers_sha256": "0" * 64,
+            },
+            "signed_assessment": {
+                **raw_assessment,
+                "signed_evidence": {
+                    "path": str(assessment_path),
+                    "sha256": hashlib.sha256(assessment_path.read_bytes()).hexdigest(),
+                    "signer_identity": assessor_identity,
+                    "signature_path": str(assessment_signature),
+                },
             },
         }
     )
@@ -1499,6 +1546,12 @@ def _add_signed_approvals(document: dict, tmp_path: Path, now: datetime) -> None
         public_lines.append(f"{identity} {public_key}")
         role_identities[role] = [identity]
         signing_keys[role] = key
+    assessor_identity = "assessor@independent-security.example"
+    assessor_key = tmp_path / "independent_assessor_key"
+    assessor_public_key = assessor_key.with_suffix(".pub").read_text(
+        encoding="utf-8"
+    ).strip()
+    public_lines.append(f"{assessor_identity} {assessor_public_key}")
     allowed_signers.write_text("\n".join(public_lines) + "\n", encoding="utf-8")
     policy = {
         "schema_version": APPROVAL_POLICY_SCHEMA_VERSION,
@@ -1507,6 +1560,9 @@ def _add_signed_approvals(document: dict, tmp_path: Path, now: datetime) -> None
         "allowed_signers_path": str(allowed_signers),
         "allowed_signers_sha256": hashlib.sha256(allowed_signers.read_bytes()).hexdigest(),
         "roles": role_identities,
+        "independent_security_assessors": {
+            "Independent Security Lab": [assessor_identity]
+        },
     }
     policy_path = tmp_path / "approval-policy.json"
     policy_path.write_text(json.dumps(policy, sort_keys=True) + "\n", encoding="utf-8")
@@ -1514,6 +1570,22 @@ def _add_signed_approvals(document: dict, tmp_path: Path, now: datetime) -> None
         "policy_id": policy["policy_id"],
         "sha256": hashlib.sha256(policy_path.read_bytes()).hexdigest(),
     }
+    security_evidence = document["controls"]["security_assessment"]["evidence"]
+    security_report_path = Path(security_evidence["path"])
+    security_report = json.loads(security_report_path.read_text(encoding="utf-8"))
+    security_report["release_authority"] = {
+        "policy_id": policy["policy_id"],
+        "policy_sha256": document["approval_policy"]["sha256"],
+        "allowed_signers_path": str(allowed_signers),
+        "allowed_signers_sha256": policy["allowed_signers_sha256"],
+    }
+    security_report_path.write_text(
+        json.dumps(security_report, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    security_evidence["sha256"] = hashlib.sha256(
+        security_report_path.read_bytes()
+    ).hexdigest()
     state_observed_at = now - timedelta(minutes=5)
     state_report_path = tmp_path / "state-services-failover.json"
     state_report = {
@@ -2410,9 +2482,10 @@ def test_tampered_assessor_report_fails_even_when_digest_claim_is_updated(
     evidence = document["controls"]["security_assessment"]["evidence"]
     evidence_path = Path(evidence["path"])
     report = json.loads(evidence_path.read_text(encoding="utf-8"))
-    signed_report_path = Path(report["signed_report"]["path"])
+    signed_evidence = report["signed_assessment"]["signed_evidence"]
+    signed_report_path = Path(signed_evidence["path"])
     signed_report_path.write_text("tampered after assessor signature\n", encoding="utf-8")
-    report["signed_report"]["sha256"] = hashlib.sha256(signed_report_path.read_bytes()).hexdigest()
+    signed_evidence["sha256"] = hashlib.sha256(signed_report_path.read_bytes()).hexdigest()
     evidence_path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
     evidence["sha256"] = hashlib.sha256(evidence_path.read_bytes()).hexdigest()
     _add_signed_approvals(document, tmp_path, now)
@@ -2427,6 +2500,138 @@ def test_tampered_assessor_report_fails_even_when_digest_claim_is_updated(
     assert result["status"] == "AWAITING_EXTERNAL_APPROVALS"
     signature_check = next(item for item in result["checks"] if item["key"] == "security_assessment_signature")
     assert signature_check["status"] == "BLOCK"
+
+
+def test_security_wrapper_cannot_override_signed_finding_projection(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    evidence = document["controls"]["security_assessment"]["evidence"]
+    evidence_path = Path(evidence["path"])
+    report = json.loads(evidence_path.read_text(encoding="utf-8"))
+    report["findings"]["open_by_severity"]["high"] = 1
+    evidence_path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+    evidence["sha256"] = hashlib.sha256(evidence_path.read_bytes()).hexdigest()
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    check = next(item for item in result["checks"] if item["key"] == "security_assessment")
+    assert check["status"] == "BLOCK"
+
+
+def test_security_severity_counts_reject_boolean_type_confusion(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    control = document["controls"]["security_assessment"]
+    evidence = control["evidence"]
+    evidence_path = Path(evidence["path"])
+    report = json.loads(evidence_path.read_text(encoding="utf-8"))
+    report["open_high"] = False
+    control["open_high"] = False
+    evidence_path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+    evidence["sha256"] = hashlib.sha256(evidence_path.read_bytes()).hexdigest()
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    check = next(item for item in result["checks"] if item["key"] == "security_assessment")
+    assert check["status"] == "BLOCK"
+
+
+def test_legitimately_signed_raw_assessment_cannot_hide_high_finding(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    evidence = document["controls"]["security_assessment"]["evidence"]
+    evidence_path = Path(evidence["path"])
+    wrapper = json.loads(evidence_path.read_text(encoding="utf-8"))
+    signed_evidence = wrapper["signed_assessment"]["signed_evidence"]
+    raw_path = Path(signed_evidence["path"])
+    raw = json.loads(raw_path.read_text(encoding="utf-8"))
+    raw["findings"].append(
+        {
+            "finding_id": "DD-SEC-HIDDEN-HIGH",
+            "severity": "high",
+            "status": "open",
+            "affected_components": ["backend-api"],
+            "discovered_at": (now - timedelta(days=2)).isoformat(),
+            "retested_at": None,
+        }
+    )
+    raw_path.write_text(json.dumps(raw, sort_keys=True) + "\n", encoding="utf-8")
+    signature_path = Path(signed_evidence["signature_path"])
+    signature_path.unlink()
+    subprocess.run(
+        [
+            "ssh-keygen",
+            "-q",
+            "-Y",
+            "sign",
+            "-f",
+            str(tmp_path / "independent_assessor_key"),
+            "-n",
+            ASSESSMENT_SIGNATURE_NAMESPACE,
+            str(raw_path),
+        ],
+        check=True,
+    )
+    wrapper["signed_assessment"] = {
+        **raw,
+        "signed_evidence": {
+            **signed_evidence,
+            "sha256": hashlib.sha256(raw_path.read_bytes()).hexdigest(),
+        },
+    }
+    evidence_path.write_text(json.dumps(wrapper, sort_keys=True) + "\n", encoding="utf-8")
+    evidence["sha256"] = hashlib.sha256(evidence_path.read_bytes()).hexdigest()
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    signature_check = next(
+        item for item in result["checks"] if item["key"] == "security_assessment_signature"
+    )
+    assessment_check = next(
+        item for item in result["checks"] if item["key"] == "security_assessment"
+    )
+    assert signature_check["status"] == "PASS"
+    assert assessment_check["status"] == "BLOCK"
+    assert "summary does not match raw findings" in assessment_check["detail"]
+
+
+def test_signed_assessment_pdf_digest_is_rechecked_by_final_gate(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _add_signed_approvals(document, tmp_path, now)
+    evidence_path = Path(document["controls"]["security_assessment"]["evidence"]["path"])
+    wrapper = json.loads(evidence_path.read_text(encoding="utf-8"))
+    artifact_path = Path(wrapper["signed_assessment"]["report_artifact"]["path"])
+    artifact_path.write_bytes(b"%PDF-1.7\ntampered after all signatures\n%%EOF\n")
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    check = next(item for item in result["checks"] if item["key"] == "security_assessment")
+    assert check["status"] == "BLOCK"
+    assert "artifact is missing or digest-mismatched" in check["detail"]
 
 
 def test_local_asgi_capacity_report_cannot_authorize_target(tmp_path: Path) -> None:
