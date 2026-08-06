@@ -17,6 +17,7 @@ import scripts.archive_ga_authorized_bundle as authorized_bundle_archiver
 import scripts.authorize_ga_publication as ga_publication_authorizer
 import scripts.close_ga_execution_campaign as execution_campaign_closer
 import scripts.collect_ga_release_provenance as release_provenance_collector
+import scripts.inspect_ga_execution_campaign as execution_campaign_inspector
 import scripts.prepare_ga_execution_campaign as execution_campaign_preparer
 import scripts.verify_ga_trust_topology as trust_topology_verifier
 from scripts.ga_approval_campaign import derive_campaign_id, validate_campaign_freeze
@@ -4297,6 +4298,18 @@ def test_execution_campaign_closure_reverifies_all_64_external_artifacts(
         path = Path(reference["path"])
         assert reference["sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
 
+    closed_progress = execution_campaign_inspector.inspect(
+        campaign_path,
+        assembly_request_path,
+        now=now + timedelta(minutes=1),
+    )
+    assert closed_progress["status"] == "CAMPAIGN_CLOSED"
+    assert closed_progress["closure"]["state"] == "CLOSED"
+    assert closed_progress["closure"]["closure_sha256"] == hashlib.sha256(
+        persisted_closure_path.read_bytes()
+    ).hexdigest()
+    assert closed_progress["next_action"]["code"] == "freeze_preapproval_campaign"
+
     preapproval_authorization = Path(plan["artifacts"]["preapproval_authorization"])
     approval_policy = tmp_path / "approval-policy.json"
     closure_validation = execution_campaign_closer.verify_persisted_closure(
@@ -4493,6 +4506,187 @@ def test_execution_campaign_closure_reverifies_all_64_external_artifacts(
         == 3
     )
     assert persisted_closure_path.read_bytes() == original_closure
+
+
+def test_execution_campaign_progress_is_incremental_non_authorizing_and_exact(
+    tmp_path: Path,
+) -> None:
+    if shutil.which("ssh-keygen") is None:
+        pytest.skip("ssh-keygen is required for campaign progress fixtures")
+    now = datetime.now(timezone.utc)
+    _, request_path, topology_receipt_path, evidence_root = (
+        _execution_campaign_fixture(tmp_path, now)
+    )
+    request = json.loads(request_path.read_text(encoding="utf-8"))
+    request["execution"]["window_starts_at"] = (now - timedelta(minutes=5)).isoformat()
+    request["execution"]["window_expires_at"] = (now + timedelta(days=1)).isoformat()
+    request_path.write_text(json.dumps(request, sort_keys=True) + "\n", encoding="utf-8")
+    campaign_path = tmp_path / "progress-execution-campaign.json"
+    assembly_request_path = tmp_path / "progress-preapproval-request.json"
+    plan, assembly_request = execution_campaign_preparer.prepare(
+        request_path,
+        topology_receipt_path,
+        assembly_request_path,
+        now=now - timedelta(minutes=10),
+    )
+    assembly_request_path.write_text(
+        json.dumps(assembly_request, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    campaign_path.write_text(
+        json.dumps(plan, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    evidence_root.mkdir()
+
+    empty = execution_campaign_inspector.inspect(
+        campaign_path,
+        assembly_request_path,
+        now=now,
+    )
+    assert empty["status"] == "EXTERNAL_EVIDENCE_IN_PROGRESS"
+    assert empty["authorization_boundary"] == (
+        "does_not_authorize_GA_or_target_mutation_or_evidence_PASS"
+    )
+    assert empty["counts"] == {
+        "planned_external_artifacts": 64,
+        "present_valid_artifacts": 0,
+        "missing_artifacts": 64,
+        "invalid_artifacts": 0,
+        "present_size_bytes": 0,
+        "external_phases": 11,
+        "ready_external_phases": 0,
+    }
+    assert empty["next_action"]["phase_id"] == "release_provenance"
+    assert (
+        execution_campaign_inspector.main(
+            [
+                "--campaign",
+                str(campaign_path),
+                "--assembly-request",
+                str(assembly_request_path),
+                "--observed-at",
+                now.isoformat(),
+                "--require-ready-for-closure",
+            ]
+        )
+        == 2
+    )
+
+    real_evidence_root = evidence_root.with_name(f"{evidence_root.name}-real")
+    evidence_root.rename(real_evidence_root)
+    evidence_root.symlink_to(real_evidence_root, target_is_directory=True)
+    with pytest.raises(ValueError, match="evidence_root must not be a symbolic link"):
+        execution_campaign_inspector.inspect(
+            campaign_path,
+            assembly_request_path,
+            now=now,
+        )
+    evidence_root.unlink()
+    real_evidence_root.rename(evidence_root)
+
+    unplanned = tmp_path / "unplanned-progress-reference.json"
+    unplanned.write_text('{"unplanned":true}\n', encoding="utf-8")
+    invalid_path = Path(plan["artifacts"]["release_tag_verification"])
+    invalid_path.write_text(
+        json.dumps(
+            {
+                "artifact": {
+                    "path": str(unplanned),
+                    "sha256": hashlib.sha256(unplanned.read_bytes()).hexdigest(),
+                }
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    invalid = execution_campaign_inspector.inspect(
+        campaign_path,
+        assembly_request_path,
+        now=now,
+    )
+    assert invalid["status"] == "INVALID_EXTERNAL_EVIDENCE"
+    assert invalid["invalid_artifacts"] == ["release_tag_verification"]
+    assert any(
+        problem.startswith("unplanned_reference:")
+        for problem in invalid["artifact_progress"]["release_tag_verification"]["problems"]
+    )
+
+    invalid_path.unlink()
+    invalid_path.symlink_to(unplanned)
+    symlinked = execution_campaign_inspector.inspect(
+        campaign_path,
+        assembly_request_path,
+        now=now,
+    )
+    assert symlinked["artifact_progress"]["release_tag_verification"]["problems"] == [
+        "symbolic_link_forbidden"
+    ]
+    with pytest.raises(ValueError, match="forbidden symbolic link"):
+        execution_campaign_closer.close(
+            campaign_path,
+            assembly_request_path,
+            now=now,
+        )
+    invalid_path.unlink()
+
+    _materialize_campaign_fixture(tmp_path, plan)
+    ready = execution_campaign_inspector.inspect(
+        campaign_path,
+        assembly_request_path,
+        now=now,
+    )
+    assert ready["status"] == "READY_FOR_CLOSURE_ATTEMPT"
+    assert ready["counts"]["present_valid_artifacts"] == 64
+    assert ready["counts"]["missing_artifacts"] == 0
+    assert ready["counts"]["invalid_artifacts"] == 0
+    assert ready["counts"]["ready_external_phases"] == 11
+    assert ready["closure"]["state"] == "MISSING"
+    assert ready["next_action"] == {
+        "code": "run_fail_closed_campaign_closure",
+        "phase_id": "preapproval_assembly",
+        "tool": "close_ga_execution_campaign.py",
+        "arguments": {
+            "campaign": str(campaign_path),
+            "assembly_request": str(assembly_request_path),
+        },
+    }
+    prewindow = execution_campaign_inspector.inspect(
+        campaign_path,
+        assembly_request_path,
+        now=now - timedelta(minutes=6),
+    )
+    assert prewindow["status"] == "WAITING_FOR_EXECUTION_WINDOW"
+    assert prewindow["next_action"]["code"] == "wait_for_execution_window"
+    expired = execution_campaign_inspector.inspect(
+        campaign_path,
+        assembly_request_path,
+        now=now + timedelta(days=2),
+    )
+    assert expired["status"] == "EXPIRED_INCOMPLETE"
+    assert expired["next_action"]["code"] == (
+        "abandon_campaign_and_prepare_fresh_campaign"
+    )
+
+    checkpoint = tmp_path / "progress-checkpoint.json"
+    assert (
+        execution_campaign_inspector.main(
+            [
+                "--campaign",
+                str(campaign_path),
+                "--assembly-request",
+                str(assembly_request_path),
+                "--observed-at",
+                now.isoformat(),
+                "--require-ready-for-closure",
+                "--output",
+                str(checkpoint),
+            ]
+        )
+        == 0
+    )
+    assert json.loads(checkpoint.read_text(encoding="utf-8")) == ready
 
 
 def test_ga_publication_gate_rejects_stale_or_mismatched_context(

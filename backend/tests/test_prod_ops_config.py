@@ -199,6 +199,7 @@ def test_production_image_context_excludes_test_and_local_validation_artifacts()
         "scripts/assemble_ga_preapproval_authorization.py",
         "scripts/verify_ga_trust_topology.py",
         "scripts/prepare_ga_execution_campaign.py",
+        "scripts/inspect_ga_execution_campaign.py",
         "scripts/close_ga_execution_campaign.py",
         "scripts/ga_approval_campaign.py",
         "scripts/freeze_ga_approval_campaign.py",
@@ -263,6 +264,7 @@ def test_final_tag_reruns_full_gate_and_publishes_attested_images():
 def test_ga_approval_tools_reverify_before_signing_and_before_final_output():
     trust_topology = _read("backend/scripts/verify_ga_trust_topology.py")
     execution_campaign = _read("backend/scripts/prepare_ga_execution_campaign.py")
+    execution_progress = _read("backend/scripts/inspect_ga_execution_campaign.py")
     execution_closure = _read("backend/scripts/close_ga_execution_campaign.py")
     assembler = _read("backend/scripts/assemble_ga_preapproval_authorization.py")
     freezer = _read("backend/scripts/freeze_ga_approval_campaign.py")
@@ -280,6 +282,12 @@ def test_ga_approval_tools_reverify_before_signing_and_before_final_output():
     assert "PLANNED_EXTERNAL_EXECUTION" in execution_campaign
     assert "does_not_authorize_GA_or_target_mutation" in execution_campaign
     assert "persisted execution campaign did not independently re-verify" in execution_campaign
+    assert "does_not_authorize_GA_or_target_mutation_or_evidence_PASS" in execution_progress
+    assert "unplanned_reference" in execution_progress
+    assert "symbolic_link_forbidden" in execution_progress
+    assert "READY_FOR_CLOSURE_ATTEMPT" in execution_progress
+    assert "EXPIRED_INCOMPLETE" in execution_progress
+    assert "verify_persisted_closure" in execution_progress
     assert "duckdock-ga-execution-campaign-closure-v1" in execution_closure
     assert "campaign evidence closure is not exact" in execution_closure
     assert "execution campaign can close only inside its bound execution window" in execution_closure
@@ -328,6 +336,7 @@ def test_ga_approval_tools_reverify_before_signing_and_before_final_output():
     workflow = _read(".github/workflows/ci.yml")
     assert "python3 backend/scripts/verify_ga_trust_topology.py --help" in workflow
     assert "python3 backend/scripts/prepare_ga_execution_campaign.py --help" in workflow
+    assert "python3 backend/scripts/inspect_ga_execution_campaign.py --help" in workflow
     assert "python3 backend/scripts/close_ga_execution_campaign.py --help" in workflow
     assert "python3 backend/scripts/assemble_ga_preapproval_authorization.py --help" in workflow
     assert "python3 backend/scripts/freeze_ga_approval_campaign.py --help" in workflow

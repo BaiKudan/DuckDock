@@ -202,13 +202,15 @@ def _validate_execution(
     evidence_root = Path(raw_root).expanduser()
     if not evidence_root.is_absolute():
         raise ValueError("execution evidence_root must be absolute")
+    if evidence_root.is_symlink():
+        raise ValueError("execution evidence_root must not be a symbolic link")
     evidence_root = evidence_root.resolve()
     if evidence_root in {Path("/"), Path.home().resolve()} or len(evidence_root.parts) < 4:
         raise ValueError("execution evidence_root is too broad")
     if require_fresh_evidence_root:
         if evidence_root.exists():
             raise ValueError("execution evidence_root already exists; campaigns require a fresh directory")
-    elif evidence_root.is_symlink() or not evidence_root.is_dir():
+    elif not evidence_root.is_dir():
         raise ValueError("execution evidence_root must be the existing non-symlink campaign directory")
     backup_reference = execution.get("backup_allowed_signers")
     if not isinstance(backup_reference, dict) or set(backup_reference) != {"path", "sha256"}:

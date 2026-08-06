@@ -138,8 +138,12 @@ def _resolved_recorded_path(raw_path: Any, *, label: str) -> Path:
     if handled:
         if overridden is None:
             raise ValueError(f"{label} has no verified portable file mapping")
-        return overridden.resolve()
-    return Path(raw_path).expanduser().resolve()
+        candidate = overridden
+    else:
+        candidate = Path(raw_path).expanduser()
+    if candidate.is_symlink():
+        raise ValueError(f"{label} is a forbidden symbolic link: {candidate}")
+    return candidate.resolve()
 
 
 def _exact_roots(paths: set[Path]) -> list[AllowedRoot]:
@@ -361,7 +365,7 @@ def close(
     if not isinstance(artifacts_value, dict):
         raise ValueError("execution campaign artifacts must be an object")
     artifacts = {
-        str(name): Path(str(path)).expanduser().resolve()
+        str(name): _resolved_recorded_path(path, label=f"campaign artifact {name}")
         for name, path in artifacts_value.items()
     }
     if CLOSURE_OUTPUT_KEYS - set(artifacts):

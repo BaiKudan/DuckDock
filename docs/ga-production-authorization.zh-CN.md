@@ -140,6 +140,24 @@ python backend/scripts/prepare_ga_execution_campaign.py \
    外部负责人仍须逐步审阅并执行 acknowledgement。工具同时生成后续 assembler 可直接
    使用的预审批 request，避免采集结束后再次手抄 release/target 和九份 evidence 路径。
 
+   外部执行期间不要等到第 64 份产物才发现早期错误。可随时运行非授权增量检查器：
+
+```bash
+python backend/scripts/inspect_ga_execution_campaign.py \
+  --campaign /release-authority/duckdock-2.0.0-execution-campaign.json \
+  --assembly-request /release-authority/duckdock-2.0.0-preapproval-request.json
+```
+
+   它会独立重验 campaign/request/topology/九份 policy/trust store，按原始 lexical 计划路径
+   检查 64 份外部产物的 missing/regular-file/symlink/size/JSON/private-key marker，并验证
+   所有已出现 `path+sha256`、manifest、allowed-signers 和 signature 引用只能指向计划产物
+   或内容寻址的发布机构输入。输出的 `duckdock-ga-execution-campaign-progress-v1` 按 phase
+   区分 `PENDING`、`PARTIAL`、`INVALID`、`BLOCKED_BY_DEPENDENCIES` 与
+   `ARTIFACTS_READY`，给出下一 phase 的工具、policy role、acknowledgement 和缺失产物。
+   `ARTIFACTS_READY` 只表示当前文件及引用形状可进入 closure 尝试，明确不表示证据 PASS，
+   也不授权执行目标 mutation。需要保存 checkpoint 时使用新的、不可覆盖且位于 evidence
+   root 之外的 `--output` 路径。
+
 4. 运行 `python3 scripts/verify-production-baseline.py`，保留 JSON；在目标
    Kubernetes overlay 中替换镜像、域名以及宽泛 egress，并做 server dry-run。
    然后用独立、短期、专用管理员 token 通过真实目标 HTTPS 仅调用只读 readiness
@@ -710,7 +728,19 @@ shasum -a 256 /release-authority/duckdock-ga-approval-policy.json
 
 15. 九类采集器和外部评估输出齐备后，不要再手工把报告字段、时间和摘要复制到完整
     authorization JSON，也不要在正式 campaign 中直接调用通用 assembler。使用计划阶段
-    自动生成的 campaign 和 preapproval request 运行闭环工具：
+    自动生成的 campaign 和 preapproval request。先要求增量检查器确认可尝试 closure：
+
+```bash
+python backend/scripts/inspect_ga_execution_campaign.py \
+  --campaign /release-authority/duckdock-2.0.0-execution-campaign.json \
+  --assembly-request /release-authority/duckdock-2.0.0-preapproval-request.json \
+  --require-ready-for-closure \
+  --output /release-authority/checkpoints/duckdock-2.0.0-ready-for-closure.json
+```
+
+`--require-ready-for-closure` 在未齐备时退出 `2`；非法/过期 evidence 即使不带该参数也退出
+`2`，campaign/拓扑协议错误退出 `3`。checkpoint 不进入 evidence root，也不能替代下述
+闭环工具。只有状态 `READY_FOR_CLOSURE_ATTEMPT` 才运行：
 
 ```bash
 python backend/scripts/close_ga_execution_campaign.py \

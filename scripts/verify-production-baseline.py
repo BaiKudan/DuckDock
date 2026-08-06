@@ -173,6 +173,7 @@ def verify(env_file: Path) -> dict[str, Any]:
     trust_topology_verifier = REPO_ROOT / "backend/scripts/verify_ga_trust_topology.py"
     trust_topology_manifest = REPO_ROOT / "ops/ga/trust-topology-manifest.example.json"
     execution_campaign_preparer = REPO_ROOT / "backend/scripts/prepare_ga_execution_campaign.py"
+    execution_campaign_inspector = REPO_ROOT / "backend/scripts/inspect_ga_execution_campaign.py"
     execution_campaign_closer = REPO_ROOT / "backend/scripts/close_ga_execution_campaign.py"
     execution_campaign_request = REPO_ROOT / "ops/ga/execution-campaign-request.example.json"
     approval_freezer = REPO_ROOT / "backend/scripts/freeze_ga_approval_campaign.py"
@@ -197,6 +198,11 @@ def verify(env_file: Path) -> dict[str, Any]:
     execution_campaign_text = (
         execution_campaign_preparer.read_text(encoding="utf-8")
         if execution_campaign_preparer.is_file()
+        else ""
+    )
+    execution_progress_text = (
+        execution_campaign_inspector.read_text(encoding="utf-8")
+        if execution_campaign_inspector.is_file()
         else ""
     )
     execution_closure_text = (
@@ -265,6 +271,18 @@ def verify(env_file: Path) -> dict[str, Any]:
         and "persisted execution campaign did not independently re-verify" in execution_campaign_text,
         "content-addressed release/target/topology plan with fresh evidence root and pending external phases",
         "operators share one dependency graph and generated preapproval request without claiming evidence PASS",
+    )
+    add(
+        "ga_execution_campaign_progress",
+        "does_not_authorize_GA_or_target_mutation_or_evidence_PASS"
+        in execution_progress_text
+        and "unplanned_reference" in execution_progress_text
+        and "symbolic_link_forbidden" in execution_progress_text
+        and "READY_FOR_CLOSURE_ATTEMPT" in execution_progress_text
+        and "EXPIRED_INCOMPLETE" in execution_progress_text
+        and "verify_persisted_closure" in execution_progress_text,
+        "immutable non-authorizing checkpoints detect partial/missing/invalid evidence and exact next phase",
+        "external execution mistakes are visible before the final 64-artifact closure attempt",
     )
     add(
         "ga_preapproval_assembly",

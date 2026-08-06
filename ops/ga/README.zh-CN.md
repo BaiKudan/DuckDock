@@ -125,6 +125,13 @@ manifest，以及从独立渠道取得的 `--digest` 或 `--expected-sha256`。m
 `GA_AUTHORIZED_ARCHIVE_VERIFIED`。恢复 evidence 的 backup trust store 现在也必须以
 `allowed_signers_sha256` 内容寻址。
 
+真实 execution campaign 进行中使用 `backend/scripts/inspect_ga_execution_campaign.py`
+获取非授权的增量 checkpoint。它重验 campaign/topology，逐项检查 64 份计划产物、计划外
+引用、摘要、symlink、大小、JSON 和私钥标记，并按依赖给出下一 phase；checkpoint 必须
+放在 exact evidence root 外。`ARTIFACTS_READY`/`READY_FOR_CLOSURE_ATTEMPT` 不是 PASS，
+只表示可以调用 `close_ga_execution_campaign.py` 让完整 assembler/evaluator 决定结果。
+正式 closure 前应带 `--require-ready-for-closure`，缺件返回 2，协议错误返回 3。
+
 正式公开 2.0.0 还必须经过独立 publication gate。发布机构把真实授权 archive 与 detached
 manifest 作为 `v2.0.0` draft Release 的初始两份资产，从独立渠道取得 archive digest，
 然后运行受 `ga-production-publication` Environment required reviewers 保护的
