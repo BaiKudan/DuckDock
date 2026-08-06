@@ -47,6 +47,13 @@ try:
         NETWORK_SIGNATURE_NAMESPACE,
         validate_network_probe_envelope,
     )
+    from scripts.ga_release_provenance import (
+        BUILD_SIGNATURE_NAMESPACE as RELEASE_BUILD_SIGNATURE_NAMESPACE,
+        PROVENANCE_EVIDENCE_SCHEMA_VERSION as RELEASE_PROVENANCE_EVIDENCE_SCHEMA_VERSION,
+        PROVENANCE_POLICY_SCHEMA_VERSION as RELEASE_PROVENANCE_POLICY_SCHEMA_VERSION,
+        REQUIRED_ARTIFACTS as RELEASE_PROVENANCE_REQUIRED_ARTIFACTS,
+        validate_build_report as validate_release_build_report,
+    )
     from scripts.ga_state_services_evidence import (
         OPERATIONS_SIGNATURE_NAMESPACE as STATE_OPERATIONS_SIGNATURE_NAMESPACE,
         PROVIDER_SIGNATURE_NAMESPACE as STATE_PROVIDER_SIGNATURE_NAMESPACE,
@@ -86,6 +93,13 @@ except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
         NETWORK_POLICY_SCHEMA_VERSION,
         NETWORK_SIGNATURE_NAMESPACE,
         validate_network_probe_envelope,
+    )
+    from ga_release_provenance import (
+        BUILD_SIGNATURE_NAMESPACE as RELEASE_BUILD_SIGNATURE_NAMESPACE,
+        PROVENANCE_EVIDENCE_SCHEMA_VERSION as RELEASE_PROVENANCE_EVIDENCE_SCHEMA_VERSION,
+        PROVENANCE_POLICY_SCHEMA_VERSION as RELEASE_PROVENANCE_POLICY_SCHEMA_VERSION,
+        REQUIRED_ARTIFACTS as RELEASE_PROVENANCE_REQUIRED_ARTIFACTS,
+        validate_build_report as validate_release_build_report,
     )
     from ga_state_services_evidence import (
         OPERATIONS_SIGNATURE_NAMESPACE as STATE_OPERATIONS_SIGNATURE_NAMESPACE,
@@ -153,6 +167,7 @@ FOUNDATION_CHECK_KEYS = {
     "backend_image",
     "frontend_image",
     "contract_digest",
+    "release_provenance",
     "target_identity",
     "approval_policy",
     "approval_trust_store",
@@ -1155,6 +1170,124 @@ def _state_services_policy_context(
         provider_identities,
         verifier_identities,
         approved_providers,
+        detail,
+    )
+
+
+def _release_provenance_policy_context(
+    reference: Any,
+    *,
+    authorization_path: Path,
+) -> tuple[
+    bool,
+    Path | None,
+    set[str],
+    set[str],
+    set[str],
+    set[str],
+    dict[str, set[str]] | None,
+    str,
+]:
+    if not isinstance(reference, dict):
+        return False, None, set(), set(), set(), set(), None, "missing provenance policy"
+    policy_path = _resolve_file(reference.get("path"), authorization_path)
+    trust_path_from_reference = _resolve_file(
+        reference.get("allowed_signers_path"), authorization_path
+    )
+    policy: dict[str, Any] = {}
+    if policy_path is not None and policy_path.is_file():
+        try:
+            loaded = json.loads(policy_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            loaded = None
+        if isinstance(loaded, dict):
+            policy = loaded
+
+    def exact_values(value: Any) -> set[str]:
+        if not (
+            isinstance(value, list)
+            and value
+            and all(_meaningful_string(item) for item in value)
+            and len(value) == len(set(value))
+        ):
+            return set()
+        return {str(item) for item in value}
+
+    expected_policy_keys = {
+        "schema_version",
+        "policy_id",
+        "organization",
+        "allowed_signers_path",
+        "allowed_signers_sha256",
+        "builder_identities",
+        "approved_source_repositories",
+        "approved_builder_ids",
+        "approved_workflow_refs",
+        "required_artifacts",
+    }
+    expected_reference_keys = {
+        "path",
+        "sha256",
+        "policy_id",
+        "allowed_signers_path",
+        "allowed_signers_sha256",
+    }
+    identities = exact_values(policy.get("builder_identities"))
+    repositories = exact_values(policy.get("approved_source_repositories"))
+    builder_ids = exact_values(policy.get("approved_builder_ids"))
+    workflows = exact_values(policy.get("approved_workflow_refs"))
+    policy_digest = (
+        _sha256(policy_path) if policy_path is not None and policy_path.is_file() else "missing"
+    )
+    policy_trust_path = (
+        _resolve_file(policy.get("allowed_signers_path"), policy_path)
+        if policy_path is not None
+        else None
+    )
+    trust_digest = (
+        _sha256(policy_trust_path)
+        if policy_trust_path is not None and policy_trust_path.is_file()
+        else "missing"
+    )
+    bindings: dict[str, set[str]] | None = None
+    signer_detail = "missing trust store"
+    if policy_trust_path is not None and policy_trust_path.is_file():
+        bindings, signer_detail = _allowed_signer_bindings(policy_trust_path)
+    valid = (
+        set(reference) == expected_reference_keys
+        and bool(DIGEST_RE.fullmatch(str(reference.get("sha256", ""))))
+        and policy_digest == reference.get("sha256")
+        and set(policy) == expected_policy_keys
+        and policy.get("schema_version") == RELEASE_PROVENANCE_POLICY_SCHEMA_VERSION
+        and _meaningful_string(policy.get("policy_id"))
+        and policy.get("policy_id") == reference.get("policy_id")
+        and _meaningful_string(policy.get("organization"))
+        and bool(identities)
+        and bool(repositories)
+        and bool(builder_ids)
+        and bool(workflows)
+        and policy.get("required_artifacts")
+        == list(RELEASE_PROVENANCE_REQUIRED_ARTIFACTS)
+        and policy_trust_path is not None
+        and trust_path_from_reference == policy_trust_path
+        and bool(DIGEST_RE.fullmatch(str(reference.get("allowed_signers_sha256", ""))))
+        and trust_digest == reference.get("allowed_signers_sha256")
+        and trust_digest == policy.get("allowed_signers_sha256")
+        and bindings is not None
+        and set(bindings) == identities
+    )
+    detail = (
+        f"policy={policy_path or 'missing'}, digest={policy_digest}, "
+        f"trust={policy_trust_path or 'missing'}, trust_digest={trust_digest}, {signer_detail}"
+    )
+    return (
+        valid,
+        policy_trust_path,
+        identities,
+        repositories,
+        builder_ids,
+        workflows,
+        bindings,
         detail,
     )
 
@@ -2906,7 +3039,179 @@ def evaluate(
         ),
     )
 
-    evidence_times: list[datetime] = []
+    provenance_reference = release.get("provenance")
+    provenance_path = (
+        _resolve_file(provenance_reference.get("path"), authorization_path)
+        if isinstance(provenance_reference, dict)
+        else None
+    )
+    provenance_expected_digest = (
+        str(provenance_reference.get("sha256", ""))
+        if isinstance(provenance_reference, dict)
+        else ""
+    )
+    provenance_actual_digest = (
+        _sha256(provenance_path)
+        if provenance_path is not None and provenance_path.is_file()
+        else "missing"
+    )
+    provenance_report: dict[str, Any] = {}
+    if provenance_path is not None and provenance_path.is_file():
+        try:
+            loaded_provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            loaded_provenance = None
+        if isinstance(loaded_provenance, dict):
+            provenance_report = loaded_provenance
+    provenance_observed_at = _parse_time(
+        provenance_reference.get("observed_at")
+        if isinstance(provenance_reference, dict)
+        else None
+    )
+    provenance_reference_ok = (
+        isinstance(provenance_reference, dict)
+        and set(provenance_reference) == {"path", "sha256", "observed_at"}
+        and bool(DIGEST_RE.fullmatch(provenance_expected_digest))
+        and provenance_actual_digest == provenance_expected_digest
+        and provenance_observed_at is not None
+        and timedelta(0) <= current - provenance_observed_at <= timedelta(days=30)
+        and _parse_time(provenance_report.get("observed_at")) == provenance_observed_at
+    )
+    (
+        provenance_policy_ok,
+        provenance_trust_store,
+        build_identities,
+        approved_source_repositories,
+        approved_builder_ids,
+        approved_workflow_refs,
+        build_signer_bindings,
+        provenance_policy_detail,
+    ) = _release_provenance_policy_context(
+        provenance_report.get("provenance_policy"),
+        authorization_path=authorization_path,
+    )
+    signed_build = provenance_report.get("signed_build_report")
+    build_signature_ok, raw_build_report, build_signature_detail = (
+        _verified_embedded_receipt(
+            signed_build,
+            authorization_path=authorization_path,
+            allowed_signers=provenance_trust_store if provenance_policy_ok else None,
+            allowed_identities=build_identities,
+            namespace=RELEASE_BUILD_SIGNATURE_NAMESPACE,
+        )
+    )
+    raw_build_path = (
+        _resolve_file(signed_build.get("signed_evidence", {}).get("path"), authorization_path)
+        if isinstance(signed_build, dict)
+        and isinstance(signed_build.get("signed_evidence"), dict)
+        else None
+    )
+    build_derived: dict[str, Any] = {}
+    build_validation_detail = "signed build report unavailable"
+    try:
+        if not (provenance_policy_ok and build_signature_ok and raw_build_path is not None):
+            raise ValueError(build_validation_detail)
+        source_repository = str(raw_build_report.get("source_repository", ""))
+        if source_repository not in approved_source_repositories:
+            raise ValueError("unapproved source repository")
+        build_derived = validate_release_build_report(
+            raw_build_report,
+            report_path=raw_build_path,
+            git_commit=commit,
+            backend_image=str(release.get("backend_image", "")),
+            frontend_image=str(release.get("frontend_image", "")),
+            contract_digest=contract_digest,
+            source_repository=source_repository,
+            approved_builder_ids=approved_builder_ids,
+            approved_workflow_refs=approved_workflow_refs,
+            now=current,
+        )
+        if current - build_derived["built_at"] > timedelta(days=30):
+            raise ValueError("signed release build is older than 30 days")
+    except (TypeError, ValueError) as exc:
+        build_validation_detail = str(exc)
+    else:
+        build_validation_detail = "tag, source, SLSA, SPDX and vulnerability reports validated"
+    build_signer_identity = (
+        signed_build.get("signed_evidence", {}).get("signer_identity")
+        if isinstance(signed_build, dict)
+        and isinstance(signed_build.get("signed_evidence"), dict)
+        else None
+    )
+    approval_key_material = set().union(*signer_bindings.values()) if signer_bindings else set()
+    build_key_material = (
+        set().union(*build_signer_bindings.values()) if build_signer_bindings else set()
+    )
+    build_roles_separated = (
+        build_identities.isdisjoint(configured_identities)
+        and approval_key_material.isdisjoint(build_key_material)
+    )
+    expected_provenance_keys = {
+        "schema_version",
+        "release_version",
+        "git_ref",
+        "git_commit",
+        "contract_digest",
+        "observed_at",
+        "built_at",
+        "source_repository",
+        "source_tree_sha256",
+        "source_archive",
+        "builder",
+        "artifacts",
+        "provenance_policy",
+        "signed_build_report",
+    }
+    provenance_projection_ok = (
+        bool(build_derived)
+        and set(provenance_report) == expected_provenance_keys
+        and provenance_report.get("schema_version")
+        == RELEASE_PROVENANCE_EVIDENCE_SCHEMA_VERSION
+        and provenance_report.get("release_version") == version
+        and provenance_report.get("git_ref") == build_derived.get("git_ref")
+        and provenance_report.get("git_commit") == commit
+        and provenance_report.get("contract_digest") == contract_digest
+        and provenance_report.get("built_at")
+        == raw_build_report.get("build_finished_at")
+        and provenance_report.get("source_repository")
+        == build_derived.get("source_repository")
+        and provenance_report.get("source_tree_sha256")
+        == build_derived.get("source_tree_sha256")
+        and provenance_report.get("source_archive") == build_derived.get("source_archive")
+        and provenance_report.get("builder") == build_derived.get("builder")
+        and provenance_report.get("artifacts") == build_derived.get("artifacts")
+        and not _contains_secret_material_key(provenance_report)
+    )
+    release_provenance_ok = (
+        provenance_reference_ok
+        and provenance_policy_ok
+        and build_signature_ok
+        and build_signer_identity in build_identities
+        and build_roles_separated
+        and provenance_projection_ok
+    )
+    gate.add(
+        "release_provenance",
+        owner="Security",
+        passed=release_provenance_ok,
+        observed=(
+            f"evidence={provenance_path or 'missing'}@{provenance_actual_digest}, "
+            f"builder_signer={build_signer_identity or 'missing'}, "
+            f"roles_separated={build_roles_separated}, validation={build_validation_detail}"
+        ),
+        expected=(
+            "fresh content-addressed release evidence; approved distinct builder signature; "
+            "signed v2.0.0 tag/source; exact image SLSA + SPDX SBOM + zero open Critical/High"
+        ),
+        detail=(
+            f"policy=({provenance_policy_detail}); signature=({build_signature_detail}); "
+            "the GA release digest includes this evidence reference, so later replacement invalidates approvals"
+        ),
+    )
+
+    evidence_times: list[datetime] = (
+        [provenance_observed_at] if provenance_observed_at is not None else []
+    )
     evidence_owners = {
         "application_readiness": "Architecture",
         "tls": "Security",

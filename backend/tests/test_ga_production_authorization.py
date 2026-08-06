@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import shutil
@@ -9,6 +10,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+
+import scripts.collect_ga_release_provenance as release_provenance_collector
 
 from scripts.verify_ga_production_authorization import (
     ALERTING_POLICY_SCHEMA_VERSION,
@@ -77,6 +80,18 @@ from scripts.ga_network_evidence import (
     NETWORK_RAW_SCHEMA_VERSION,
     NETWORK_SIGNATURE_NAMESPACE,
 )
+from scripts.ga_release_provenance import (
+    BUILD_REPORT_SCHEMA_VERSION,
+    BUILD_SIGNATURE_NAMESPACE,
+    PROVENANCE_EVIDENCE_SCHEMA_VERSION,
+    PROVENANCE_POLICY_SCHEMA_VERSION,
+    SLSA_PREDICATE_TYPE,
+    SLSA_STATEMENT_TYPE,
+    SPDX_PREDICATE_TYPE,
+    SPDX_VERSION,
+    VULNERABILITY_REPORT_SCHEMA_VERSION,
+    validate_build_report,
+)
 from scripts.ga_state_services_evidence import (
     PROVIDER_RECEIPT_SCHEMA_VERSION as STATE_PROVIDER_RECEIPT_SCHEMA_VERSION,
     PROVIDER_SIGNATURE_NAMESPACE as STATE_PROVIDER_SIGNATURE_NAMESPACE,
@@ -96,6 +111,353 @@ def _evidence(tmp_path: Path, name: str, observed_at: datetime) -> dict[str, str
         "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
         "observed_at": observed_at.isoformat(),
     }
+
+
+def _add_release_provenance(
+    release: dict,
+    tmp_path: Path,
+    now: datetime,
+) -> None:
+    build_identity = "release-builder@example.com"
+    builder_id = "https://github.com/actions/runner/github-hosted"
+    workflow_ref = "BaiKudan/DuckDock/.github/workflows/ci.yml@refs/tags/v2.0.0"
+    workflow_run_id = "1234567890"
+    build_invocation_id = "buildkit-invocation-1234567890"
+    source_repository = "https://github.com/BaiKudan/DuckDock"
+    started_at = now - timedelta(minutes=20)
+    finished_at = now - timedelta(minutes=15)
+    build_key = tmp_path / "release_builder_key"
+    subprocess.run(
+        ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(build_key)],
+        check=True,
+    )
+    allowed_signers = tmp_path / "release_builder_allowed_signers"
+    allowed_signers.write_text(
+        f"{build_identity} "
+        f"{build_key.with_suffix('.pub').read_text(encoding='utf-8').strip()}\n",
+        encoding="utf-8",
+    )
+    policy = {
+        "schema_version": PROVENANCE_POLICY_SCHEMA_VERSION,
+        "policy_id": "duckdock-release-build-authority",
+        "organization": "DuckDock Test Build Authority",
+        "allowed_signers_path": str(allowed_signers),
+        "allowed_signers_sha256": hashlib.sha256(allowed_signers.read_bytes()).hexdigest(),
+        "builder_identities": [build_identity],
+        "approved_source_repositories": [source_repository],
+        "approved_builder_ids": [builder_id],
+        "approved_workflow_refs": [workflow_ref],
+        "required_artifacts": ["backend", "frontend"],
+    }
+    policy_path = tmp_path / "release-provenance-policy.json"
+    policy_path.write_text(json.dumps(policy, sort_keys=True) + "\n", encoding="utf-8")
+    artifacts: dict[str, dict] = {}
+    for name, image_key in (("backend", "backend_image"), ("frontend", "frontend_image")):
+        image = release[image_key]
+        repository, digest = image.rsplit("@sha256:", maxsplit=1)
+        image_subject = [
+            {
+                "name": f"pkg:docker/{repository}@2.0.0?platform=linux%2Famd64",
+                "digest": {"sha256": digest},
+            }
+        ]
+        slsa = {
+            "_type": SLSA_STATEMENT_TYPE,
+            "subject": image_subject,
+            "predicateType": SLSA_PREDICATE_TYPE,
+            "predicate": {
+                "buildDefinition": {
+                    "buildType": "https://github.com/moby/buildkit/blob/master/docs/attestations/slsa-definitions.md",
+                    "externalParameters": {
+                        "configSource": {
+                            "uri": f"{source_repository}.git#refs/tags/v2.0.0:{name}",
+                            "digest": {"sha1": release["git_commit"]},
+                            "path": "Dockerfile.prod" if name == "frontend" else "Dockerfile",
+                        },
+                        "request": {"frontend": "dockerfile.v0"},
+                    },
+                    "internalParameters": {"builderPlatform": "linux/amd64"},
+                },
+                "runDetails": {
+                    "builder": {"id": builder_id},
+                    "metadata": {
+                        "invocationId": build_invocation_id,
+                        "startedOn": started_at.isoformat(),
+                        "finishedOn": finished_at.isoformat(),
+                    },
+                },
+            },
+        }
+        slsa_path = tmp_path / f"{name}-slsa.json"
+        slsa_path.write_text(json.dumps(slsa, sort_keys=True) + "\n", encoding="utf-8")
+        registry_provenance_path = tmp_path / f"{name}-buildkit-slsa-predicate.json"
+        registry_provenance_path.write_text(
+            json.dumps(slsa["predicate"], sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        registry_sbom = {
+            "spdxVersion": SPDX_VERSION,
+            "dataLicense": "CC0-1.0",
+            "SPDXID": "SPDXRef-DOCUMENT",
+            "name": "sbom",
+            "documentNamespace": f"https://duckdock.example.com/spdx/{name}/{digest}",
+            "creationInfo": {
+                "created": finished_at.isoformat(),
+                "creators": ["Tool: docker-buildx-test"],
+            },
+            "packages": [
+                {
+                    "name": f"duckdock-{name}",
+                    "SPDXID": f"SPDXRef-Package-{name}",
+                }
+            ],
+        }
+        registry_sbom_path = tmp_path / f"{name}-buildkit-sbom.spdx.json"
+        registry_sbom_path.write_text(
+            json.dumps(registry_sbom, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        sbom = {
+            "_type": SLSA_STATEMENT_TYPE,
+            "subject": image_subject,
+            "predicateType": SPDX_PREDICATE_TYPE,
+            "predicate": registry_sbom,
+        }
+        sbom_path = tmp_path / f"{name}-sbom.spdx.json"
+        sbom_path.write_text(json.dumps(sbom, sort_keys=True) + "\n", encoding="utf-8")
+        scout_sarif = {
+            "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+            "version": "2.1.0",
+            "runs": [
+                {
+                    "tool": {
+                        "driver": {
+                            "name": "Docker Scout",
+                            "semanticVersion": "1.18.2",
+                        }
+                    },
+                    "results": [],
+                }
+            ],
+        }
+        scout_sarif_path = tmp_path / f"{name}-scout.sarif.json"
+        scout_sarif_path.write_text(
+            json.dumps(scout_sarif, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        scan = {
+            "schema_version": VULNERABILITY_REPORT_SCHEMA_VERSION,
+            "image": image,
+            "scanner": {
+                "name": "Docker Scout",
+                "version": "1.18.2",
+                "database_updated_at": (started_at - timedelta(hours=1)).isoformat(),
+            },
+            "scanned_at": (finished_at + timedelta(minutes=1)).isoformat(),
+            "severity_filter": ["critical", "high"],
+            "raw_sarif_sha256": hashlib.sha256(
+                scout_sarif_path.read_bytes()
+            ).hexdigest(),
+            "raw_sarif_result_count": 0,
+            "findings": [],
+            "summary": {"open_critical": 0, "open_high": 0, "total_findings": 0},
+        }
+        scan_path = tmp_path / f"{name}-vulnerability-scan.json"
+        scan_path.write_text(json.dumps(scan, sort_keys=True) + "\n", encoding="utf-8")
+        artifacts[name] = {
+            "image": image,
+            "attestation_image": (
+                f"{repository}@sha256:{('e' if name == 'backend' else 'f') * 64}"
+            ),
+            "registry_provenance": {
+                "path": str(registry_provenance_path),
+                "sha256": hashlib.sha256(
+                    registry_provenance_path.read_bytes()
+                ).hexdigest(),
+            },
+            "slsa": {
+                "path": str(slsa_path),
+                "sha256": hashlib.sha256(slsa_path.read_bytes()).hexdigest(),
+            },
+            "registry_sbom": {
+                "path": str(registry_sbom_path),
+                "sha256": hashlib.sha256(registry_sbom_path.read_bytes()).hexdigest(),
+            },
+            "sbom": {
+                "path": str(sbom_path),
+                "sha256": hashlib.sha256(sbom_path.read_bytes()).hexdigest(),
+            },
+            "scout_sarif": {
+                "path": str(scout_sarif_path),
+                "sha256": hashlib.sha256(scout_sarif_path.read_bytes()).hexdigest(),
+            },
+            "vulnerability_scan": {
+                "path": str(scan_path),
+                "sha256": hashlib.sha256(scan_path.read_bytes()).hexdigest(),
+            },
+        }
+    tag_object_path = tmp_path / "v2.0.0-tag-object.txt"
+    tag_object_path.write_text(
+        (
+            f"object {release['git_commit']}\n"
+            "type commit\n"
+            "tag v2.0.0\n"
+            "tagger DuckDock Release <release@example.com> 1786003200 +0000\n\n"
+            "DuckDock 2.0.0\n"
+            "-----BEGIN SSH SIGNATURE-----\n"
+            "test-signature-capture\n"
+            "-----END SSH SIGNATURE-----\n"
+        ),
+        encoding="utf-8",
+    )
+    tag_verification_path = tmp_path / "v2.0.0-tag-verification.json"
+    tag_verification_path.write_text(
+        '{"verified":true,"reason":"valid"}\n',
+        encoding="utf-8",
+    )
+    source_archive_path = tmp_path / "duckdock-v2.0.0-source.tar.gz"
+    source_archive_path.write_bytes(b"deterministic-source-archive-fixture")
+    build_report = {
+        "schema_version": BUILD_REPORT_SCHEMA_VERSION,
+        "release_version": "2.0.0",
+        "git_ref": "refs/tags/v2.0.0",
+        "git_commit": release["git_commit"],
+        "tag_object": {
+            "path": str(tag_object_path),
+            "sha256": hashlib.sha256(tag_object_path.read_bytes()).hexdigest(),
+        },
+        "tag_signature_verified": True,
+        "tag_verification_output": {
+            "path": str(tag_verification_path),
+            "sha256": hashlib.sha256(tag_verification_path.read_bytes()).hexdigest(),
+        },
+        "source_repository": source_repository,
+        "source_tree_sha256": "3" * 64,
+        "source_archive": {
+            "path": str(source_archive_path),
+            "sha256": hashlib.sha256(source_archive_path.read_bytes()).hexdigest(),
+            "size_bytes": source_archive_path.stat().st_size,
+        },
+        "contract_digest": release["contract_digest"],
+        "build_started_at": started_at.isoformat(),
+        "build_finished_at": finished_at.isoformat(),
+        "builder": {
+            "builder_id": builder_id,
+            "workflow_ref": workflow_ref,
+            "workflow_run_id": workflow_run_id,
+            "workflow_run_url": "https://github.com/BaiKudan/DuckDock/actions/runs/1234567890",
+            "build_invocation_id": build_invocation_id,
+        },
+        "artifacts": artifacts,
+    }
+    build_report_path = tmp_path / "release-build-report.json"
+    build_report_path.write_text(
+        json.dumps(build_report, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            "ssh-keygen",
+            "-q",
+            "-Y",
+            "sign",
+            "-f",
+            str(build_key),
+            "-n",
+            BUILD_SIGNATURE_NAMESPACE,
+            str(build_report_path),
+        ],
+        check=True,
+    )
+    derived = validate_build_report(
+        build_report,
+        report_path=build_report_path,
+        git_commit=release["git_commit"],
+        backend_image=release["backend_image"],
+        frontend_image=release["frontend_image"],
+        contract_digest=release["contract_digest"],
+        source_repository=source_repository,
+        approved_builder_ids={builder_id},
+        approved_workflow_refs={workflow_ref},
+        now=now,
+    )
+    observed_at = now - timedelta(minutes=5)
+    evidence = {
+        "schema_version": PROVENANCE_EVIDENCE_SCHEMA_VERSION,
+        "release_version": "2.0.0",
+        "git_ref": derived["git_ref"],
+        "git_commit": derived["git_commit"],
+        "contract_digest": derived["contract_digest"],
+        "observed_at": observed_at.isoformat(),
+        "built_at": build_report["build_finished_at"],
+        "source_repository": derived["source_repository"],
+        "source_tree_sha256": derived["source_tree_sha256"],
+        "source_archive": derived["source_archive"],
+        "builder": derived["builder"],
+        "artifacts": derived["artifacts"],
+        "provenance_policy": {
+            "path": str(policy_path),
+            "sha256": hashlib.sha256(policy_path.read_bytes()).hexdigest(),
+            "policy_id": policy["policy_id"],
+            "allowed_signers_path": str(allowed_signers),
+            "allowed_signers_sha256": policy["allowed_signers_sha256"],
+        },
+        "signed_build_report": {
+            **build_report,
+            "signed_evidence": {
+                "path": str(build_report_path),
+                "sha256": hashlib.sha256(build_report_path.read_bytes()).hexdigest(),
+                "signature_path": f"{build_report_path}.sig",
+                "signer_identity": build_identity,
+            },
+        },
+    }
+    evidence_path = tmp_path / "release-provenance-evidence.json"
+    evidence_path.write_text(json.dumps(evidence, sort_keys=True) + "\n", encoding="utf-8")
+    release["provenance"] = {
+        "path": str(evidence_path),
+        "sha256": hashlib.sha256(evidence_path.read_bytes()).hexdigest(),
+        "observed_at": observed_at.isoformat(),
+    }
+
+
+def _release_provenance_collector_args(
+    document: dict,
+    tmp_path: Path,
+) -> argparse.Namespace:
+    evidence_path = Path(document["release"]["provenance"]["path"])
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    signed = evidence["signed_build_report"]["signed_evidence"]
+    return argparse.Namespace(
+        git_commit=document["release"]["git_commit"],
+        backend_image=document["release"]["backend_image"],
+        frontend_image=document["release"]["frontend_image"],
+        contract_digest=document["release"]["contract_digest"],
+        provenance_policy=Path(evidence["provenance_policy"]["path"]),
+        build_signer_identity=signed["signer_identity"],
+        build_report=Path(signed["path"]),
+        build_signature=Path(signed["signature_path"]),
+        output=tmp_path / "collected-release-provenance.json",
+        overwrite_output=False,
+    )
+
+
+def _resign_release_build_report(args: argparse.Namespace, tmp_path: Path) -> None:
+    args.build_signature.unlink()
+    subprocess.run(
+        [
+            "ssh-keygen",
+            "-q",
+            "-Y",
+            "sign",
+            "-f",
+            str(tmp_path / "release_builder_key"),
+            "-n",
+            BUILD_SIGNATURE_NAMESPACE,
+            str(args.build_report),
+        ],
+        check=True,
+    )
 
 
 def _document(tmp_path: Path, now: datetime) -> dict:
@@ -2104,6 +2466,7 @@ def _document(tmp_path: Path, now: datetime) -> dict:
         "frontend_image": frontend_image,
         "contract_digest": "d" * 64,
     }
+    _add_release_provenance(release, tmp_path, now)
     target = {
         "target_id": "customer-production",
         "environment": "production",
@@ -2577,6 +2940,377 @@ def _resign_network_probe(
         report[field] = raw[field]
     report_path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
     evidence["sha256"] = hashlib.sha256(report_path.read_bytes()).hexdigest()
+
+
+def test_release_provenance_collector_verifies_signed_build_artifacts(
+    tmp_path: Path,
+) -> None:
+    document = _document(tmp_path, datetime.now(timezone.utc))
+
+    report = release_provenance_collector.collect(
+        _release_provenance_collector_args(document, tmp_path)
+    )
+
+    assert report["release_version"] == "2.0.0"
+    assert report["git_ref"] == "refs/tags/v2.0.0"
+    assert set(report["artifacts"]) == {"backend", "frontend"}
+    assert report["artifacts"]["backend"]["vulnerability_scan"]["open_high"] == 0
+
+
+def test_release_provenance_collector_rejects_report_modified_after_signature(
+    tmp_path: Path,
+) -> None:
+    document = _document(tmp_path, datetime.now(timezone.utc))
+    args = _release_provenance_collector_args(document, tmp_path)
+    report = json.loads(args.build_report.read_text(encoding="utf-8"))
+    report["source_tree_sha256"] = "9" * 64
+    args.build_report.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="invalid signed build report"):
+        release_provenance_collector.collect(args)
+
+
+def test_release_provenance_collector_rejects_unapproved_builder(
+    tmp_path: Path,
+) -> None:
+    document = _document(tmp_path, datetime.now(timezone.utc))
+    args = _release_provenance_collector_args(document, tmp_path)
+    policy = json.loads(args.provenance_policy.read_text(encoding="utf-8"))
+    policy["approved_builder_ids"] = ["https://untrusted.example.com/builder"]
+    args.provenance_policy.write_text(
+        json.dumps(policy, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="exact signed 2.0.0 source and builder"):
+        release_provenance_collector.collect(args)
+
+
+def test_release_provenance_collector_rejects_cross_image_slsa_subject(
+    tmp_path: Path,
+) -> None:
+    document = _document(tmp_path, datetime.now(timezone.utc))
+    args = _release_provenance_collector_args(document, tmp_path)
+    report = json.loads(args.build_report.read_text(encoding="utf-8"))
+    slsa_path = Path(report["artifacts"]["backend"]["slsa"]["path"])
+    slsa = json.loads(slsa_path.read_text(encoding="utf-8"))
+    slsa["subject"][0]["digest"]["sha256"] = "f" * 64
+    slsa_path.write_text(json.dumps(slsa, sort_keys=True) + "\n", encoding="utf-8")
+    report["artifacts"]["backend"]["slsa"]["sha256"] = hashlib.sha256(
+        slsa_path.read_bytes()
+    ).hexdigest()
+    args.build_report.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+    _resign_release_build_report(args, tmp_path)
+
+    with pytest.raises(ValueError, match="exact release source, builder and image"):
+        release_provenance_collector.collect(args)
+
+
+def test_release_provenance_collector_rejects_slsa_from_other_source(
+    tmp_path: Path,
+) -> None:
+    document = _document(tmp_path, datetime.now(timezone.utc))
+    args = _release_provenance_collector_args(document, tmp_path)
+    report = json.loads(args.build_report.read_text(encoding="utf-8"))
+    slsa_path = Path(report["artifacts"]["backend"]["slsa"]["path"])
+    slsa = json.loads(slsa_path.read_text(encoding="utf-8"))
+    slsa["predicate"]["buildDefinition"]["externalParameters"]["configSource"][
+        "uri"
+    ] = "https://github.com/attacker/other.git#refs/tags/v2.0.0:backend"
+    slsa_path.write_text(json.dumps(slsa, sort_keys=True) + "\n", encoding="utf-8")
+    registry_path = Path(report["artifacts"]["backend"]["registry_provenance"]["path"])
+    registry_path.write_text(
+        json.dumps(slsa["predicate"], sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    report["artifacts"]["backend"]["registry_provenance"]["sha256"] = hashlib.sha256(
+        registry_path.read_bytes()
+    ).hexdigest()
+    report["artifacts"]["backend"]["slsa"]["sha256"] = hashlib.sha256(
+        slsa_path.read_bytes()
+    ).hexdigest()
+    args.build_report.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+    _resign_release_build_report(args, tmp_path)
+
+    with pytest.raises(ValueError, match="exact release source, builder and image"):
+        release_provenance_collector.collect(args)
+
+
+def test_release_provenance_collector_rejects_cross_image_sbom(
+    tmp_path: Path,
+) -> None:
+    document = _document(tmp_path, datetime.now(timezone.utc))
+    args = _release_provenance_collector_args(document, tmp_path)
+    report = json.loads(args.build_report.read_text(encoding="utf-8"))
+    sbom_path = Path(report["artifacts"]["frontend"]["sbom"]["path"])
+    sbom = json.loads(sbom_path.read_text(encoding="utf-8"))
+    backend_slsa_path = Path(report["artifacts"]["backend"]["slsa"]["path"])
+    backend_slsa = json.loads(backend_slsa_path.read_text(encoding="utf-8"))
+    sbom["subject"] = backend_slsa["subject"]
+    sbom_path.write_text(json.dumps(sbom, sort_keys=True) + "\n", encoding="utf-8")
+    report["artifacts"]["frontend"]["sbom"]["sha256"] = hashlib.sha256(
+        sbom_path.read_bytes()
+    ).hexdigest()
+    args.build_report.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+    _resign_release_build_report(args, tmp_path)
+
+    with pytest.raises(ValueError, match="exact registry SBOM and image"):
+        release_provenance_collector.collect(args)
+
+
+def test_release_provenance_collector_rejects_modified_registry_sbom_projection(
+    tmp_path: Path,
+) -> None:
+    document = _document(tmp_path, datetime.now(timezone.utc))
+    args = _release_provenance_collector_args(document, tmp_path)
+    report = json.loads(args.build_report.read_text(encoding="utf-8"))
+    sbom_path = Path(report["artifacts"]["backend"]["sbom"]["path"])
+    sbom = json.loads(sbom_path.read_text(encoding="utf-8"))
+    sbom["predicate"]["name"] = "modified-after-registry-export"
+    sbom_path.write_text(json.dumps(sbom, sort_keys=True) + "\n", encoding="utf-8")
+    report["artifacts"]["backend"]["sbom"]["sha256"] = hashlib.sha256(
+        sbom_path.read_bytes()
+    ).hexdigest()
+    args.build_report.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+    _resign_release_build_report(args, tmp_path)
+
+    with pytest.raises(ValueError, match="exact registry SBOM and image"):
+        release_provenance_collector.collect(args)
+
+
+def test_release_provenance_collector_rejects_forged_vulnerability_summary(
+    tmp_path: Path,
+) -> None:
+    document = _document(tmp_path, datetime.now(timezone.utc))
+    args = _release_provenance_collector_args(document, tmp_path)
+    report = json.loads(args.build_report.read_text(encoding="utf-8"))
+    scan_path = Path(report["artifacts"]["backend"]["vulnerability_scan"]["path"])
+    scan = json.loads(scan_path.read_text(encoding="utf-8"))
+    scan["findings"] = [
+        {
+            "id": "CVE-2099-0001",
+            "severity": "high",
+            "package": "example",
+            "installed_version": "1.0.0",
+            "fixed_version": "1.0.1",
+            "status": "open",
+        }
+    ]
+    scan_path.write_text(json.dumps(scan, sort_keys=True) + "\n", encoding="utf-8")
+    report["artifacts"]["backend"]["vulnerability_scan"]["sha256"] = hashlib.sha256(
+        scan_path.read_bytes()
+    ).hexdigest()
+    args.build_report.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+    _resign_release_build_report(args, tmp_path)
+
+    with pytest.raises(ValueError, match="summary is forged"):
+        release_provenance_collector.collect(args)
+
+
+def test_release_provenance_collector_rejects_cross_image_vulnerability_report(
+    tmp_path: Path,
+) -> None:
+    document = _document(tmp_path, datetime.now(timezone.utc))
+    args = _release_provenance_collector_args(document, tmp_path)
+    report = json.loads(args.build_report.read_text(encoding="utf-8"))
+    scan_path = Path(report["artifacts"]["backend"]["vulnerability_scan"]["path"])
+    scan = json.loads(scan_path.read_text(encoding="utf-8"))
+    scan["image"] = document["release"]["frontend_image"]
+    scan_path.write_text(json.dumps(scan, sort_keys=True) + "\n", encoding="utf-8")
+    report["artifacts"]["backend"]["vulnerability_scan"]["sha256"] = hashlib.sha256(
+        scan_path.read_bytes()
+    ).hexdigest()
+    args.build_report.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+    _resign_release_build_report(args, tmp_path)
+
+    with pytest.raises(ValueError, match="incomplete or cross-image"):
+        release_provenance_collector.collect(args)
+
+
+def test_release_provenance_collector_rejects_scout_sarif_with_high_result(
+    tmp_path: Path,
+) -> None:
+    document = _document(tmp_path, datetime.now(timezone.utc))
+    args = _release_provenance_collector_args(document, tmp_path)
+    report = json.loads(args.build_report.read_text(encoding="utf-8"))
+    sarif_path = Path(report["artifacts"]["backend"]["scout_sarif"]["path"])
+    sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
+    sarif["runs"][0]["results"] = [
+        {
+            "ruleId": "CVE-2099-0001",
+            "level": "error",
+            "message": {"text": "High severity vulnerability"},
+        }
+    ]
+    sarif_path.write_text(json.dumps(sarif, sort_keys=True) + "\n", encoding="utf-8")
+    sarif_digest = hashlib.sha256(sarif_path.read_bytes()).hexdigest()
+    report["artifacts"]["backend"]["scout_sarif"]["sha256"] = sarif_digest
+    scan_path = Path(report["artifacts"]["backend"]["vulnerability_scan"]["path"])
+    scan = json.loads(scan_path.read_text(encoding="utf-8"))
+    scan["raw_sarif_sha256"] = sarif_digest
+    scan["raw_sarif_result_count"] = 1
+    scan_path.write_text(json.dumps(scan, sort_keys=True) + "\n", encoding="utf-8")
+    report["artifacts"]["backend"]["vulnerability_scan"]["sha256"] = hashlib.sha256(
+        scan_path.read_bytes()
+    ).hexdigest()
+    args.build_report.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+    _resign_release_build_report(args, tmp_path)
+
+    with pytest.raises(ValueError, match="still contains Critical/High"):
+        release_provenance_collector.collect(args)
+
+
+def test_release_provenance_collector_rejects_unbound_scout_sarif(
+    tmp_path: Path,
+) -> None:
+    document = _document(tmp_path, datetime.now(timezone.utc))
+    args = _release_provenance_collector_args(document, tmp_path)
+    report = json.loads(args.build_report.read_text(encoding="utf-8"))
+    scan_path = Path(report["artifacts"]["backend"]["vulnerability_scan"]["path"])
+    scan = json.loads(scan_path.read_text(encoding="utf-8"))
+    scan["raw_sarif_sha256"] = "f" * 64
+    scan_path.write_text(json.dumps(scan, sort_keys=True) + "\n", encoding="utf-8")
+    report["artifacts"]["backend"]["vulnerability_scan"]["sha256"] = hashlib.sha256(
+        scan_path.read_bytes()
+    ).hexdigest()
+    args.build_report.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+    _resign_release_build_report(args, tmp_path)
+
+    with pytest.raises(ValueError, match="incomplete or cross-image"):
+        release_provenance_collector.collect(args)
+
+
+def test_release_provenance_collector_rejects_forged_tag_verification(
+    tmp_path: Path,
+) -> None:
+    document = _document(tmp_path, datetime.now(timezone.utc))
+    args = _release_provenance_collector_args(document, tmp_path)
+    report = json.loads(args.build_report.read_text(encoding="utf-8"))
+    verification_path = Path(report["tag_verification_output"]["path"])
+    verification_path.write_text('{"verified":false}\n', encoding="utf-8")
+    report["tag_verification_output"]["sha256"] = hashlib.sha256(
+        verification_path.read_bytes()
+    ).hexdigest()
+    args.build_report.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+    _resign_release_build_report(args, tmp_path)
+
+    with pytest.raises(ValueError, match="not an annotated signed tag"):
+        release_provenance_collector.collect(args)
+
+
+def test_release_provenance_collector_rejects_public_key_reuse(
+    tmp_path: Path,
+) -> None:
+    document = _document(tmp_path, datetime.now(timezone.utc))
+    args = _release_provenance_collector_args(document, tmp_path)
+    policy = json.loads(args.provenance_policy.read_text(encoding="utf-8"))
+    trust_path = Path(policy["allowed_signers_path"])
+    public_key = (tmp_path / "release_builder_key.pub").read_text(encoding="utf-8").strip()
+    trust_path.write_text(
+        trust_path.read_text(encoding="utf-8") + f"second-builder@example.com {public_key}\n",
+        encoding="utf-8",
+    )
+    policy["builder_identities"].append("second-builder@example.com")
+    policy["allowed_signers_sha256"] = hashlib.sha256(trust_path.read_bytes()).hexdigest()
+    args.provenance_policy.write_text(
+        json.dumps(policy, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="reuses a public key"):
+        release_provenance_collector.collect(args)
+
+
+def test_ga_foundation_rejects_tampered_release_slsa_after_collection(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    provenance = json.loads(
+        Path(document["release"]["provenance"]["path"]).read_text(encoding="utf-8")
+    )
+    slsa_path = Path(
+        provenance["signed_build_report"]["artifacts"]["backend"]["slsa"]["path"]
+    )
+    slsa = json.loads(slsa_path.read_text(encoding="utf-8"))
+    slsa["subject"][0]["digest"]["sha256"] = "0" * 64
+    slsa_path.write_text(json.dumps(slsa, sort_keys=True) + "\n", encoding="utf-8")
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    assert result["campaign_stage"] == "FOUNDATION"
+    assert "release_provenance" in result["failed_foundation_checks"]
+    assert result["evidence_ready_for_approval"] is False
+
+
+def test_ga_foundation_rejects_builder_key_reused_by_approver(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _add_signed_approvals(document, tmp_path, now)
+    provenance_path = Path(document["release"]["provenance"]["path"])
+    provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    raw_build_path = Path(provenance["signed_build_report"]["signed_evidence"]["path"])
+    raw_signature_path = Path(
+        provenance["signed_build_report"]["signed_evidence"]["signature_path"]
+    )
+    raw_signature_path.unlink()
+    subprocess.run(
+        [
+            "ssh-keygen",
+            "-q",
+            "-Y",
+            "sign",
+            "-f",
+            str(tmp_path / "security_key"),
+            "-n",
+            BUILD_SIGNATURE_NAMESPACE,
+            str(raw_build_path),
+        ],
+        check=True,
+    )
+    policy_path = Path(provenance["provenance_policy"]["path"])
+    policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    trust_path = Path(policy["allowed_signers_path"])
+    trust_path.write_text(
+        "release-builder@example.com "
+        + (tmp_path / "security_key.pub").read_text(encoding="utf-8").strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    trust_digest = hashlib.sha256(trust_path.read_bytes()).hexdigest()
+    policy["allowed_signers_sha256"] = trust_digest
+    policy_path.write_text(json.dumps(policy, sort_keys=True) + "\n", encoding="utf-8")
+    provenance["provenance_policy"].update(
+        {
+            "sha256": hashlib.sha256(policy_path.read_bytes()).hexdigest(),
+            "allowed_signers_sha256": trust_digest,
+        }
+    )
+    provenance_path.write_text(
+        json.dumps(provenance, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    document["release"]["provenance"]["sha256"] = hashlib.sha256(
+        provenance_path.read_bytes()
+    ).hexdigest()
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    assert result["campaign_stage"] == "FOUNDATION"
+    assert "release_provenance" in result["failed_foundation_checks"]
 
 
 def test_complete_target_bundle_is_cryptographically_authorized(tmp_path: Path) -> None:

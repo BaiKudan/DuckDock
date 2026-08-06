@@ -5,7 +5,12 @@
     "git_commit": "__CHANGE_ME_40_HEX_GIT_COMMIT__",
     "backend_image": "registry.example.invalid/duckdock/backend@sha256:__CHANGE_ME_64_HEX__",
     "frontend_image": "registry.example.invalid/duckdock/frontend@sha256:__CHANGE_ME_64_HEX__",
-    "contract_digest": "aa260f301acc5c3a8004d14980952a03ce0197f9d70dcdd78cd62e986c3b1a83"
+    "contract_digest": "aa260f301acc5c3a8004d14980952a03ce0197f9d70dcdd78cd62e986c3b1a83",
+    "provenance": {
+      "path": "__CHANGE_ME_RELEASE_PROVENANCE_EVIDENCE_PATH__",
+      "sha256": "__CHANGE_ME_64_HEX__",
+      "observed_at": "2026-08-06T00:30:00Z"
+    }
   },
   "target": {
     "target_id": "__CHANGE_ME_TARGET_ID__",

@@ -1,0 +1,32 @@
+{
+  "_type": "https://in-toto.io/Statement/v1",
+  "subject": [
+    {
+      "name": "pkg:docker/registry.example.invalid/duckdock/backend@2.0.0?platform=linux%2Famd64",
+      "digest": {"sha256": "__CHANGE_ME_64_HEX__"}
+    }
+  ],
+  "predicateType": "https://slsa.dev/provenance/v1",
+  "predicate": {
+    "buildDefinition": {
+      "buildType": "https://github.com/moby/buildkit/blob/master/docs/attestations/slsa-definitions.md",
+      "externalParameters": {
+        "configSource": {
+          "uri": "https://github.com/BaiKudan/DuckDock.git#refs/tags/v2.0.0:backend",
+          "digest": {"sha1": "__CHANGE_ME_40_HEX_GIT_COMMIT__"},
+          "path": "Dockerfile"
+        },
+        "request": {"frontend": "dockerfile.v0"}
+      },
+      "internalParameters": {"builderPlatform": "linux/amd64"}
+    },
+    "runDetails": {
+      "builder": {"id": "__CHANGE_ME_EXACT_BUILDKIT_SLSA_BUILDER_ID__"},
+      "metadata": {
+        "invocationId": "__CHANGE_ME_BUILDKIT_INVOCATION_ID__",
+        "startedOn": "2026-08-06T00:00:00Z",
+        "finishedOn": "2026-08-06T00:15:00Z"
+      }
+    }
+  }
+}

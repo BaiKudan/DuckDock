@@ -144,6 +144,31 @@ def verify(env_file: Path) -> dict[str, Any]:
         "Prometheus -> Alertmanager plus delivery failure alerts",
         "notification target and meta-alerts configured",
     )
+    ci_workflow = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    provenance_components = (
+        REPO_ROOT / "backend/scripts/ga_release_provenance.py",
+        REPO_ROOT / "backend/scripts/collect_ga_release_provenance.py",
+        REPO_ROOT / "ops/ga/release-provenance-trust-policy.example.json",
+        REPO_ROOT / "ops/ga/build-provenance-report.example.json",
+        REPO_ROOT / "ops/ga/release-scout-sarif.example.json",
+    )
+    add(
+        "ga_release_supply_chain",
+        "tags:\n      - v2.0.0" in ci_workflow
+        and "needs: [backend, frontend, e2e, compose]" in ci_workflow
+        and "Verify final signed tag" in ci_workflow
+        and "Promote scanned image indexes to previously unused final tags" in ci_workflow
+        and "final tag already exists; refusing overwrite" in ci_workflow
+        and "could not prove final tag is absent" in ci_workflow
+        and ci_workflow.count("provenance: mode=max,version=v1") == 4
+        and ci_workflow.count("sbom: true") == 4
+        and ci_workflow.count("sarif-file:") == 4
+        and "Retain final vulnerability scan reports" in ci_workflow
+        and "if-no-files-found: error" in ci_workflow
+        and all(path.is_file() for path in provenance_components),
+        "signed v2.0.0 after full CI; BuildKit attestations; retained SARIF; strict signed-report collector",
+        "final tag reruns all CI gates and emits independently re-verifiable release evidence",
+    )
 
     if shutil.which("kubectl"):
         rendered = _run(["kubectl", "kustomize", "ops/kubernetes/ha"])

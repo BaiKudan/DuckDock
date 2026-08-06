@@ -194,6 +194,8 @@ def test_production_image_context_excludes_test_and_local_validation_artifacts()
         "scripts/collect_ga_target_tls.py",
         "scripts/ga_tls_evidence.py",
         "scripts/ga_release_identity.py",
+        "scripts/collect_ga_release_provenance.py",
+        "scripts/ga_release_provenance.py",
         "scripts/probe_ga_target_tls.py",
         "scripts/verify_ga_production_authorization.py",
         "scripts/verify_*_dev.py",
@@ -202,6 +204,48 @@ def test_production_image_context_excludes_test_and_local_validation_artifacts()
         assert entry in backend_ignore
     for entry in ("node_modules/", "dist/", "e2e/", "src/test/"):
         assert entry in frontend_ignore
+
+
+def test_final_tag_reruns_full_gate_and_publishes_attested_images():
+    workflow = _read(".github/workflows/ci.yml")
+
+    assert "tags:\n      - v2.0.0" in workflow
+    assert "needs: [backend, frontend, e2e, compose]" in workflow
+    assert "Verify final signed tag" in workflow
+    assert "'.verification.verified'" in workflow
+    assert workflow.count("github.ref == 'refs/tags/v2.0.0'") >= 10
+    assert workflow.count("provenance: mode=max") == 4
+    assert workflow.count("provenance: mode=max,version=v1") == 4
+    assert workflow.count("sbom: true") == 4
+    assert workflow.count("sarif-file:") == 4
+    assert workflow.count(
+        "docker/scout-action@7c6b6c3f7844478ace1ffd4e7aef649053d1f87d"
+    ) == 4
+    assert "Retain final vulnerability scan reports" in workflow
+    assert "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" in workflow
+    assert "if-no-files-found: error" in workflow
+    assert "retention-days: 90" in workflow
+    assert "scan_artifact_digest=${{ steps.upload_scan_reports.outputs.artifact-digest }}" in workflow
+    assert workflow.count('context: "{{defaultContext}}:') == 4
+    assert workflow.count("tags: ${{ github.ref == 'refs/tags/v2.0.0'") == 4
+    assert workflow.count("build-{0}', github.sha") == 4
+    assert "Promote scanned image indexes to previously unused final tags" in workflow
+    assert "final tag already exists; refusing overwrite" in workflow
+    assert "could not prove final tag is absent" in workflow
+    assert workflow.index("Scan patched Alertmanager") < workflow.index(
+        "Retain final vulnerability scan reports"
+    )
+    assert workflow.index("Retain final vulnerability scan reports") < workflow.index(
+        "Promote scanned image indexes to previously unused final tags"
+    )
+    assert "Resolve deployable platform image digests" in workflow
+    for image in (
+        "duckdock-backend:2.0.0",
+        "duckdock-frontend:2.0.0",
+        "duckdock-tls-gateway:2.0.0",
+        "duckdock-alertmanager:0.33.1-duckdock.1",
+    ):
+        assert f"ghcr.io/baikudan/{image}" in workflow
 
 
 def test_production_frontend_runtime_image_contains_only_built_assets():

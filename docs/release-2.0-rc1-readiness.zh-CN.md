@@ -37,17 +37,18 @@ Runtime/Reporter
 | SLO | PASS | `HEALTHY`；142 个发布窗口请求、0 错误；ingest p95 7.729 ms、timeline p95 12.636 ms、policy p95 54.426 ms |
 | Readiness | PASS | `READY`；14 PASS / 0 WARN / 0 BLOCK |
 | 浏览器 | PASS | Playwright 3/3：未登录守卫、登录表单、审批→执行→回执→验证→完成；应用内浏览器复核 Operations/Release Control，console 0 warning/error |
-| 后端回归 | PASS | 1166 passed、19 skipped；核心覆盖率历史门禁 81.04%（门槛 65%） |
+| 后端回归 | PASS | 1182 passed、19 skipped；核心覆盖率历史门禁 81.04%（门槛 65%） |
 | Python 3.12 锁定环境 | PASS | hashed dev lock；runtime lock `pip-audit` 0 已知漏洞；Ruff/compile 通过 |
 | 真实 MySQL 测试 lane | PASS | 独立临时数据库 17/17；验证后数据库与用户均已删除 |
 | 前端 | PASS | npm audit 0；lint 0 warning；11 files / 56 tests；生产 build 最大入口块 569.69 kB（门槛 600 kB） |
 | 类型基线 | PASS with debt | mypy 81 errors，未超过 ratchet ceiling 82；这不是“类型全清零” |
 | 自有生产镜像 | PASS | backend/frontend/TLS gateway/Alertmanager 非 root；Docker Scout 均为 0 Critical / 0 High |
+| 最终发布供应链协议 | PASS（协议）/ PENDING（真实执行） | `v2.0.0` tag 将重跑 backend/frontend/E2E/Compose，四镜像 commit 候选均通过扫描、原始 SARIF 留存且最终 tag 不存在后才晋升；builder 签名报告绑定 tag/source/SLSA v1/SPDX/SARIF/scan，最终授权器独立复验并作为 FOUNDATION；真实 tag、registry digest 和签名 bundle 尚未产生 |
 | 本地生产基础设施 | PASS | 隔离 Compose 10/10 healthy；TLS 1.2/1.3，拒绝 1.0/1.1；hostname/HSTS/告警 firing+resolved 通过，随后零残留清理 |
 | 容量工程基线 | PASS | 60 rps×900s + 120 rps×60s，61,200 Run/Audit/Outbox；持续 p95 8.023 ms，增长后 timeline p95 5.187 ms |
 | 本地 Kubernetes HA 演练 | PASS (local reference) | kind 1 control-plane + 3 zone workers；三类 3 副本、Beat 1；整区 taint/drain 后 30 秒恢复，7 个连续 health/API 样本 0 失败，故障域回归后各 ReplicaSet 恢复三域覆盖；状态服务/RWX/CNI 未授权 |
 | GA 生产授权 | BLOCKED | 真实目标 HTTPS 容量/HA/异地恢复/告警回执、独立安全评估与四方签名尚未提供，授权器必须拒绝 |
-| Compose/CI | PASS | dev/prod Compose config clean；CI action 固定 commit SHA，并阻断依赖、契约、测试、镜像 Critical/High 漏洞 |
+| Compose/CI | PASS | dev/prod Compose config clean；CI action 固定 commit SHA；最终 tag 等完整四类 job 后才推镜像；生产静态基线 21/21 PASS |
 
 ## 3. 14 项实时门禁
 
@@ -86,7 +87,7 @@ Langfuse 保持可替换的 provider adapter：关闭或不可用时，依赖它
 6. **随 Compose 打包的第三方数据镜像不属于 GA 路径。** 本地扫描发现 MySQL/MinIO 官方镜像仍含 Critical/High；单机 Compose 仅作加固参考，GA 强制使用经独立评估的外部 HA MySQL/Redis/S3。Prometheus 的 1 个 High 需要独立评估/VEX 确认，项目不得自行豁免。
 7. **类型债务仍有 81 项。** ratchet 阻止恶化，但后续版本应持续清零。
 8. **外部 Provider 兼容性是持续门禁。** Langfuse、Hermes、OTel Collector 或其他 Harness 升级后必须重跑对应 compatibility gate。
-9. **RC 不是 GA。** 最终版本必须改为 `2.0.0`，使用 registry `@sha256` 镜像，在同一 commit 上重跑全部门禁。权威授权器现把活动阶段严格分为 FOUNDATION、EVIDENCE_COLLECTION、APPROVAL_COLLECTION 和 AUTHORIZED；只有 `--require-evidence-ready` 证明全部非审批检查通过后才能收集四方签名，最终仍必须取得 `GA_AUTHORIZED`。
+9. **RC 不是 GA。** 仓库已新增最终供应链 FOUNDATION：只有受控 `ci.yml@refs/tags/v2.0.0` 在 backend/frontend/E2E/Compose 全通过后才推送 commit 候选，四镜像均通过 Critical/High 扫描且最终 tag 从未存在后才晋升；独立 builder 策略和 OpenSSH 签名报告绑定 tag object/验证输出、source archive/tree、SLSA v1、SPDX 2.3、漏洞扫描和两个 `@sha256` 镜像，门禁会重读全部内容并拒绝跨镜像、predicate 修改、伪造统计或 builder/审批人公钥复用。但真实签名 tag、最终 registry digest 和 bundle 尚未产生。权威授权器仍严格分为 FOUNDATION、EVIDENCE_COLLECTION、APPROVAL_COLLECTION 和 AUTHORIZED；只有 `--require-evidence-ready` 证明全部非审批检查通过后才能收集四方签名，最终仍必须取得 `GA_AUTHORIZED`。
 
 ## 6. GA 前必须完成
 
@@ -98,7 +99,7 @@ Langfuse 保持可替换的 provider adapter：关闭或不可用时，依赖它
 - 用 `collect_ga_target_secrets.py` 采集生产 Secret Manager 轮换，取得 provider/verifier 不同密钥的原始签名回执，并证明 backend/worker/beat 全量滚动；
 - 用 `collect_ga_target_alerting.py` 触发和恢复目标告警，由 delivery 服务签署投递回执、实际值班人员签署 ack，并证明目标接收人与 on-call schedule；
 - 由组织策略预授权的第三方使用 `security-assessment-report.example.json` 交付并签署原始报告，再运行 `collect_ga_independent_security.py`，关闭最终应用镜像和依赖中的全部 Critical/High；
-- 将版本冻结为 `2.0.0`，使用 registry `@sha256` 镜像，在最终 commit 上重跑全部门禁；
+- 创建 GitHub 验证通过的签名 annotated `v2.0.0` tag，让受控 CI 在最终 commit 上重跑 backend/frontend/E2E/Compose 并推送带 BuildKit attestation 的 GHCR 镜像；按发布 provenance 策略由独立 builder 签署 tag/source/SLSA/SPDX/scan 原始报告，运行 `collect_ga_release_provenance.py`，将输出绑定到授权文件 `release.provenance`；
 - 由发布机构通过受控、内容寻址的组织策略固定共享信任库和角色身份，再由 Product、Architecture、Security、Operations 四个不同身份签署同一 release/target/evidence/policy 摘要；
 - 在四方签字前运行生产授权器 `--require-evidence-ready`，确认 `campaign_stage=APPROVAL_COLLECTION`、`evidence_ready_for_approval=true` 且 foundation/evidence 失败列表为空；
 - 运行生产授权器并取得唯一可接受结果 `GA_AUTHORIZED`。

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "__CHANGE_ME_EXACT_SCOUT_SARIF_DRIVER_NAME__",
+          "semanticVersion": "__CHANGE_ME_EXACT_SCOUT_VERSION__"
+        }
+      },
+      "results": []
+    }
+  ]
+}

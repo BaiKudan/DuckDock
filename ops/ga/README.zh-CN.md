@@ -10,6 +10,21 @@ allowed-signers 误提交到公开仓库。
 不得复用。授权文件只保存 policy ID 和 SHA-256；个人 approval 和安全证据都不允许
 覆盖信任库。正式验证必须使用 `--approval-policy` 显式选择受控策略文件。
 
+`release-provenance-trust-policy.example.json` 是另一条独立信任链：它固定最终
+`v2.0.0` release workflow 的 builder signer/key、source repository、builder ID 和
+workflow ref，不能复用四方审批或安全评估 identity/key。发布 workflow 按
+`build-provenance-report.example.json` 汇总签名 tag、source tree/archive、两个最终
+镜像的 SLSA v1、SPDX 2.3 与漏洞扫描；builder 使用 namespace
+`duckdock-release-build-provenance` 直接签署原始报告，再由
+`collect_ga_release_provenance.py` 生成最终 wrapper。`release-slsa-provenance`、
+`release-sbom-spdx`、`release-scout-sarif`、`image-vulnerability-scan` 四个 example 只定义输入协议，
+不能作为真实证据提交。
+BuildKit 的实际 `builder.id` 可能是具体 run URL；必须从最终镜像 attestation 读取，
+由发布机构逐值批准，不能复制 example、使用空值、通配或仅批准 URL 前缀。
+BuildKit 的 SLSA 可省略空 `resolvedDependencies`/`byproducts`，SPDX 默认 document name
+也可能是 `sbom`；二者都必须保留 registry predicate 原文，再由唯一 image subject
+组成 Statement v1，禁止为了迎合模板手改 predicate。
+
 在收集任何四方签字前，必须使用同一个权威授权器执行预签字门禁：
 
 ```bash
@@ -36,6 +51,14 @@ python backend/scripts/verify_ga_production_authorization.py \
 `backend/scripts/collect_ga_target_readiness.py` 通过目标 HTTPS 采集；TLS、网络、容量
 和 HA 使用各自工具输出。以下模板定义了其余必须由目标执行结果填充的版本化协议：
 
+- `release-provenance-trust-policy.example.json`、
+  `build-provenance-report.example.json`：最终 tag/source/builder 与两个镜像的发布
+  供应链信任和签名原始报告；collector 与最终门禁都会重验；
+- `release-slsa-provenance.example.json`、`release-sbom-spdx.example.json`、
+  `release-scout-sarif.example.json`、`image-vulnerability-scan.example.json`：每个 backend/frontend 镜像必须各有一份
+  registry predicate 和对应 exact-subject Statement，禁止跨镜像复用 subject、修改
+  predicate 或伪造 Critical/High 汇总；SARIF 必须来自 release job 的原始 artifact，
+  归一化 scan 必须按 SHA-256、driver/version 和结果数绑定该文件；
 - `tls-trust-policy.example.json`：发布机构批准的外部 TLS probe/operator/vantage/
   全球可路由来源 CIDR 与精确签名身份；`probe_ga_target_tls.py` 生成带证书指纹和
   OpenSSL 原始输出的 v3 报告，外部执行人签名后由 `collect_ga_target_tls.py` 组合成

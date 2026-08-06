@@ -1,0 +1,14 @@
+{
+  "schema_version": "duckdock-ga-release-provenance-trust-policy-v1",
+  "policy_id": "__CHANGE_ME_RELEASE_BUILD_AUTHORITY_POLICY_ID__",
+  "organization": "__CHANGE_ME_RELEASE_BUILD_AUTHORITY__",
+  "allowed_signers_path": "__CHANGE_ME_RELEASE_BUILDER_ALLOWED_SIGNERS_PATH__",
+  "allowed_signers_sha256": "__CHANGE_ME_64_HEX__",
+  "builder_identities": ["__CHANGE_ME_RELEASE_BUILDER_SIGNER_IDENTITY__"],
+  "approved_source_repositories": ["https://github.com/BaiKudan/DuckDock"],
+  "approved_builder_ids": ["__CHANGE_ME_EXACT_BUILDKIT_SLSA_BUILDER_ID__"],
+  "approved_workflow_refs": [
+    "BaiKudan/DuckDock/.github/workflows/ci.yml@refs/tags/v2.0.0"
+  ],
+  "required_artifacts": ["backend", "frontend"]
+}

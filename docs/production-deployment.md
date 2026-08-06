@@ -109,6 +109,12 @@ budget, evidence/timeline/policy latency and Alertmanager delivery meta-alerts.
 The production image is rebuilt from the exact upstream `0.33.1` release commit
 with post-release `x/crypto` and gRPC security fixes, then reduced to a non-root
 scratch runtime; CI generates SBOM/provenance and blocks Critical/High findings.
+For the final `v2.0.0` tag, `release-images` waits for backend, frontend, E2E and
+Compose gates, verifies GitHub's signed annotated-tag result, pushes GHCR
+commit candidates with BuildKit attestations, blocks Critical/High findings,
+then promotes all scanned indexes to previously nonexistent final tags. The
+separate builder-signed provenance bundle and final GA re-verification remain
+mandatory; see `docs/ga-production-authorization.zh-CN.md`.
 
 Before authorization, run `backend/scripts/collect_ga_target_alerting.py` against
 the target Alertmanager. It must prove firing and resolved delivery to both

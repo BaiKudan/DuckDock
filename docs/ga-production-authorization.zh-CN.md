@@ -20,10 +20,88 @@ DuckDock 有两个刻意分离的门禁：
 export DUCKDOCK_GA_SOURCE_COMMIT='40-character Git commit'
 export DUCKDOCK_GA_BACKEND_IMAGE='registry.example.com/duckdock/backend@sha256:64-hex-digest'
 export DUCKDOCK_GA_FRONTEND_IMAGE='registry.example.com/duckdock/frontend@sha256:64-hex-digest'
+export DUCKDOCK_GA_BACKEND_ATTESTATION_IMAGE='registry.example.com/duckdock/backend@sha256:index-64-hex-digest'
+export DUCKDOCK_GA_FRONTEND_ATTESTATION_IMAGE='registry.example.com/duckdock/frontend@sha256:index-64-hex-digest'
 export DUCKDOCK_GA_CONTRACT_DIGEST='64-character frozen API contract SHA-256'
 ```
 
-3. 运行 `python3 scripts/verify-production-baseline.py`，保留 JSON；在目标
+3. 先建立发布供应链基础，不能把 CI 中“曾经请求过 provenance/SBOM”当成最终证据。
+   `v2.0.0` 必须是签名 tag，且 peeled commit 必须等于
+   `DUCKDOCK_GA_SOURCE_COMMIT`。由发布机构从
+   `ops/ga/release-provenance-trust-policy.example.json` 建立内容寻址策略，固定
+   builder signer、公钥、source repository、builder ID 和精确到
+   `refs/tags/v2.0.0` 的 workflow ref；builder identity/key 不得与四方审批人或外部
+   安全评估人复用。BuildKit 的 SLSA `builder.id` 可能包含具体 Actions run，不能把
+   example 或测试值当成真实值；必须从最终 registry attestation 读取，由发布机构
+   精确批准后再签原始 build report，禁止通配或前缀匹配。
+
+   受控 release workflow 为 backend/frontend 的最终 `@sha256` 镜像分别导出 SLSA
+   provenance v1、SPDX 2.3 SBOM 和机器可读漏洞扫描。归一化 SLSA 的唯一 subject
+   必须是对应镜像 repository/digest，并绑定同一 source/tag/commit、builder、workflow
+   run ID 和构建起止时间；扫描须在构建后 24 小时内完成、漏洞库不旧于 7 天，且无
+   open Critical/High。release job 的四份 SARIF 会以 90 天 Actions artifact 留存；
+   发布机构须下载 backend/frontend 原始文件，以内容摘要写入 `scout_sarif`，并按
+   `image-vulnerability-scan.example.json` 记录相同 SARIF driver/version、固定的
+   `critical,high` 过滤器和零结果。按 `build-provenance-report.example.json` 组合原始报告后，受控
+   builder 直接签署它：
+
+```bash
+git verify-tag v2.0.0 >/secure/evidence/v2.0.0-tag-verification.txt 2>&1
+test "$(git rev-parse 'refs/tags/v2.0.0^{}')" = "$DUCKDOCK_GA_SOURCE_COMMIT"
+git cat-file tag v2.0.0 >/secure/evidence/v2.0.0-tag-object.txt
+git archive --format=tar.gz --prefix=duckdock-2.0.0/ \
+  -o /secure/evidence/duckdock-2.0.0-source.tar.gz v2.0.0
+
+docker buildx imagetools inspect "$DUCKDOCK_GA_BACKEND_ATTESTATION_IMAGE" \
+  --format '{{json .Provenance.SLSA}}' >/secure/evidence/backend-buildkit-slsa-predicate.json
+docker buildx imagetools inspect "$DUCKDOCK_GA_FRONTEND_ATTESTATION_IMAGE" \
+  --format '{{json .Provenance.SLSA}}' >/secure/evidence/frontend-buildkit-slsa-predicate.json
+docker buildx imagetools inspect "$DUCKDOCK_GA_BACKEND_ATTESTATION_IMAGE" \
+  --format '{{json .SBOM.SPDX}}' >/secure/evidence/backend-buildkit-sbom-predicate.spdx.json
+docker buildx imagetools inspect "$DUCKDOCK_GA_FRONTEND_ATTESTATION_IMAGE" \
+  --format '{{json .SBOM.SPDX}}' >/secure/evidence/frontend-buildkit-sbom-predicate.spdx.json
+
+ssh-keygen -Y sign \
+  -f /release-authority/release-builder-key \
+  -n duckdock-release-build-provenance \
+  /secure/evidence/duckdock-2.0.0-build-report.json
+
+python backend/scripts/collect_ga_release_provenance.py \
+  --git-commit "$DUCKDOCK_GA_SOURCE_COMMIT" \
+  --backend-image "$DUCKDOCK_GA_BACKEND_IMAGE" \
+  --frontend-image "$DUCKDOCK_GA_FRONTEND_IMAGE" \
+  --contract-digest "$DUCKDOCK_GA_CONTRACT_DIGEST" \
+  --provenance-policy /release-authority/duckdock-release-provenance-policy.json \
+  --build-signer-identity release-builder@example.com \
+  --build-report /secure/evidence/duckdock-2.0.0-build-report.json \
+  --build-signature /secure/evidence/duckdock-2.0.0-build-report.json.sig \
+  --output /secure/evidence/duckdock-2.0.0-release-provenance.json
+```
+
+   CI summary 同时给出可部署的 linux/amd64 manifest digest 与承载 attestation 的
+   image-index digest；授权文件使用前者，build report 的 `attestation_image` 使用后者。
+   `imagetools` 的 `.Provenance.SLSA` 是 registry attestation predicate，作为
+   `registry_provenance` 原文件保留；按
+   `release-slsa-provenance.example.json` 加入唯一的 exact image subject 形成待签名
+   Statement v1。最终门禁要求 Statement 的 predicate 与 registry 导出逐字段相同，
+   不允许修改 configSource、builder、invocation 或时间；BuildKit 可选的
+   `resolvedDependencies`/`byproducts` 必须按原输出保留，不得人工增删。SPDX 同样把
+   registry 导出的原始 predicate 保存为 `registry_sbom`，再按
+   `release-sbom-spdx.example.json` 加入唯一的 exact image subject 形成 Statement v1；
+   默认生成器的 document name 可以是 `sbom`，真正的镜像绑定来自 Statement subject。
+   最终门禁要求 SPDX predicate 逐字段相同、格式为 2.3 且 package 非空；不满足时应
+   修复 SBOM generator 后重建镜像，禁止在导出后手工升级/补字段。空 `builder.id`
+   同样不可接受。`release-scout-sarif.example.json` 只是 SARIF 2.1.0 形状示例；正式
+   文件必须直接来自最终 Docker Scout 步骤。授权器会重读原始 SARIF，要求至少一个
+   有明确 driver/version 的 run、结果数为零，并验证归一化 scan 对同一文件的 SHA-256
+   引用；不能仅凭 Actions 作业显示绿色或手写零漏洞摘要。
+
+   将 collector 输出文件的路径、SHA-256 和 `observed_at` 写入授权文件
+   `release.provenance`。最终门禁会再次读取策略、allowed-signers、原始签名报告和
+   全部内容寻址 artifact，重读原始 SARIF、重算扫描统计并核对 wrapper 投影；tag/SLSA/SBOM/scan/镜像
+   交叉拼接、签名后修改、未批准 builder 或角色/公钥复用都会停在 `FOUNDATION`。
+
+4. 运行 `python3 scripts/verify-production-baseline.py`，保留 JSON；在目标
    Kubernetes overlay 中替换镜像、域名以及宽泛 egress，并做 server dry-run。
    然后用独立、短期、专用管理员 token 通过真实目标 HTTPS 仅调用只读 readiness
    endpoint（token 只放环境变量，报告不会保留）：
@@ -44,7 +122,7 @@ unset DUCKDOCK_GA_ADMIN_TOKEN
    `transport=network HTTPS against target`，且 API 检查时间与证据采集时间相差不
    超过五分钟。裸 `/ga-readiness` 响应、本地 HTTP 报告或上一候选镜像的报告均
    不能授权生产。若 API 不是 `READY`，collector 仍保留 BLOCKED 报告并退出 2。
-4. 由发布机构先从 `ops/ga/tls-trust-policy.example.json` 建立只读、内容寻址的 TLS
+5. 由发布机构先从 `ops/ga/tls-trust-policy.example.json` 建立只读、内容寻址的 TLS
    探测策略。策略固定外部探测执行人的精确 identity、公钥、probe/vantage ID 和
    全球可路由来源 CIDR；allowed-signers 禁止通配 principal 和跨 identity 公钥复用。
    探测必须从策略批准的目标网络之外执行，不能在目标集群或开发机内部冒充公网视角。
@@ -100,7 +178,7 @@ python backend/scripts/collect_ga_target_tls.py \
    allowed-signers、原始 JSON 和签名，重算证书剩余天数、TLS 协议集合、HSTS max-age
    与旧协议是否真的未协商，并核对 wrapper/授权文件投影。旧 v1/v2、自报布尔值、
    未签名报告、未批准来源 CIDR、local-validation 或其他候选版本报告均不能授权生产。
-5. 在专用 performance Namespace 创建限时 Reporter/User token，通过环境变量运行
+6. 在专用 performance Namespace 创建限时 Reporter/User token，通过环境变量运行
    真实 HTTPS 容量门禁（token 不得写入命令行或报告）。先由发布机构从
    `ops/ga/capacity-trust-policy.example.json` 建立只读、内容寻址的容量策略；
    策略固定托管 MySQL provider、必查计数器与增长/积压/复制延迟阈值，并分别授权
@@ -188,7 +266,7 @@ python backend/scripts/collect_ga_target_capacity.py \
    数据文件是否达到批准的增长下限，积压/复制延迟是否在阈值内，以及清理是否完成。
    仅有 HTTP 201 数、人工 DBA 摘要、本机 ASGI + MySQL 报告、旧 v2 wrapper 或上一
    候选版本报告都不能替代当前 release 的真实目标 v3 证据。
-6. 先运行本地参考演练，确认发布镜像能在受限安全上下文启动、三类无状态服务
+7. 先运行本地参考演练，确认发布镜像能在受限安全上下文启动、三类无状态服务
    正常跨域、节点 drain 时持续可用、Beat 能迁移且故障域返回后重新均衡：
 
 ```bash
@@ -282,7 +360,7 @@ python backend/scripts/collect_ga_target_ha.py \
    门禁还会重读状态服务策略、provider/verifier 原始 JSON 与签名，重算故障域、事件
    对应、数据连续性和时间线。旧 v1、单方 Operations 汇总、共享密钥、仅有 YAML 的
    声明、手填 Pod 名称或清理不完整的报告都会被拒绝。
-7. 使用 `collect_ga_target_secrets.py` 在目标 Kubernetes 环境采集
+8. 使用 `collect_ga_target_secrets.py` 在目标 Kubernetes 环境采集
    `duckdock-ga-secrets-evidence-v2`，不能手填 PASS 模板。先由发布机构从
    `ops/ga/secrets-trust-policy.example.json` 建立只读、内容寻址的信任策略；策略
    固定批准的 Secret Manager、`application-signing`/`database`/`object-store`
@@ -340,7 +418,7 @@ python backend/scripts/collect_ga_target_secrets.py \
    before/after 差异及时间线；旧 v1、自报布尔值、预先存在的 receipt、provider
    代替 verifier 签名、未滚动 Pod 或包含 secret/token/password 值都不能通过。
    opaque version/receipt/audit ID 只用于关联外部系统，不得放入任何 credential 值。
-8. 使用 `collect_ga_target_network.py` 采集待签名的
+9. 使用 `collect_ga_target_network.py` 采集待签名的
    `duckdock-ga-network-probe-v3`，再由
    `collect_ga_target_network_evidence.py` 组合最终
    `duckdock-ga-network-evidence-v3`，不能手填 PASS wrapper。发布机构先从
@@ -413,7 +491,7 @@ python backend/scripts/collect_ga_target_network_evidence.py \
    最终 v3 文件必须先于第 6
    步的目标 HA disruption 生成，并由 HA v2 报告内容寻址绑定。配置文件、server
    dry-run、本地 kind 回执或旧 v1 报告都不是目标运行证据。
-9. 使用 `collect_ga_target_recovery.py` 从异地、加密、不可变备份介质对明确命名的
+10. 使用 `collect_ga_target_recovery.py` 从异地、加密、不可变备份介质对明确命名的
    非生产恢复目标做破坏性恢复，输出 `duckdock-ga-recovery-evidence-v2`。`backup`
    必须引用 `seal-backup.sh` 生成的原始 `manifest.json`、`.sig`、备份 signer identity
    与 allowed-signers；采集器和生产门禁都会在 namespace `duckdock-backup` 实际验签，
@@ -476,7 +554,7 @@ python backend/scripts/collect_ga_target_recovery.py \
    independent verification completed_at` 重算 RPO/RTO。旧 v1、手填 RPO/RTO、短于
    30 天的 Object Lock、生产/恢复 target 相同、角色/公钥复用、预先存在的 receipt、
    自报 `signature_verified` 或修改签名后内容都不能通过。
-10. 使用 `collect_ga_target_alerting.py` 主动触发并恢复唯一的目标 Alertmanager
+11. 使用 `collect_ga_target_alerting.py` 主动触发并恢复唯一的目标 Alertmanager
     告警。发布机构先从 `ops/ga/alerting-trust-policy.example.json` 建立独立、只读、
     内容寻址的告警信任策略：`delivery_identities` 是能从通知供应商取得真实投递回执
     的服务身份，`oncall_schedules` 将命名 schedule 映射到实际值班人员身份；两类
@@ -535,7 +613,7 @@ python backend/scripts/collect_ga_target_alerting.py \
     的 receipt、自报 `signature_verified` 或 delivery 服务代替人签 ack 均不能通过。
     若任一阶段失败，采集器会尽力自动 resolve 已注入的告警；重试必须使用新的
     exercise ID 和全新的 receipt/signature 路径，不能复用失败演练留下的文件。
-11. 委托与项目实现方、四方审批人均独立的安全机构按指定范围执行渗透测试和人工
+12. 委托与项目实现方、四方审批人均独立的安全机构按指定范围执行渗透测试和人工
     代码审查，关闭并复测全部 Critical/High。组织发布策略必须先升级为
     `duckdock-ga-approval-policy-v2`，在 `independent_security_assessors` 中把机构名称
     映射到评估方精确 identity，并将其公钥放入与四方审批共享的 allowed-signers；
@@ -568,11 +646,11 @@ python backend/scripts/collect_ga_independent_security.py \
     v2 采集器和最终门禁都只信任显式传入的组织策略，重新验签原始 JSON、重算 PDF
     digest 和逐级 finding 统计，并核对 wrapper 投影。自选 allowed-signers、隐藏 High、
     修改投影或签名后改 PDF 均不能通过。
-12. 为每份证据填绝对或授权文件相对路径、SHA-256 与 UTC 时间。Readiness、TLS、
+13. 为每份证据填绝对或授权文件相对路径、SHA-256 与 UTC 时间。Readiness、TLS、
     Secrets、网络、告警、恢复、容量、HA 和独立安全报告内部 `observed_at` 必须与
     各自授权证据时间相同，且 `scope` 只能是 `target-production`。本地 dev/kind
     回执不能转换成该 scope。
-13. 由组织发布机构（不能是任一审批者临时自建；且必须在 HA 状态服务和第 11 步
+14. 由组织发布机构（不能是任一审批者临时自建；且必须在 HA 状态服务和第 12 步
     独立安全证据签署前完成）从
     `ops/ga/approval-policy.example.json` 建立受控审批策略。策略必须使用
     `duckdock-ga-approval-policy-v2`，为 Product、Architecture、Security、
@@ -591,7 +669,7 @@ shasum -a 256 /release-authority/duckdock-ga-approval-policy.json
 # 将策略摘要和 policy_id 填入 authorization.json
 ```
 
-14. 使用受控策略先运行不可绕过的预签字门禁。授权文件的 `approvals` 可以暂为空，
+15. 使用受控策略先运行不可绕过的预签字门禁。授权文件的 `approvals` 可以暂为空，
     但发布基础、九类目标证据、外部安全签名及所有内容摘要必须已经完整：
 
 ```bash

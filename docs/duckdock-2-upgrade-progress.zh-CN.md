@@ -530,6 +530,7 @@ G6 技术候选已于 2026-08-04 完成：冻结 contract `2.0.0-ga`，真实 He
 | 2026-08-04 | 3.19 | 完成 E07 Identity/Security：provider-bound SCIM credential、目录 disable 原子 offboarding、DEVICE/SERVICE workload identity、key rotation 与 content-safe Audit/Outbox；应用 revision 0061 | Codex | 真实 Hermes Runtime #9：停用前 heartbeat 200，停用后登录/旧 credential 401；自动 Handover case、rotation sequence 2；59 focused tests；[E07 evidence](../specs/013-identity-security/evidence/identity-security-e07-20260804.md) |
 | 2026-08-04 | 3.20 | 完成 E08 Observability/Ops：content-safe route metrics、GA SLO、incident lifecycle、Prometheus profile/rules 与真实 MySQL+MinIO backup→delete→restore；应用 revision 0062 | Codex | RecoveryDrill PASSED，RPO=0s/RTO=1s；Prometheus target/rules healthy；`/operations` 浏览器通过；精确修复 55 个旧无效 E2E 邮箱且保留业务关系；[E08 evidence](../specs/014-observability-ops/evidence/observability-ops-e08-20260804.md) |
 | 2026-08-04 | 3.21 | 完成 E09/G6 技术候选：冻结 OpenAPI v2 `2.0.0-ga`、v1 2.x compatibility headers、14 项实时 GA Readiness 与 Operations UI；用真实 Hermes/credential/heartbeat/timeline/policy traffic 完成最终门禁 | Codex | GA=`READY`（14/14 PASS），SLO=`HEALTHY`（81 samples/0 errors），contract SHA-256 `60146a…6357`；backend 1005 passed/19 skipped，frontend 53 passed、lint 0 error、build PASS，Ruff/Alembic/OpenAPI drift clean；[G6 evidence](../specs/015-ga-candidate/evidence/ga-candidate-e09-20260804.md) |
+| 2026-08-06 | 3.22 | 完成 PGA-09 最终发布供应链 FOUNDATION：签名 tag/full-gate GHCR 候选→全扫描→原始 SARIF 留存→拒绝覆盖 final tag 路径、独立 builder 信任策略和签名 report、tag/source archive、SLSA v1、SPDX 2.3、SARIF/漏洞统计复验，并把 provenance 引用绑定四方审批摘要 | Codex | backend 1182 passed/19 skipped；生产授权专项 82 passed；生产基线 21/21 PASS；Ruff/compile/YAML/JSON clean；真实 `v2.0.0` tag/registry bundle 仍待发布机构执行；[evidence](../specs/016-ga-production-authorization/evidence/release-provenance-gate-20260806.md) |
 
 ## 12. Sprint 更新模板
 
@@ -578,14 +579,14 @@ G6 技术候选已于 2026-08-04 完成：冻结 contract `2.0.0-ga`，真实 He
 
 ## 13. 当前行动
 
-截至 2026-08-04：
+截至 2026-08-06：
 
 1. S0～S11、E00～E09、M0～M6 的既定技术范围已完成，加权技术进度 `100.0%`。E06/E07 已关闭 Handover/Identity seam，E08 已关闭 metrics/SLO/recovery，E09 已冻结 API v2 contract 并得到 GA Readiness=`READY`。下一步是用户在当前 dev 环境进行人工产品验证与合理性讨论。Runtime Experience 下发仍需另行批准，并必须具备目标绑定、独立审批、回执和回滚；当前 ACTIVE 仍仅代表控制面状态。
 2. S1-B/S1-C 的 resolver、backfill、Namespace 强制新写、跨租户关系拒绝和 typed Evidence link 已保持兼容。
 3. S1-D/EF-04 已完成：逐 ID remediation、原子审计 apply/replay、完整 contract preflight 与 revision 0029 均已落地。
 4. Owner 将目标开发库的 275 条 blocker 判定为可丢弃测试数据；系统在写静默窗口前完成全库备份校验，之后按精确表/count 清理并保留零 blocker 报告。生产或来源不明的数据不继承该例外。
 5. revision 0029 已在开发库和隔离 MySQL 迁移夹具通过：五个 Foundation `namespace_id` 为 non-null，四个 tenant-scoped indexes 和 Binding tenant-key unique constraint 生效，`alembic check` clean。
-6. 当前质量门：backend `1005 passed, 19 skipped, 3 warnings`；真实开发 MySQL head=`0062`、`alembic check` clean；frontend `53 passed`、lint 0 error（9 个既有 warning）且 production build 通过；Ruff clean；mypy `82=baseline` 且 E05～E09 新增错误为 0；OpenAPI v2 snapshot drift clean；Langfuse v4 compatibility adapter 保持解耦。
+6. 当前质量门：backend `1182 passed, 19 skipped, 3 warnings`；真实开发 MySQL head=`0062`、`alembic check` clean；frontend `56 passed`、lint 0 warning 且 production build 通过；Ruff clean；mypy `81≤82`；OpenAPI v2 snapshot drift clean；Langfuse v4 compatibility adapter 保持解耦；生产静态基线 21/21 PASS。
 7. 默认 Compose 的 backend、worker、beat、MySQL、Redis、MinIO 与 frontend 健康；可选 Langfuse Web/Worker、Postgres、ClickHouse、OTel Collector 与 Prometheus 均在本地运行，Prometheus target/rules healthy。真实恢复演练与 Hermes GA traffic 已完成，当前 `/operations` GA 状态为 `READY`。
 8. EF-05/FND-020～028 已完成：revision 0030 提供不可变 `AgentDeployment` / `DeploymentComponent` inventory、生命周期、审计和 Namespace RBAC 管理入口。
 9. EF-06 已完成 FND-030/032～034/037～039：revision 0031 提供 metadata-only `AgentSession` / `AgentRun`、canonical envelope hash、幂等 replay/conflict 和终态并发保护。
@@ -628,3 +629,4 @@ G6 技术候选已于 2026-08-04 完成：冻结 contract `2.0.0-ga`，真实 He
 46. E07 Identity/Security 已完成：revision 0061 提供 SCIM lifecycle、DEVICE/SERVICE identity、原子 access revoke/handover 和 key rotation；真实目录等价流程验证停用后登录与旧 credential 均为 401；证据见 [E07](../specs/013-identity-security/evidence/identity-security-e07-20260804.md)。
 47. E08 Observability/Ops 已完成：revision 0062 提供 content-safe Prometheus metrics、SLO/incident 和不可变 recovery receipt；真实 MySQL/MinIO restore 得到 RPO=0s/RTO=1s，Prometheus target/rules healthy；证据见 [E08](../specs/014-observability-ops/evidence/observability-ops-e08-20260804.md)。
 48. E09/G6 技术候选已完成：contract `2.0.0-ga` drift clean，v1 在 2.x 兼容；真实 Hermes traffic 得到 SLO HEALTHY，14 项 GA checks 全部 PASS；全量 backend 1005 passed、frontend 53 passed；证据见 [E09/G6](../specs/015-ga-candidate/evidence/ga-candidate-e09-20260804.md)。
+49. PGA-09 最终发布供应链 FOUNDATION 已完成仓库侧实现：受控 `v2.0.0` tag 只有在 backend/frontend/E2E/Compose 全通过后才推送带 provenance/SBOM 的 commit 候选，四镜像 Critical/High 扫描全通过、原始 SARIF 已留存且最终 tag 尚不存在后才晋升；独立 builder policy/report 绑定 tag/source/SLSA/SPDX registry predicate/Statement、原始 SARIF、scan 和精确镜像，最终授权器重验全部文件并禁止 builder 与审批/评估角色复用 identity/key。1182 项后端回归、82 项授权专项与 21 项生产基线通过；真实最终 tag、registry bundle、目标证据和组织签字仍待外部执行；证据见 [PGA-09](../specs/016-ga-production-authorization/evidence/release-provenance-gate-20260806.md)。

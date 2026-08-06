@@ -1,0 +1,27 @@
+{
+  "_type": "https://in-toto.io/Statement/v1",
+  "subject": [
+    {
+      "name": "pkg:docker/registry.example.invalid/duckdock/backend@2.0.0?platform=linux%2Famd64",
+      "digest": {"sha256": "__CHANGE_ME_64_HEX__"}
+    }
+  ],
+  "predicateType": "https://spdx.dev/Document",
+  "predicate": {
+    "spdxVersion": "SPDX-2.3",
+    "dataLicense": "CC0-1.0",
+    "SPDXID": "SPDXRef-DOCUMENT",
+    "name": "sbom",
+    "documentNamespace": "https://duckdock.example.invalid/spdx/__CHANGE_ME_DOCUMENT_ID__",
+    "creationInfo": {
+      "created": "2026-08-06T00:15:00Z",
+      "creators": ["Tool: __CHANGE_ME_SBOM_GENERATOR_AND_VERSION__"]
+    },
+    "packages": [
+      {
+        "name": "duckdock-backend",
+        "SPDXID": "SPDXRef-Package-duckdock-backend"
+      }
+    ]
+  }
+}

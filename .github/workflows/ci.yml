@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main
+    tags:
+      - v2.0.0
   pull_request:
     branches:
       - main
@@ -329,83 +331,217 @@ jobs:
   release-images:
     name: Release images and vulnerability gate
     runs-on: ubuntu-latest
-    needs: [backend, frontend]
+    needs: [backend, frontend, e2e, compose]
+    permissions:
+      contents: read
+      packages: write
 
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify final signed tag
+        if: github.ref == 'refs/tags/v2.0.0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_object="$(git rev-parse refs/tags/v2.0.0)"
+          test "$(git cat-file -t "$tag_object")" = tag
+          test "$(git rev-parse 'refs/tags/v2.0.0^{}')" = "$GITHUB_SHA"
+          gh api "repos/$GITHUB_REPOSITORY/git/tags/$tag_object" > /tmp/v2.0.0-tag-verification.json
+          test "$(jq -r '.verification.verified' /tmp/v2.0.0-tag-verification.json)" = true
+
+      - name: Log in to GHCR for final tag
+        if: github.ref == 'refs/tags/v2.0.0'
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s' '${{ github.token }}' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Build backend release image with provenance and SBOM
+        id: build_backend
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
-          context: backend
-          file: backend/Dockerfile
-          load: true
-          tags: duckdock-backend:2.0.0-rc.1
-          provenance: mode=max
+          context: "{{defaultContext}}:backend"
+          file: Dockerfile
+          platforms: linux/amd64
+          load: ${{ github.ref != 'refs/tags/v2.0.0' }}
+          push: ${{ github.ref == 'refs/tags/v2.0.0' }}
+          tags: ${{ github.ref == 'refs/tags/v2.0.0' && format('ghcr.io/baikudan/duckdock-backend:build-{0}', github.sha) || 'duckdock-backend:2.0.0-rc.1' }}
+          provenance: mode=max,version=v1
           sbom: true
 
       - name: Scan backend release image
-        uses: docker/scout-action@481412c8b8de36d0f79e85aa382c60397466feb6 # v1
+        uses: docker/scout-action@7c6b6c3f7844478ace1ffd4e7aef649053d1f87d # v1.24.0
         with:
           command: cves
-          image: local://duckdock-backend:2.0.0-rc.1
+          image: ${{ github.ref == 'refs/tags/v2.0.0' && format('ghcr.io/baikudan/duckdock-backend@{0}', steps.build_backend.outputs.digest) || 'local://duckdock-backend:2.0.0-rc.1' }}
           only-severities: critical,high
           exit-code: true
+          sarif-file: backend-scout.sarif.json
 
       - name: Build frontend release image with provenance and SBOM
+        id: build_frontend
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
-          context: frontend
-          file: frontend/Dockerfile.prod
-          load: true
-          tags: duckdock-frontend:2.0.0-rc.1
-          provenance: mode=max
+          context: "{{defaultContext}}:frontend"
+          file: Dockerfile.prod
+          platforms: linux/amd64
+          load: ${{ github.ref != 'refs/tags/v2.0.0' }}
+          push: ${{ github.ref == 'refs/tags/v2.0.0' }}
+          tags: ${{ github.ref == 'refs/tags/v2.0.0' && format('ghcr.io/baikudan/duckdock-frontend:build-{0}', github.sha) || 'duckdock-frontend:2.0.0-rc.1' }}
+          provenance: mode=max,version=v1
           sbom: true
 
       - name: Scan frontend release image
-        uses: docker/scout-action@481412c8b8de36d0f79e85aa382c60397466feb6 # v1
+        uses: docker/scout-action@7c6b6c3f7844478ace1ffd4e7aef649053d1f87d # v1.24.0
         with:
           command: cves
-          image: local://duckdock-frontend:2.0.0-rc.1
+          image: ${{ github.ref == 'refs/tags/v2.0.0' && format('ghcr.io/baikudan/duckdock-frontend@{0}', steps.build_frontend.outputs.digest) || 'local://duckdock-frontend:2.0.0-rc.1' }}
           only-severities: critical,high
           exit-code: true
+          sarif-file: frontend-scout.sarif.json
 
       - name: Build TLS gateway with provenance and SBOM
+        id: build_tls_gateway
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
-          context: ops/tls-gateway
-          file: ops/tls-gateway/Dockerfile
-          load: true
-          tags: duckdock-tls-gateway:2.0.0-rc.1
-          provenance: mode=max
+          context: "{{defaultContext}}:ops/tls-gateway"
+          file: Dockerfile
+          platforms: linux/amd64
+          load: ${{ github.ref != 'refs/tags/v2.0.0' }}
+          push: ${{ github.ref == 'refs/tags/v2.0.0' }}
+          tags: ${{ github.ref == 'refs/tags/v2.0.0' && format('ghcr.io/baikudan/duckdock-tls-gateway:build-{0}', github.sha) || 'duckdock-tls-gateway:2.0.0-rc.1' }}
+          provenance: mode=max,version=v1
           sbom: true
 
       - name: Scan TLS gateway
-        uses: docker/scout-action@481412c8b8de36d0f79e85aa382c60397466feb6 # v1
+        uses: docker/scout-action@7c6b6c3f7844478ace1ffd4e7aef649053d1f87d # v1.24.0
         with:
           command: cves
-          image: local://duckdock-tls-gateway:2.0.0-rc.1
+          image: ${{ github.ref == 'refs/tags/v2.0.0' && format('ghcr.io/baikudan/duckdock-tls-gateway@{0}', steps.build_tls_gateway.outputs.digest) || 'local://duckdock-tls-gateway:2.0.0-rc.1' }}
           only-severities: critical,high
           exit-code: true
+          sarif-file: tls-gateway-scout.sarif.json
 
       - name: Build patched Alertmanager with provenance and SBOM
+        id: build_alertmanager
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
-          context: ops/alertmanager
-          file: ops/alertmanager/Dockerfile
-          load: true
-          tags: duckdock-alertmanager:0.33.1-duckdock.1
-          provenance: mode=max
+          context: "{{defaultContext}}:ops/alertmanager"
+          file: Dockerfile
+          platforms: linux/amd64
+          load: ${{ github.ref != 'refs/tags/v2.0.0' }}
+          push: ${{ github.ref == 'refs/tags/v2.0.0' }}
+          tags: ${{ github.ref == 'refs/tags/v2.0.0' && format('ghcr.io/baikudan/duckdock-alertmanager:build-{0}', github.sha) || 'duckdock-alertmanager:0.33.1-duckdock.1' }}
+          provenance: mode=max,version=v1
           sbom: true
 
       - name: Scan patched Alertmanager
-        uses: docker/scout-action@481412c8b8de36d0f79e85aa382c60397466feb6 # v1
+        uses: docker/scout-action@7c6b6c3f7844478ace1ffd4e7aef649053d1f87d # v1.24.0
         with:
           command: cves
-          image: local://duckdock-alertmanager:0.33.1-duckdock.1
+          image: ${{ github.ref == 'refs/tags/v2.0.0' && format('ghcr.io/baikudan/duckdock-alertmanager@{0}', steps.build_alertmanager.outputs.digest) || 'local://duckdock-alertmanager:0.33.1-duckdock.1' }}
           only-severities: critical,high
           exit-code: true
+          sarif-file: alertmanager-scout.sarif.json
+
+      - name: Retain final vulnerability scan reports
+        id: upload_scan_reports
+        if: github.ref == 'refs/tags/v2.0.0'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: duckdock-v2.0.0-scout-sarif-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            backend-scout.sarif.json
+            frontend-scout.sarif.json
+            tls-gateway-scout.sarif.json
+            alertmanager-scout.sarif.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Promote scanned image indexes to previously unused final tags
+        if: github.ref == 'refs/tags/v2.0.0'
+        shell: bash
+        run: |
+          set -euo pipefail
+          final_images=(
+            ghcr.io/baikudan/duckdock-backend:2.0.0
+            ghcr.io/baikudan/duckdock-frontend:2.0.0
+            ghcr.io/baikudan/duckdock-tls-gateway:2.0.0
+            ghcr.io/baikudan/duckdock-alertmanager:0.33.1-duckdock.1
+          )
+          for final_image in "${final_images[@]}"; do
+            if docker buildx imagetools inspect "$final_image" \
+              >/tmp/duckdock-final-tag-check.txt 2>&1; then
+              echo "final tag already exists; refusing overwrite: $final_image" >&2
+              exit 1
+            fi
+            if ! grep -Eqi 'manifest unknown|name unknown|not found|404' \
+              /tmp/duckdock-final-tag-check.txt; then
+              cat /tmp/duckdock-final-tag-check.txt >&2
+              echo "could not prove final tag is absent: $final_image" >&2
+              exit 1
+            fi
+          done
+          docker buildx imagetools create \
+            --tag ghcr.io/baikudan/duckdock-backend:2.0.0 \
+            "ghcr.io/baikudan/duckdock-backend@${{ steps.build_backend.outputs.digest }}"
+          docker buildx imagetools create \
+            --tag ghcr.io/baikudan/duckdock-frontend:2.0.0 \
+            "ghcr.io/baikudan/duckdock-frontend@${{ steps.build_frontend.outputs.digest }}"
+          docker buildx imagetools create \
+            --tag ghcr.io/baikudan/duckdock-tls-gateway:2.0.0 \
+            "ghcr.io/baikudan/duckdock-tls-gateway@${{ steps.build_tls_gateway.outputs.digest }}"
+          docker buildx imagetools create \
+            --tag ghcr.io/baikudan/duckdock-alertmanager:0.33.1-duckdock.1 \
+            "ghcr.io/baikudan/duckdock-alertmanager@${{ steps.build_alertmanager.outputs.digest }}"
+
+      - name: Resolve deployable platform image digests
+        id: platform_digests
+        if: github.ref == 'refs/tags/v2.0.0'
+        shell: bash
+        run: |
+          set -euo pipefail
+          platform_digest() {
+            docker buildx imagetools inspect "$1" --raw | jq -er '
+              [.manifests[]
+                | select(.platform.os == "linux" and .platform.architecture == "amd64")
+                | select((.annotations["vnd.docker.reference.type"] // "") != "attestation-manifest")
+                | .digest]
+              | if length == 1 then .[0] else error("expected exactly one linux/amd64 image manifest") end'
+          }
+          echo "backend=$(platform_digest ghcr.io/baikudan/duckdock-backend:2.0.0)" >> "$GITHUB_OUTPUT"
+          echo "frontend=$(platform_digest ghcr.io/baikudan/duckdock-frontend:2.0.0)" >> "$GITHUB_OUTPUT"
+          echo "tls_gateway=$(platform_digest ghcr.io/baikudan/duckdock-tls-gateway:2.0.0)" >> "$GITHUB_OUTPUT"
+          echo "alertmanager=$(platform_digest ghcr.io/baikudan/duckdock-alertmanager:0.33.1-duckdock.1)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish immutable final coordinates
+        if: github.ref == 'refs/tags/v2.0.0'
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo '## DuckDock 2.0.0 immutable images'
+            echo
+            echo '```text'
+            echo "git_commit=$GITHUB_SHA"
+            echo "backend_image=ghcr.io/baikudan/duckdock-backend@${{ steps.platform_digests.outputs.backend }}"
+            echo "backend_attestation_image=ghcr.io/baikudan/duckdock-backend@${{ steps.build_backend.outputs.digest }}"
+            echo "frontend_image=ghcr.io/baikudan/duckdock-frontend@${{ steps.platform_digests.outputs.frontend }}"
+            echo "frontend_attestation_image=ghcr.io/baikudan/duckdock-frontend@${{ steps.build_frontend.outputs.digest }}"
+            echo "tls_gateway_image=ghcr.io/baikudan/duckdock-tls-gateway@${{ steps.platform_digests.outputs.tls_gateway }}"
+            echo "tls_gateway_attestation_image=ghcr.io/baikudan/duckdock-tls-gateway@${{ steps.build_tls_gateway.outputs.digest }}"
+            echo "alertmanager_image=ghcr.io/baikudan/duckdock-alertmanager@${{ steps.platform_digests.outputs.alertmanager }}"
+            echo "alertmanager_attestation_image=ghcr.io/baikudan/duckdock-alertmanager@${{ steps.build_alertmanager.outputs.digest }}"
+            echo "scan_artifact_digest=${{ steps.upload_scan_reports.outputs.artifact-digest }}"
+            echo "scan_artifact_url=${{ steps.upload_scan_reports.outputs.artifact-url }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
