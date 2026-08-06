@@ -1,5 +1,5 @@
 {
-  "schema_version": "duckdock-ga-independent-security-evidence-v2",
+  "schema_version": "duckdock-ga-independent-security-evidence-v3",
   "scope": "target-production",
   "status": "PASS",
   "passed": true,
@@ -17,6 +17,8 @@
   "open_high": 0,
   "assessment": {
     "assessment_id": "__CHANGE_ME_ASSESSMENT_ID__",
+    "engagement_id": "__CHANGE_ME_ENGAGEMENT_ID__",
+    "engagement_sha256": "__CHANGE_ME_SIGNED_ENGAGEMENT_64_HEX__",
     "scope": [
       "application-and-api",
       "identity-and-access",
@@ -52,16 +54,12 @@
     "allowed_signers_path": "__CHANGE_ME_RELEASE_AUTHORITY_ALLOWED_SIGNERS_PATH__",
     "allowed_signers_sha256": "__CHANGE_ME_64_HEX__"
   },
-  "signed_assessment": {
-    "schema_version": "duckdock-ga-security-assessment-report-v1",
-    "assessment_id": "__CHANGE_ME_ASSESSMENT_ID__",
+  "authorized_engagement": {
+    "schema_version": "duckdock-ga-security-assessment-engagement-v1",
+    "engagement_id": "__CHANGE_ME_ENGAGEMENT_ID__",
+    "security_authorizer_identity": "__CHANGE_ME_SECURITY_ROLE_IDENTITY__",
     "provider": "__CHANGE_ME_INDEPENDENT_ASSESSOR_PROVIDER__",
     "assessor_identity": "__CHANGE_ME_INDEPENDENT_ASSESSOR_SIGNER_IDENTITY__",
-    "independence": {
-      "independent_of_implementation": true,
-      "conflict_check_completed": true,
-      "implementation_contributors": 0
-    },
     "target_environment": "__CHANGE_ME_TARGET_ID__",
     "source_commit": "__CHANGE_ME_40_HEX_GIT_COMMIT__",
     "images": {
@@ -77,6 +75,95 @@
       "agent-security"
     ],
     "methodologies": ["penetration-test", "manual-code-review", "dependency-analysis"],
+    "authorization_window": {
+      "starts_at": "2026-07-14T00:00:00Z",
+      "expires_at": "2026-08-05T00:00:00Z"
+    },
+    "permitted_sources": {
+      "cidrs": ["__CHANGE_ME_CANONICAL_NON_WILDCARD_SOURCE_CIDR__"],
+      "system_ids": ["__CHANGE_ME_ASSESSOR_SYSTEM_ID__"]
+    },
+    "test_account_ids": ["__CHANGE_ME_NONSECRET_TEST_ACCOUNT_ID__"],
+    "safety": {
+      "prohibited_actions": [
+        "denial-of-service",
+        "destructive-data-modification",
+        "physical-security-testing",
+        "production-data-exfiltration",
+        "persistence-or-backdoors",
+        "social-engineering",
+        "third-party-systems-outside-target"
+      ],
+      "stop_authorities": ["Operations", "Security"],
+      "emergency_contacts": [
+        "__CHANGE_ME_SECURITY_EMERGENCY_CONTACT__",
+        "__CHANGE_ME_OPERATIONS_EMERGENCY_CONTACT__"
+      ],
+      "stop_acknowledgement_sla_minutes": 15
+    },
+    "data_handling": {
+      "artifacts_encrypted_at_rest": true,
+      "secret_material_recording_allowed": false,
+      "production_data_retention_allowed": false,
+      "deletion_attestation_required": true,
+      "delete_by": "2026-09-04T00:00:00Z"
+    },
+    "deliverables": {
+      "signed_machine_readable_report": true,
+      "final_pdf": true,
+      "finding_level_evidence": true,
+      "critical_high_retest_required": true,
+      "deletion_attestation": true
+    },
+    "authorized_at": "2026-07-13T00:00:00Z",
+    "signed_evidence": {
+      "path": "__CHANGE_ME_SIGNED_ENGAGEMENT_JSON_PATH__",
+      "sha256": "__CHANGE_ME_SIGNED_ENGAGEMENT_64_HEX__",
+      "signature_path": "__CHANGE_ME_ENGAGEMENT_SIGNATURE_PATH__",
+      "signer_identity": "__CHANGE_ME_SECURITY_ROLE_IDENTITY__"
+    }
+  },
+  "signed_assessment": {
+    "schema_version": "duckdock-ga-security-assessment-report-v2",
+    "assessment_id": "__CHANGE_ME_ASSESSMENT_ID__",
+    "provider": "__CHANGE_ME_INDEPENDENT_ASSESSOR_PROVIDER__",
+    "assessor_identity": "__CHANGE_ME_INDEPENDENT_ASSESSOR_SIGNER_IDENTITY__",
+    "independence": {
+      "independent_of_implementation": true,
+      "conflict_check_completed": true,
+      "implementation_contributors": 0
+    },
+    "target_environment": "__CHANGE_ME_TARGET_ID__",
+    "source_commit": "__CHANGE_ME_40_HEX_GIT_COMMIT__",
+    "images": {
+      "backend": {"name": "registry.example.invalid/duckdock/backend@sha256:__CHANGE_ME_64_HEX__"},
+      "frontend": {"name": "registry.example.invalid/duckdock/frontend@sha256:__CHANGE_ME_64_HEX__"}
+    },
+    "contract_digest": "aa260f301acc5c3a8004d14980952a03ce0197f9d70dcdd78cd62e986c3b1a83",
+    "engagement": {
+      "engagement_id": "__CHANGE_ME_ENGAGEMENT_ID__",
+      "sha256": "__CHANGE_ME_SIGNED_ENGAGEMENT_64_HEX__"
+    },
+    "scope": [
+      "application-and-api",
+      "identity-and-access",
+      "kubernetes-infrastructure",
+      "supply-chain",
+      "agent-security"
+    ],
+    "methodologies": ["penetration-test", "manual-code-review", "dependency-analysis"],
+    "execution_identity": {
+      "source_cidrs": ["__CHANGE_ME_CANONICAL_NON_WILDCARD_SOURCE_CIDR__"],
+      "system_ids": ["__CHANGE_ME_ASSESSOR_SYSTEM_ID__"],
+      "test_account_ids": ["__CHANGE_ME_NONSECRET_TEST_ACCOUNT_ID__"]
+    },
+    "data_handling_attestation": {
+      "working_evidence_encrypted_at_rest": true,
+      "secret_material_recorded": false,
+      "production_data_retained": false,
+      "working_evidence_deleted": true,
+      "deleted_at": "2026-08-03T23:00:00Z"
+    },
     "started_at": "2026-07-15T00:00:00Z",
     "completed_at": "2026-08-04T00:00:00Z",
     "findings": [

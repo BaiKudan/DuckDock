@@ -16,6 +16,7 @@ import pytest
 import scripts.archive_ga_authorized_bundle as authorized_bundle_archiver
 import scripts.authorize_ga_publication as ga_publication_authorizer
 import scripts.close_ga_execution_campaign as execution_campaign_closer
+import scripts.collect_ga_independent_security as security_assessment_collector
 import scripts.collect_ga_release_provenance as release_provenance_collector
 import scripts.inspect_ga_execution_campaign as execution_campaign_inspector
 import scripts.prepare_ga_execution_campaign as execution_campaign_preparer
@@ -59,6 +60,8 @@ from scripts.verify_ga_production_authorization import (
     main as verify_main,
 )
 from scripts.ga_security_assessment import (
+    ASSESSMENT_ENGAGEMENT_SCHEMA_VERSION,
+    ASSESSMENT_ENGAGEMENT_SIGNATURE_NAMESPACE,
     ASSESSMENT_REPORT_SCHEMA_VERSION,
     ASSESSMENT_SIGNATURE_NAMESPACE,
     FINDING_SEVERITIES,
@@ -2369,6 +2372,102 @@ def _document(tmp_path: Path, now: datetime) -> dict:
         check=True,
     )
     assessor_identity = "assessor@independent-security.example"
+    security_authorizer_identity = "security@example.com"
+    security_authorizer_key = tmp_path / "security_key"
+    subprocess.run(
+        [
+            "ssh-keygen",
+            "-q",
+            "-t",
+            "ed25519",
+            "-N",
+            "",
+            "-f",
+            str(security_authorizer_key),
+        ],
+        check=True,
+    )
+    raw_engagement = {
+        "schema_version": ASSESSMENT_ENGAGEMENT_SCHEMA_VERSION,
+        "engagement_id": "ISL-DD-2026-08-ROE",
+        "security_authorizer_identity": security_authorizer_identity,
+        "provider": "Independent Security Lab",
+        "assessor_identity": assessor_identity,
+        "target_environment": "customer-production",
+        "source_commit": commit,
+        "images": {
+            "backend": {"name": backend_image},
+            "frontend": {"name": frontend_image},
+        },
+        "contract_digest": "d" * 64,
+        "scope": list(REQUIRED_ASSESSMENT_SCOPE),
+        "methodologies": [
+            "penetration-test",
+            "manual-code-review",
+            "dependency-analysis",
+        ],
+        "authorization_window": {
+            "starts_at": (now - timedelta(days=15)).isoformat(),
+            "expires_at": now.isoformat(),
+        },
+        "permitted_sources": {
+            "cidrs": ["198.51.100.24/32", "2001:db8:100::24/128"],
+            "system_ids": ["isl-pentest-runner-01"],
+        },
+        "test_account_ids": ["duckdock-pentest-admin", "duckdock-pentest-viewer"],
+        "safety": {
+            "prohibited_actions": [
+                "denial-of-service",
+                "destructive-data-modification",
+                "physical-security-testing",
+                "production-data-exfiltration",
+                "persistence-or-backdoors",
+                "social-engineering",
+                "third-party-systems-outside-target",
+            ],
+            "stop_authorities": ["Operations", "Security"],
+            "emergency_contacts": [
+                "duckdock-security-oncall",
+                "duckdock-operations-oncall",
+            ],
+            "stop_acknowledgement_sla_minutes": 15,
+        },
+        "data_handling": {
+            "artifacts_encrypted_at_rest": True,
+            "secret_material_recording_allowed": False,
+            "production_data_retention_allowed": False,
+            "deletion_attestation_required": True,
+            "delete_by": (now + timedelta(days=30)).isoformat(),
+        },
+        "deliverables": {
+            "signed_machine_readable_report": True,
+            "final_pdf": True,
+            "finding_level_evidence": True,
+            "critical_high_retest_required": True,
+            "deletion_attestation": True,
+        },
+        "authorized_at": (now - timedelta(days=16)).isoformat(),
+    }
+    engagement_path = tmp_path / "security-assessment-engagement.json"
+    engagement_path.write_text(
+        json.dumps(raw_engagement, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    subprocess.run(
+        [
+            "ssh-keygen",
+            "-q",
+            "-Y",
+            "sign",
+            "-f",
+            str(security_authorizer_key),
+            "-n",
+            ASSESSMENT_ENGAGEMENT_SIGNATURE_NAMESPACE,
+            str(engagement_path),
+        ],
+        check=True,
+    )
+    engagement_signature = Path(f"{engagement_path}.sig")
+    engagement_digest = hashlib.sha256(engagement_path.read_bytes()).hexdigest()
     zero_findings = {severity: 0 for severity in FINDING_SEVERITIES}
     raw_assessment = {
         "schema_version": ASSESSMENT_REPORT_SCHEMA_VERSION,
@@ -2387,12 +2486,28 @@ def _document(tmp_path: Path, now: datetime) -> dict:
             "frontend": {"name": frontend_image},
         },
         "contract_digest": "d" * 64,
+        "engagement": {
+            "engagement_id": raw_engagement["engagement_id"],
+            "sha256": engagement_digest,
+        },
         "scope": list(REQUIRED_ASSESSMENT_SCOPE),
         "methodologies": [
             "penetration-test",
             "manual-code-review",
             "dependency-analysis",
         ],
+        "execution_identity": {
+            "source_cidrs": raw_engagement["permitted_sources"]["cidrs"],
+            "system_ids": raw_engagement["permitted_sources"]["system_ids"],
+            "test_account_ids": raw_engagement["test_account_ids"],
+        },
+        "data_handling_attestation": {
+            "working_evidence_encrypted_at_rest": True,
+            "secret_material_recorded": False,
+            "production_data_retained": False,
+            "working_evidence_deleted": True,
+            "deleted_at": (now - timedelta(days=1, hours=1)).isoformat(),
+        },
         "started_at": (now - timedelta(days=14)).isoformat(),
         "completed_at": (now - timedelta(days=1)).isoformat(),
         "findings": [],
@@ -2440,6 +2555,8 @@ def _document(tmp_path: Path, now: datetime) -> dict:
             "open_high": 0,
             "assessment": {
                 "assessment_id": "ISL-DD-2026-08",
+                "engagement_id": raw_engagement["engagement_id"],
+                "engagement_sha256": engagement_digest,
                 "scope": list(REQUIRED_ASSESSMENT_SCOPE),
                 "methodologies": raw_assessment["methodologies"],
                 "started_at": (now - timedelta(days=14)).isoformat(),
@@ -2456,6 +2573,15 @@ def _document(tmp_path: Path, now: datetime) -> dict:
                 "policy_sha256": "0" * 64,
                 "allowed_signers_path": "pending",
                 "allowed_signers_sha256": "0" * 64,
+            },
+            "authorized_engagement": {
+                **raw_engagement,
+                "signed_evidence": {
+                    "path": str(engagement_path),
+                    "sha256": engagement_digest,
+                    "signer_identity": security_authorizer_identity,
+                    "signature_path": str(engagement_signature),
+                },
             },
             "signed_assessment": {
                 **raw_assessment,
@@ -2509,10 +2635,11 @@ def _add_signed_approvals(document: dict, tmp_path: Path, now: datetime) -> None
     for role in sorted(REQUIRED_APPROVAL_ROLES):
         identity = f"{role.lower()}@example.com"
         key = tmp_path / f"{role.lower()}_key"
-        subprocess.run(
-            ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)],
-            check=True,
-        )
+        if not key.is_file():
+            subprocess.run(
+                ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)],
+                check=True,
+            )
         public_key = key.with_suffix(".pub").read_text(encoding="utf-8").strip()
         public_lines.append(f"{identity} {public_key}")
         role_identities[role] = [identity]
@@ -3867,7 +3994,7 @@ def test_execution_campaign_generates_pending_dependency_plan_and_assembly_reque
     assert plan["preapproval_assembly_request"]["sha256"] == hashlib.sha256(
         assembly_request_output.read_bytes()
     ).hexdigest()
-    assert len(plan["artifacts"]) == 67
+    assert len(plan["artifacts"]) == 69
     assert phases["preapproval_assembly"]["tools"] == [
         "close_ga_execution_campaign.py"
     ]
@@ -4105,6 +4232,8 @@ CAMPAIGN_FIXTURE_SOURCES = {
     "state_services": "state-services-failover.json",
     "state_services_operations_signature": "state-services-failover.json.sig",
     "high_availability": "ha.json",
+    "security_assessment_engagement": "security-assessment-engagement.json",
+    "security_assessment_engagement_signature": "security-assessment-engagement.json.sig",
     "security_assessment_report": "independent-assessment.json",
     "security_assessment_signature": "independent-assessment.json.sig",
     "security_assessment_pdf": "independent-assessment-report.pdf",
@@ -4183,7 +4312,51 @@ def _materialize_campaign_fixture(
         tmp_path / "operations_key",
         "duckdock-ha-state-services",
     )
+    engagement = rewrite(artifacts["security_assessment_engagement"])
+    campaign_created_at = datetime.fromisoformat(
+        str(plan["created_at"]).replace("Z", "+00:00")
+    )
+    campaign_starts_at = datetime.fromisoformat(
+        str(plan["window_starts_at"]).replace("Z", "+00:00")
+    )
+    campaign_expires_at = datetime.fromisoformat(
+        str(plan["window_expires_at"]).replace("Z", "+00:00")
+    )
+    assessment_started_at = campaign_starts_at + timedelta(seconds=1)
+    assessment_deleted_at = campaign_starts_at + timedelta(seconds=2)
+    assessment_completed_at = campaign_starts_at + timedelta(seconds=3)
+    engagement["authorized_at"] = (campaign_created_at + timedelta(seconds=1)).isoformat()
+    engagement["authorization_window"] = {
+        "starts_at": campaign_starts_at.isoformat(),
+        "expires_at": campaign_expires_at.isoformat(),
+    }
+    engagement["data_handling"]["delete_by"] = (
+        campaign_expires_at + timedelta(days=30)
+    ).isoformat()
+    artifacts["security_assessment_engagement"].write_text(
+        json.dumps(engagement, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    resign(
+        artifacts["security_assessment_engagement"],
+        artifacts["security_assessment_engagement_signature"],
+        tmp_path / "security_key",
+        ASSESSMENT_ENGAGEMENT_SIGNATURE_NAMESPACE,
+    )
     assessment = rewrite(artifacts["security_assessment_report"])
+    assessment["engagement"] = {
+        "engagement_id": engagement["engagement_id"],
+        "sha256": hashlib.sha256(
+            artifacts["security_assessment_engagement"].read_bytes()
+        ).hexdigest(),
+    }
+    assessment["started_at"] = assessment_started_at.isoformat()
+    assessment["completed_at"] = assessment_completed_at.isoformat()
+    assessment["data_handling_attestation"]["deleted_at"] = (
+        assessment_deleted_at.isoformat()
+    )
+    artifacts["security_assessment_report"].write_text(
+        json.dumps(assessment, sort_keys=True) + "\n", encoding="utf-8"
+    )
     resign(
         artifacts["security_assessment_report"],
         artifacts["security_assessment_signature"],
@@ -4220,18 +4393,29 @@ def _materialize_campaign_fixture(
         encoding="utf-8",
     )
     security = json.loads(artifacts["security_assessment"].read_text(encoding="utf-8"))
+    security["authorized_engagement"] = {
+        **engagement,
+        "signed_evidence": security["authorized_engagement"]["signed_evidence"],
+    }
     security["signed_assessment"] = {
         **assessment,
         "signed_evidence": security["signed_assessment"]["signed_evidence"],
     }
     remap(security)
+    security["assessment"]["engagement_id"] = engagement["engagement_id"]
+    security["assessment"]["engagement_sha256"] = assessment["engagement"]["sha256"]
+    security["assessment"]["started_at"] = assessment["started_at"]
+    security["assessment"]["completed_at"] = assessment["completed_at"]
+    security["observed_at"] = (
+        assessment_completed_at + timedelta(seconds=1)
+    ).isoformat()
     artifacts["security_assessment"].write_text(
         json.dumps(security, sort_keys=True) + "\n",
         encoding="utf-8",
     )
 
 
-def test_execution_campaign_closure_reverifies_all_64_external_artifacts(
+def test_execution_campaign_closure_reverifies_all_66_external_artifacts(
     tmp_path: Path,
 ) -> None:
     if shutil.which("ssh-keygen") is None:
@@ -4272,9 +4456,9 @@ def test_execution_campaign_closure_reverifies_all_64_external_artifacts(
     assert authorization["approvals"] == []
     assert receipt["evaluation"]["campaign_stage"] == "APPROVAL_COLLECTION"
     assert closure["status"] == "PREAPPROVAL_ASSEMBLED"
-    assert closure["external_artifact_count"] == 64
-    assert closure["captured_input_count"] == len(tracked) == 88
-    assert closure["reference_count"] == 133
+    assert closure["external_artifact_count"] == 66
+    assert closure["captured_input_count"] == len(tracked) == 90
+    assert closure["reference_count"] == 135
     assert closure["outputs"] == {}
 
     assert (
@@ -4508,6 +4692,43 @@ def test_execution_campaign_closure_reverifies_all_64_external_artifacts(
     assert persisted_closure_path.read_bytes() == original_closure
 
 
+@pytest.mark.parametrize(
+    "violation", ["authorized_before_campaign", "window_outside_campaign"]
+)
+def test_security_assessment_engagement_must_be_created_inside_campaign(
+    tmp_path: Path,
+    violation: str,
+) -> None:
+    created_at = datetime.now(timezone.utc)
+    starts_at = created_at + timedelta(hours=1)
+    expires_at = starts_at + timedelta(days=1)
+    engagement = {
+        "authorized_at": (created_at + timedelta(minutes=1)).isoformat(),
+        "authorization_window": {
+            "starts_at": starts_at.isoformat(),
+            "expires_at": expires_at.isoformat(),
+        },
+    }
+    expected = "outside the execution campaign"
+    if violation == "authorized_before_campaign":
+        engagement["authorized_at"] = (created_at - timedelta(seconds=1)).isoformat()
+        expected = "authorized before campaign creation"
+    else:
+        engagement["authorization_window"]["expires_at"] = (
+            expires_at + timedelta(seconds=1)
+        ).isoformat()
+    path = tmp_path / "security-assessment-engagement.json"
+    path.write_text(json.dumps(engagement, sort_keys=True) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=expected):
+        execution_campaign_closer._validate_security_assessment_campaign_window(
+            {"security_assessment_engagement": path},
+            campaign_created_at=created_at,
+            campaign_starts_at=starts_at,
+            campaign_expires_at=expires_at,
+        )
+
+
 def test_execution_campaign_progress_is_incremental_non_authorizing_and_exact(
     tmp_path: Path,
 ) -> None:
@@ -4549,9 +4770,9 @@ def test_execution_campaign_progress_is_incremental_non_authorizing_and_exact(
         "does_not_authorize_GA_or_target_mutation_or_evidence_PASS"
     )
     assert empty["counts"] == {
-        "planned_external_artifacts": 64,
+        "planned_external_artifacts": 66,
         "present_valid_artifacts": 0,
-        "missing_artifacts": 64,
+        "missing_artifacts": 66,
         "invalid_artifacts": 0,
         "present_size_bytes": 0,
         "external_phases": 11,
@@ -4638,7 +4859,7 @@ def test_execution_campaign_progress_is_incremental_non_authorizing_and_exact(
         now=now,
     )
     assert ready["status"] == "READY_FOR_CLOSURE_ATTEMPT"
-    assert ready["counts"]["present_valid_artifacts"] == 64
+    assert ready["counts"]["present_valid_artifacts"] == 66
     assert ready["counts"]["missing_artifacts"] == 0
     assert ready["counts"]["invalid_artifacts"] == 0
     assert ready["counts"]["ready_external_phases"] == 11
@@ -6816,6 +7037,344 @@ def test_tampered_assessor_report_fails_even_when_digest_claim_is_updated(
     assert "security_assessment_signature" in result["failed_evidence_checks"]
     signature_check = next(item for item in result["checks"] if item["key"] == "security_assessment_signature")
     assert signature_check["status"] == "BLOCK"
+
+
+def _resign_security_engagement_and_rebind_assessment(
+    document: dict,
+    tmp_path: Path,
+    mutate: Callable[[dict], None],
+) -> None:
+    evidence = document["controls"]["security_assessment"]["evidence"]
+    wrapper_path = Path(evidence["path"])
+    wrapper = json.loads(wrapper_path.read_text(encoding="utf-8"))
+    engagement_reference = wrapper["authorized_engagement"]["signed_evidence"]
+    engagement_path = Path(engagement_reference["path"])
+    engagement_signature = Path(engagement_reference["signature_path"])
+    engagement = json.loads(engagement_path.read_text(encoding="utf-8"))
+    mutate(engagement)
+    engagement_path.write_text(
+        json.dumps(engagement, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    engagement_signature.unlink()
+    subprocess.run(
+        [
+            "ssh-keygen",
+            "-q",
+            "-Y",
+            "sign",
+            "-f",
+            str(tmp_path / "security_key"),
+            "-n",
+            ASSESSMENT_ENGAGEMENT_SIGNATURE_NAMESPACE,
+            str(engagement_path),
+        ],
+        check=True,
+    )
+    engagement_digest = hashlib.sha256(engagement_path.read_bytes()).hexdigest()
+    wrapper["authorized_engagement"] = {
+        **engagement,
+        "signed_evidence": {
+            **engagement_reference,
+            "sha256": engagement_digest,
+        },
+    }
+
+    assessment_reference = wrapper["signed_assessment"]["signed_evidence"]
+    assessment_path = Path(assessment_reference["path"])
+    assessment_signature = Path(assessment_reference["signature_path"])
+    assessment = json.loads(assessment_path.read_text(encoding="utf-8"))
+    assessment["engagement"] = {
+        "engagement_id": engagement["engagement_id"],
+        "sha256": engagement_digest,
+    }
+    assessment_path.write_text(
+        json.dumps(assessment, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    assessment_signature.unlink()
+    subprocess.run(
+        [
+            "ssh-keygen",
+            "-q",
+            "-Y",
+            "sign",
+            "-f",
+            str(tmp_path / "independent_assessor_key"),
+            "-n",
+            ASSESSMENT_SIGNATURE_NAMESPACE,
+            str(assessment_path),
+        ],
+        check=True,
+    )
+    wrapper["signed_assessment"] = {
+        **assessment,
+        "signed_evidence": {
+            **assessment_reference,
+            "sha256": hashlib.sha256(assessment_path.read_bytes()).hexdigest(),
+        },
+    }
+    wrapper["assessment"]["engagement_id"] = engagement["engagement_id"]
+    wrapper["assessment"]["engagement_sha256"] = engagement_digest
+    wrapper_path.write_text(
+        json.dumps(wrapper, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    evidence["sha256"] = hashlib.sha256(wrapper_path.read_bytes()).hexdigest()
+
+
+def test_security_collector_requires_and_emits_signed_engagement(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _add_signed_approvals(document, tmp_path, now)
+    wrapper_path = Path(
+        document["controls"]["security_assessment"]["evidence"]["path"]
+    )
+    wrapper = json.loads(wrapper_path.read_text(encoding="utf-8"))
+    engagement = wrapper["authorized_engagement"]["signed_evidence"]
+    assessment = wrapper["signed_assessment"]["signed_evidence"]
+    output = tmp_path / "collected-independent-security.json"
+
+    assert (
+        security_assessment_collector.main(
+            [
+                "--target-environment",
+                document["target"]["target_id"],
+                "--source-commit",
+                document["release"]["git_commit"],
+                "--backend-image",
+                document["release"]["backend_image"],
+                "--frontend-image",
+                document["release"]["frontend_image"],
+                "--contract-digest",
+                document["release"]["contract_digest"],
+                "--provider",
+                document["controls"]["security_assessment"]["provider"],
+                "--security-authorizer-identity",
+                engagement["signer_identity"],
+                "--assessor-signer-identity",
+                assessment["signer_identity"],
+                "--assessment-engagement",
+                engagement["path"],
+                "--engagement-signature",
+                engagement["signature_path"],
+                "--assessment-report",
+                assessment["path"],
+                "--assessment-signature",
+                assessment["signature_path"],
+                "--approval-policy",
+                str(tmp_path / "approval-policy.json"),
+                "--output",
+                str(output),
+            ]
+        )
+        == 0
+    )
+    collected = json.loads(output.read_text(encoding="utf-8"))
+    assert collected["schema_version"] == SECURITY_EVIDENCE_SCHEMA_VERSION
+    assert collected["authorized_engagement"]["engagement_id"] == (
+        collected["signed_assessment"]["engagement"]["engagement_id"]
+    )
+    assert collected["assessment"]["engagement_sha256"] == engagement["sha256"]
+
+
+def test_validly_resigned_engagement_cannot_remove_required_safety_boundary(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _resign_security_engagement_and_rebind_assessment(
+        document,
+        tmp_path,
+        lambda engagement: engagement["safety"]["prohibited_actions"].remove(
+            "denial-of-service"
+        ),
+    )
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    check = next(
+        item
+        for item in result["checks"]
+        if item["key"] == "security_assessment_engagement_signature"
+    )
+    assert check["status"] == "BLOCK"
+    assert "unsafe, out of scope" in check["observed"]
+
+
+def test_valid_assessment_signature_cannot_report_outside_engagement_window(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _resign_security_engagement_and_rebind_assessment(
+        document,
+        tmp_path,
+        lambda engagement: engagement["authorization_window"].update(
+            {"expires_at": (now - timedelta(days=2)).isoformat()}
+        ),
+    )
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    engagement_check = next(
+        item
+        for item in result["checks"]
+        if item["key"] == "security_assessment_engagement_signature"
+    )
+    assessment_check = next(
+        item for item in result["checks"] if item["key"] == "security_assessment"
+    )
+    assert engagement_check["status"] == "PASS"
+    assert assessment_check["status"] == "BLOCK"
+    assert "not release-bound" in assessment_check["detail"]
+
+
+def test_valid_assessor_signature_cannot_substitute_engagement_digest(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    evidence = document["controls"]["security_assessment"]["evidence"]
+    wrapper_path = Path(evidence["path"])
+    wrapper = json.loads(wrapper_path.read_text(encoding="utf-8"))
+    assessment_reference = wrapper["signed_assessment"]["signed_evidence"]
+    assessment_path = Path(assessment_reference["path"])
+    assessment_signature = Path(assessment_reference["signature_path"])
+    assessment = json.loads(assessment_path.read_text(encoding="utf-8"))
+    assessment["engagement"]["sha256"] = "f" * 64
+    assessment_path.write_text(
+        json.dumps(assessment, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    assessment_signature.unlink()
+    subprocess.run(
+        [
+            "ssh-keygen",
+            "-q",
+            "-Y",
+            "sign",
+            "-f",
+            str(tmp_path / "independent_assessor_key"),
+            "-n",
+            ASSESSMENT_SIGNATURE_NAMESPACE,
+            str(assessment_path),
+        ],
+        check=True,
+    )
+    wrapper["signed_assessment"] = {
+        **assessment,
+        "signed_evidence": {
+            **assessment_reference,
+            "sha256": hashlib.sha256(assessment_path.read_bytes()).hexdigest(),
+        },
+    }
+    wrapper_path.write_text(
+        json.dumps(wrapper, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    evidence["sha256"] = hashlib.sha256(wrapper_path.read_bytes()).hexdigest()
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    signature_check = next(
+        item
+        for item in result["checks"]
+        if item["key"] == "security_assessment_signature"
+    )
+    assessment_check = next(
+        item for item in result["checks"] if item["key"] == "security_assessment"
+    )
+    assert signature_check["status"] == "PASS"
+    assert assessment_check["status"] == "BLOCK"
+    assert "not release-bound" in assessment_check["detail"]
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["unapproved_source", "working_evidence_not_deleted"],
+)
+def test_valid_assessor_signature_cannot_misstate_execution_or_data_handling(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    evidence = document["controls"]["security_assessment"]["evidence"]
+    wrapper_path = Path(evidence["path"])
+    wrapper = json.loads(wrapper_path.read_text(encoding="utf-8"))
+    assessment_reference = wrapper["signed_assessment"]["signed_evidence"]
+    assessment_path = Path(assessment_reference["path"])
+    assessment_signature = Path(assessment_reference["signature_path"])
+    assessment = json.loads(assessment_path.read_text(encoding="utf-8"))
+    if mutation == "unapproved_source":
+        assessment["execution_identity"]["source_cidrs"] = ["203.0.113.99/32"]
+    else:
+        assessment["data_handling_attestation"]["working_evidence_deleted"] = False
+    assessment_path.write_text(
+        json.dumps(assessment, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    assessment_signature.unlink()
+    subprocess.run(
+        [
+            "ssh-keygen",
+            "-q",
+            "-Y",
+            "sign",
+            "-f",
+            str(tmp_path / "independent_assessor_key"),
+            "-n",
+            ASSESSMENT_SIGNATURE_NAMESPACE,
+            str(assessment_path),
+        ],
+        check=True,
+    )
+    wrapper["signed_assessment"] = {
+        **assessment,
+        "signed_evidence": {
+            **assessment_reference,
+            "sha256": hashlib.sha256(assessment_path.read_bytes()).hexdigest(),
+        },
+    }
+    wrapper_path.write_text(
+        json.dumps(wrapper, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    evidence["sha256"] = hashlib.sha256(wrapper_path.read_bytes()).hexdigest()
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    engagement_check = next(
+        item
+        for item in result["checks"]
+        if item["key"] == "security_assessment_engagement_signature"
+    )
+    assessment_check = next(
+        item for item in result["checks"] if item["key"] == "security_assessment"
+    )
+    assert engagement_check["status"] == "PASS"
+    assert assessment_check["status"] == "BLOCK"
+    assert "not release-bound" in assessment_check["detail"]
 
 
 def test_security_wrapper_cannot_override_signed_finding_projection(tmp_path: Path) -> None:

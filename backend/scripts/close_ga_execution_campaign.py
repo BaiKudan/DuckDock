@@ -250,6 +250,39 @@ def _validate_observation_window(
             )
 
 
+def _validate_security_assessment_campaign_window(
+    artifacts: dict[str, Path],
+    *,
+    campaign_created_at: datetime,
+    campaign_starts_at: datetime,
+    campaign_expires_at: datetime,
+) -> None:
+    path = artifacts.get("security_assessment_engagement")
+    if path is None:
+        raise ValueError("campaign has no security assessment engagement")
+    engagement = _load_object(path, "campaign security assessment engagement")
+    authorized_at = _parse_time(
+        engagement.get("authorized_at"), "security engagement authorized_at"
+    )
+    window = engagement.get("authorization_window")
+    if not isinstance(window, dict):
+        raise ValueError("security engagement has no authorization window")
+    engagement_starts_at = _parse_time(
+        window.get("starts_at"), "security engagement starts_at"
+    )
+    engagement_expires_at = _parse_time(
+        window.get("expires_at"), "security engagement expires_at"
+    )
+    if authorized_at < campaign_created_at:
+        raise ValueError("security engagement was authorized before campaign creation")
+    if not (
+        campaign_starts_at <= engagement_starts_at
+        and engagement_starts_at < engagement_expires_at
+        and engagement_expires_at <= campaign_expires_at
+    ):
+        raise ValueError("security assessment window is outside the execution campaign")
+
+
 def _reference_ledger(
     references: Sequence[CapturedReference],
     labels: dict[Path, str],
@@ -382,6 +415,12 @@ def close(
         planned_inputs,
         starts_at=starts_at,
         closed_at=current,
+    )
+    _validate_security_assessment_campaign_window(
+        planned_inputs,
+        campaign_created_at=created_at,
+        campaign_starts_at=starts_at,
+        campaign_expires_at=expires_at,
     )
 
     topology_receipt = _load_object(topology_receipt_path, "trust topology receipt")
@@ -596,6 +635,14 @@ def verify_persisted_closure(
         planned_inputs,
         starts_at=starts_at,
         closed_at=closed_at,
+    )
+    _validate_security_assessment_campaign_window(
+        planned_inputs,
+        campaign_created_at=_parse_time(
+            campaign.get("created_at"), "campaign created_at"
+        ),
+        campaign_starts_at=starts_at,
+        campaign_expires_at=expires_at,
     )
     topology_receipt = _load_object(topology_receipt_path, "closed topology receipt")
     topology_inputs, topology_policy_path, topology_recorded_paths = _topology_inputs(

@@ -14,21 +14,25 @@ from typing import Any, Sequence
 try:
     from scripts.ga_release_identity import build_release_binding
     from scripts.ga_security_assessment import (
+        ASSESSMENT_ENGAGEMENT_SIGNATURE_NAMESPACE,
         ASSESSMENT_EVIDENCE_SCHEMA_VERSION,
         ASSESSMENT_SIGNATURE_NAMESPACE,
         DIGEST_RE,
         meaningful,
         sha256,
+        validate_assessment_engagement,
         validate_assessment_report,
     )
 except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
     from ga_release_identity import build_release_binding
     from ga_security_assessment import (
+        ASSESSMENT_ENGAGEMENT_SIGNATURE_NAMESPACE,
         ASSESSMENT_EVIDENCE_SCHEMA_VERSION,
         ASSESSMENT_SIGNATURE_NAMESPACE,
         DIGEST_RE,
         meaningful,
         sha256,
+        validate_assessment_engagement,
         validate_assessment_report,
     )
 
@@ -174,6 +178,7 @@ def verify_signature(
     *,
     identity: str,
     allowed_signers: Path,
+    namespace: str,
 ) -> None:
     try:
         completed = subprocess.run(
@@ -186,7 +191,7 @@ def verify_signature(
                 "-I",
                 identity,
                 "-n",
-                ASSESSMENT_SIGNATURE_NAMESPACE,
+                namespace,
                 "-s",
                 str(signature),
             ],
@@ -208,12 +213,41 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
         provider=args.provider,
         assessor_identity=args.assessor_signer_identity,
     )
+    security_identities = set(policy["roles"]["Security"])
+    if args.security_authorizer_identity not in security_identities:
+        raise ValueError(
+            "security engagement signer is not authorized for the Security role"
+        )
+    engagement = _load_object(
+        args.assessment_engagement, "signed security assessment engagement"
+    )
+    verify_signature(
+        args.assessment_engagement,
+        args.engagement_signature,
+        identity=args.security_authorizer_identity,
+        allowed_signers=allowed_signers,
+        namespace=ASSESSMENT_ENGAGEMENT_SIGNATURE_NAMESPACE,
+    )
+    engagement_derived = validate_assessment_engagement(
+        engagement,
+        expected_provider=args.provider,
+        expected_assessor_identity=args.assessor_signer_identity,
+        expected_security_authorizer_identity=args.security_authorizer_identity,
+        target_environment=args.target_environment,
+        source_commit=args.source_commit,
+        backend_image=args.backend_image,
+        frontend_image=args.frontend_image,
+        contract_digest=args.contract_digest,
+    )
+    engagement_digest = sha256(args.assessment_engagement)
+
     assessment = _load_object(args.assessment_report, "signed security assessment")
     verify_signature(
         args.assessment_report,
         args.assessment_signature,
         identity=args.assessor_signer_identity,
         allowed_signers=allowed_signers,
+        namespace=ASSESSMENT_SIGNATURE_NAMESPACE,
     )
     derived = validate_assessment_report(
         assessment,
@@ -225,6 +259,16 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
         backend_image=args.backend_image,
         frontend_image=args.frontend_image,
         contract_digest=args.contract_digest,
+        expected_engagement_id=engagement_derived["engagement_id"],
+        expected_engagement_sha256=engagement_digest,
+        engagement_window_starts_at=engagement_derived["window_starts_at"],
+        engagement_window_expires_at=engagement_derived["window_expires_at"],
+        engagement_delete_by=engagement_derived["delete_by"],
+        expected_scope=engagement_derived["scope"],
+        expected_methodologies=engagement_derived["methodologies"],
+        expected_source_cidrs=engagement_derived["source_cidrs"],
+        expected_source_system_ids=engagement_derived["source_system_ids"],
+        expected_test_account_ids=engagement_derived["test_account_ids"],
     )
     passed = (
         derived["open_critical"] == 0
@@ -245,6 +289,8 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
         "open_high": derived["open_high"],
         "assessment": {
             "assessment_id": derived["assessment_id"],
+            "engagement_id": engagement_derived["engagement_id"],
+            "engagement_sha256": engagement_digest,
             "scope": derived["scope"],
             "methodologies": derived["methodologies"],
             "started_at": assessment["started_at"],
@@ -263,6 +309,15 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
             "policy_sha256": policy_digest,
             "allowed_signers_path": str(allowed_signers.resolve()),
             "allowed_signers_sha256": sha256(allowed_signers),
+        },
+        "authorized_engagement": {
+            **engagement,
+            "signed_evidence": {
+                "path": str(args.assessment_engagement.resolve()),
+                "sha256": engagement_digest,
+                "signature_path": str(args.engagement_signature.resolve()),
+                "signer_identity": args.security_authorizer_identity,
+            },
         },
         "signed_assessment": {
             **assessment,
@@ -284,7 +339,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--frontend-image", required=True)
     parser.add_argument("--contract-digest", required=True)
     parser.add_argument("--provider", required=True)
+    parser.add_argument("--security-authorizer-identity", required=True)
     parser.add_argument("--assessor-signer-identity", required=True)
+    parser.add_argument("--assessment-engagement", type=Path, required=True)
+    parser.add_argument("--engagement-signature", type=Path, required=True)
     parser.add_argument("--assessment-report", type=Path, required=True)
     parser.add_argument("--assessment-signature", type=Path, required=True)
     parser.add_argument("--approval-policy", type=Path, required=True)
@@ -297,6 +355,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             for value in (
                 args.target_environment,
                 args.provider,
+                args.security_authorizer_identity,
                 args.assessor_signer_identity,
             )
         ):
@@ -304,6 +363,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         if not DIGEST_RE.fullmatch(args.contract_digest):
             raise ValueError("contract digest must be a 64-character lowercase SHA-256")
         for path, label in (
+            (args.assessment_engagement, "assessment engagement"),
+            (args.engagement_signature, "engagement signature"),
             (args.assessment_report, "assessment report"),
             (args.assessment_signature, "assessment signature"),
             (args.approval_policy, "approval policy"),

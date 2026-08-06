@@ -10,6 +10,13 @@ allowed-signers 误提交到公开仓库。
 不得复用。授权文件只保存 policy ID 和 SHA-256；个人 approval 和安全证据都不允许
 覆盖信任库。正式验证必须使用 `--approval-policy` 显式选择受控策略文件。
 
+`security-assessment-engagement.example.json` 是第三方测试开始前的委托边界，必须由
+approval policy 中精确授权的 Security identity 使用 namespace
+`duckdock-security-assessment-engagement` 签署。`security-assessment-report.example.json`
+是评估方测试结束后的 v2 报告，必须引用委托 ID/SHA-256 并由独立 assessor identity
+签署；`collect_ga_independent_security.py` 同时接收两份 JSON/签名并生成 v3 wrapper。
+单独的最终报告、邮件授权或口头 scope 均不能通过正式门禁。
+
 `release-provenance-trust-policy.example.json` 是另一条独立信任链：它固定最终
 `v2.0.0` release workflow 的 builder signer/key、source repository、builder ID 和
 workflow ref，不能复用四方审批或安全评估 identity/key。发布 workflow 按
@@ -63,7 +70,8 @@ target 不同。所有 phase 初始状态只能是 `PENDING_EXTERNAL_EVIDENCE`�
 
 `preapproval-assembly-request.example.json` 是证据接线输入，只包含 release/target 身份和
 九份最终 evidence 路径。正式 campaign 的真实采集完成后，必须用 closure 工具验证全部
-64 份外部产物及显式引用与计划完全一致，再由其调用底层组装器；禁止继续手工复制
+66 份外部产物（含 Security 签署的安全评估委托及其签名）及显式引用与计划完全一致，
+再由其调用底层组装器；禁止继续手工复制
 wrapper 字段和 SHA-256：
 
 ```bash
@@ -201,11 +209,13 @@ python -m json.tool ops/ga/preapproval-assembly-request.example.json >/dev/null
 - `backup-media-receipt.example.json`、`restore-execution-receipt.example.json`、
   `recovery-verification-receipt.example.json`：分别保留对象版本/Object Lock、实际
   恢复阶段 exit code/日志摘要，以及 MySQL/对象/Git/服务就绪的独立验证结果；
-- `security-assessment-report.example.json`：由外部评估方填写并直接签名的原始 JSON；
-  逐条 findings、重测时间和严重度统计，并内容寻址绑定最终 PDF；
+- `security-assessment-engagement.example.json`：测试前由 policy 授权的 Security identity
+  直接签名的委托；绑定 release/target/window/source/test-account、禁止动作、急停和数据处置；
+- `security-assessment-report.example.json`：由外部评估方填写并直接签名的 v2 原始 JSON；
+  逐条 findings、重测时间和严重度统计，并内容寻址绑定前述委托和最终 PDF；
 - `independent-security-evidence.example.json`：
-  `collect_ga_independent_security.py` 输出的 v2 wrapper；只信任组织 approval policy
-  预授权的 provider/identity，门禁重读原始签名报告并重算统计；
+  `collect_ga_independent_security.py` 输出的 v3 wrapper；只信任组织 approval policy
+  预授权的 Security/assessor identity，门禁重读两份原始签名并重算边界与统计；
 - `high-availability-evidence.example.json`：目标多故障域故障注入。
 - `state-services-trust-policy.example.json`：固定四类托管状态服务 provider、provider
   signer 与独立 verifier 的职责分离和独立公钥；两类身份/公钥还必须与审批和安全

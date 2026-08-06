@@ -13,6 +13,8 @@ import pytest
 import scripts.collect_ga_independent_security as security_collector
 from scripts.ga_release_identity import build_release_binding
 from scripts.ga_security_assessment import (
+    ASSESSMENT_ENGAGEMENT_SCHEMA_VERSION,
+    ASSESSMENT_ENGAGEMENT_SIGNATURE_NAMESPACE,
     ASSESSMENT_REPORT_SCHEMA_VERSION,
     ASSESSMENT_SIGNATURE_NAMESPACE,
     FINDING_SEVERITIES,
@@ -27,6 +29,7 @@ CONTRACT_DIGEST = "d" * 64
 TARGET = "customer-production"
 PROVIDER = "Independent Security Lab"
 ASSESSOR_IDENTITY = "assessor@independent-security.example"
+SECURITY_IDENTITY = "security@example.com"
 
 
 def _generate_key(path: Path) -> None:
@@ -36,7 +39,12 @@ def _generate_key(path: Path) -> None:
     )
 
 
-def _sign(path: Path, key: Path) -> Path:
+def _sign(
+    path: Path,
+    key: Path,
+    *,
+    namespace: str = ASSESSMENT_SIGNATURE_NAMESPACE,
+) -> Path:
     subprocess.run(
         [
             "ssh-keygen",
@@ -46,7 +54,7 @@ def _sign(path: Path, key: Path) -> Path:
             "-f",
             str(key),
             "-n",
-            ASSESSMENT_SIGNATURE_NAMESPACE,
+            namespace,
             str(path),
         ],
         check=True,
@@ -90,6 +98,17 @@ def _material(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
     }
     policy_path = tmp_path / "approval-policy.json"
     policy_path.write_text(json.dumps(policy, sort_keys=True) + "\n", encoding="utf-8")
+    now = datetime.now(timezone.utc)
+    engagement_path = tmp_path / "security-assessment-engagement.json"
+    engagement_path.write_text(
+        json.dumps(_engagement(now), sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    _sign(
+        engagement_path,
+        keys[SECURITY_IDENTITY],
+        namespace=ASSESSMENT_ENGAGEMENT_SIGNATURE_NAMESPACE,
+    )
     artifact_path = tmp_path / "duckdock-2.0-assessment.pdf"
     artifact_path.write_bytes(b"%PDF-1.7\nIndependent DuckDock assessment\n%%EOF\n")
     report_path = tmp_path / "assessment.json"
@@ -105,8 +124,74 @@ def _counts() -> dict[str, int]:
     return {severity: 0 for severity in FINDING_SEVERITIES}
 
 
+def _engagement(now: datetime) -> dict:
+    return {
+        "schema_version": ASSESSMENT_ENGAGEMENT_SCHEMA_VERSION,
+        "engagement_id": "ISL-DD-2026-08-ROE",
+        "security_authorizer_identity": SECURITY_IDENTITY,
+        "provider": PROVIDER,
+        "assessor_identity": ASSESSOR_IDENTITY,
+        "target_environment": TARGET,
+        "source_commit": COMMIT,
+        "images": {
+            "backend": {"name": BACKEND_IMAGE},
+            "frontend": {"name": FRONTEND_IMAGE},
+        },
+        "contract_digest": CONTRACT_DIGEST,
+        "scope": list(REQUIRED_ASSESSMENT_SCOPE),
+        "methodologies": [
+            "penetration-test",
+            "manual-code-review",
+            "dependency-analysis",
+        ],
+        "authorization_window": {
+            "starts_at": (now - timedelta(days=15)).isoformat(),
+            "expires_at": now.isoformat(),
+        },
+        "permitted_sources": {
+            "cidrs": ["198.51.100.24/32"],
+            "system_ids": ["isl-pentest-runner-01"],
+        },
+        "test_account_ids": ["duckdock-pentest-admin"],
+        "safety": {
+            "prohibited_actions": [
+                "denial-of-service",
+                "destructive-data-modification",
+                "physical-security-testing",
+                "production-data-exfiltration",
+                "persistence-or-backdoors",
+                "social-engineering",
+                "third-party-systems-outside-target",
+            ],
+            "stop_authorities": ["Operations", "Security"],
+            "emergency_contacts": [
+                "duckdock-security-oncall",
+                "duckdock-operations-oncall",
+            ],
+            "stop_acknowledgement_sla_minutes": 15,
+        },
+        "data_handling": {
+            "artifacts_encrypted_at_rest": True,
+            "secret_material_recording_allowed": False,
+            "production_data_retention_allowed": False,
+            "deletion_attestation_required": True,
+            "delete_by": (now + timedelta(days=30)).isoformat(),
+        },
+        "deliverables": {
+            "signed_machine_readable_report": True,
+            "final_pdf": True,
+            "finding_level_evidence": True,
+            "critical_high_retest_required": True,
+            "deletion_attestation": True,
+        },
+        "authorized_at": (now - timedelta(days=16)).isoformat(),
+    }
+
+
 def _report(artifact_path: Path, *, open_high: bool = False) -> dict:
     now = datetime.now(timezone.utc)
+    engagement_path = artifact_path.parent / "security-assessment-engagement.json"
+    engagement = json.loads(engagement_path.read_text(encoding="utf-8"))
     findings = []
     open_counts = _counts()
     if open_high:
@@ -138,8 +223,24 @@ def _report(artifact_path: Path, *, open_high: bool = False) -> dict:
             "frontend": {"name": FRONTEND_IMAGE},
         },
         "contract_digest": CONTRACT_DIGEST,
+        "engagement": {
+            "engagement_id": engagement["engagement_id"],
+            "sha256": hashlib.sha256(engagement_path.read_bytes()).hexdigest(),
+        },
         "scope": list(REQUIRED_ASSESSMENT_SCOPE),
         "methodologies": ["penetration-test", "manual-code-review", "dependency-analysis"],
+        "execution_identity": {
+            "source_cidrs": engagement["permitted_sources"]["cidrs"],
+            "system_ids": engagement["permitted_sources"]["system_ids"],
+            "test_account_ids": engagement["test_account_ids"],
+        },
+        "data_handling_attestation": {
+            "working_evidence_encrypted_at_rest": True,
+            "secret_material_recorded": False,
+            "production_data_retained": False,
+            "working_evidence_deleted": True,
+            "deleted_at": (now - timedelta(days=1, hours=1)).isoformat(),
+        },
         "started_at": (now - timedelta(days=14)).isoformat(),
         "completed_at": (now - timedelta(days=1)).isoformat(),
         "findings": findings,
@@ -171,7 +272,10 @@ def _args(
         frontend_image=FRONTEND_IMAGE,
         contract_digest=CONTRACT_DIGEST,
         provider=PROVIDER,
+        security_authorizer_identity=SECURITY_IDENTITY,
         assessor_signer_identity=ASSESSOR_IDENTITY,
+        assessment_engagement=tmp_path / "security-assessment-engagement.json",
+        engagement_signature=tmp_path / "security-assessment-engagement.json.sig",
         assessment_report=report_path,
         assessment_signature=signature_path,
         approval_policy=policy_path,

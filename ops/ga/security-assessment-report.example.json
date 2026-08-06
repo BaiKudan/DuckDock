@@ -1,5 +1,5 @@
 {
-  "schema_version": "duckdock-ga-security-assessment-report-v1",
+  "schema_version": "duckdock-ga-security-assessment-report-v2",
   "assessment_id": "__CHANGE_ME_ASSESSMENT_ID__",
   "provider": "__CHANGE_ME_INDEPENDENT_ASSESSOR_PROVIDER__",
   "assessor_identity": "__CHANGE_ME_INDEPENDENT_ASSESSOR_SIGNER_IDENTITY__",
@@ -15,6 +15,10 @@
     "frontend": {"name": "registry.example.invalid/duckdock/frontend@sha256:__CHANGE_ME_64_HEX__"}
   },
   "contract_digest": "aa260f301acc5c3a8004d14980952a03ce0197f9d70dcdd78cd62e986c3b1a83",
+  "engagement": {
+    "engagement_id": "__CHANGE_ME_ENGAGEMENT_ID__",
+    "sha256": "__CHANGE_ME_SIGNED_ENGAGEMENT_64_HEX__"
+  },
   "scope": [
     "application-and-api",
     "identity-and-access",
@@ -23,6 +27,18 @@
     "agent-security"
   ],
   "methodologies": ["penetration-test", "manual-code-review", "dependency-analysis"],
+  "execution_identity": {
+    "source_cidrs": ["__CHANGE_ME_CANONICAL_NON_WILDCARD_SOURCE_CIDR__"],
+    "system_ids": ["__CHANGE_ME_ASSESSOR_SYSTEM_ID__"],
+    "test_account_ids": ["__CHANGE_ME_NONSECRET_TEST_ACCOUNT_ID__"]
+  },
+  "data_handling_attestation": {
+    "working_evidence_encrypted_at_rest": true,
+    "secret_material_recorded": false,
+    "production_data_retained": false,
+    "working_evidence_deleted": true,
+    "deleted_at": "2026-08-03T23:00:00Z"
+  },
   "started_at": "2026-07-15T00:00:00Z",
   "completed_at": "2026-08-04T00:00:00Z",
   "findings": [

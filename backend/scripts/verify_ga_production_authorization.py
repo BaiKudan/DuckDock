@@ -50,8 +50,10 @@ try:
         validate_load_report as validate_capacity_load_report,
     )
     from scripts.ga_security_assessment import (
+        ASSESSMENT_ENGAGEMENT_SIGNATURE_NAMESPACE as SECURITY_ENGAGEMENT_SIGNATURE_NAMESPACE,
         ASSESSMENT_EVIDENCE_SCHEMA_VERSION as SECURITY_EVIDENCE_SCHEMA_VERSION,
         ASSESSMENT_SIGNATURE_NAMESPACE as SECURITY_ASSESSMENT_SIGNATURE_NAMESPACE,
+        validate_assessment_engagement,
         validate_assessment_report,
     )
     from scripts.ga_network_evidence import (
@@ -97,8 +99,10 @@ except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
         validate_load_report as validate_capacity_load_report,
     )
     from ga_security_assessment import (
+        ASSESSMENT_ENGAGEMENT_SIGNATURE_NAMESPACE as SECURITY_ENGAGEMENT_SIGNATURE_NAMESPACE,
         ASSESSMENT_EVIDENCE_SCHEMA_VERSION as SECURITY_EVIDENCE_SCHEMA_VERSION,
         ASSESSMENT_SIGNATURE_NAMESPACE as SECURITY_ASSESSMENT_SIGNATURE_NAMESPACE,
+        validate_assessment_engagement,
         validate_assessment_report,
     )
     from ga_network_evidence import (
@@ -5684,6 +5688,12 @@ def evaluate(
         and isinstance(security_report.get("release_authority"), dict)
         else {}
     )
+    authorized_engagement = (
+        security_report.get("authorized_engagement")
+        if isinstance(security_report, dict)
+        and isinstance(security_report.get("authorized_engagement"), dict)
+        else {}
+    )
     signed_assessment = (
         security_report.get("signed_assessment")
         if isinstance(security_report, dict)
@@ -5696,6 +5706,50 @@ def evaluate(
         if isinstance(security_provider, str)
         else set()
     )
+    approved_security_identities = role_identities.get("Security", set())
+    signed_engagement_ok, raw_engagement, signed_engagement_detail = (
+        _verified_embedded_receipt(
+            authorized_engagement,
+            authorization_path=authorization_path,
+            allowed_signers=allowed_signers if trust_store_ok else None,
+            allowed_identities=approved_security_identities,
+            namespace=SECURITY_ENGAGEMENT_SIGNATURE_NAMESPACE,
+        )
+    )
+    engagement_signed_evidence = (
+        authorized_engagement.get("signed_evidence")
+        if isinstance(authorized_engagement, dict)
+        and isinstance(authorized_engagement.get("signed_evidence"), dict)
+        else {}
+    )
+    security_authorizer_identity = engagement_signed_evidence.get("signer_identity")
+    engagement_path = _resolve_file(
+        engagement_signed_evidence.get("path"), authorization_path
+    )
+    derived_engagement: dict[str, Any] = {}
+    engagement_validation_detail = "signed rules of engagement unavailable"
+    if raw_engagement is not None and engagement_path is not None:
+        try:
+            derived_engagement = validate_assessment_engagement(
+                raw_engagement,
+                expected_provider=str(security_provider),
+                expected_assessor_identity=str(
+                    authorized_engagement.get("assessor_identity", "")
+                ),
+                expected_security_authorizer_identity=str(
+                    security_authorizer_identity
+                ),
+                target_environment=str(target.get("target_id")),
+                source_commit=str(release.get("git_commit")),
+                backend_image=str(release.get("backend_image")),
+                frontend_image=str(release.get("frontend_image")),
+                contract_digest=str(release.get("contract_digest")),
+                now=current,
+            )
+        except (OSError, UnicodeError, ValueError) as exc:
+            engagement_validation_detail = str(exc)
+        else:
+            engagement_validation_detail = "signed rules of engagement validated"
     signed_assessment_ok, raw_assessment, signed_assessment_detail = (
         _verified_embedded_receipt(
             signed_assessment,
@@ -5715,18 +5769,42 @@ def evaluate(
     assessment_path = _resolve_file(signed_evidence.get("path"), authorization_path)
     derived_assessment: dict[str, Any] = {}
     assessment_validation_detail = "signed raw assessment unavailable"
-    if raw_assessment is not None and assessment_path is not None:
+    if (
+        raw_assessment is not None
+        and assessment_path is not None
+        and derived_engagement
+    ):
         try:
             derived_assessment = validate_assessment_report(
                 raw_assessment,
                 assessment_path=assessment_path,
                 expected_provider=str(security_provider),
-                expected_assessor_identity=str(assessor_identity),
+                expected_assessor_identity=str(
+                    derived_engagement.get("assessor_identity")
+                ),
                 target_environment=str(target.get("target_id")),
                 source_commit=str(release.get("git_commit")),
                 backend_image=str(release.get("backend_image")),
                 frontend_image=str(release.get("frontend_image")),
                 contract_digest=str(release.get("contract_digest")),
+                expected_engagement_id=str(
+                    derived_engagement.get("engagement_id")
+                ),
+                expected_engagement_sha256=str(
+                    engagement_signed_evidence.get("sha256")
+                ),
+                engagement_window_starts_at=derived_engagement["window_starts_at"],
+                engagement_window_expires_at=derived_engagement[
+                    "window_expires_at"
+                ],
+                engagement_delete_by=derived_engagement["delete_by"],
+                expected_scope=derived_engagement["scope"],
+                expected_methodologies=derived_engagement["methodologies"],
+                expected_source_cidrs=derived_engagement["source_cidrs"],
+                expected_source_system_ids=derived_engagement[
+                    "source_system_ids"
+                ],
+                expected_test_account_ids=derived_engagement["test_account_ids"],
                 now=current,
             )
         except (OSError, UnicodeError, ValueError) as exc:
@@ -5749,6 +5827,34 @@ def evaluate(
         and approval_policy_ok
         and trust_store_ok
     )
+    engagement_ok = (
+        signed_engagement_ok
+        and release_authority_ok
+        and bool(derived_engagement)
+        and security_authorizer_identity
+        == derived_engagement.get("security_authorizer_identity")
+        and authorized_engagement.get("assessor_identity")
+        in approved_assessor_identities
+    )
+    gate.add(
+        "security_assessment_engagement_signature",
+        owner="Security",
+        passed=engagement_ok,
+        observed=(
+            f"security_authorizer={security_authorizer_identity}, "
+            f"approved_security_identities={sorted(approved_security_identities)}, "
+            f"release_authority={release_authority_ok}, {signed_engagement_detail}; "
+            f"validation={engagement_validation_detail}"
+        ),
+        expected=(
+            "pre-test rules of engagement signed by an exact Security-role identity and "
+            "bound to the authorized independent assessor and final release"
+        ),
+        detail=(
+            "The engagement fixes the test window, source CIDRs, test accounts, prohibited "
+            "actions, emergency stop authority, data handling and deliverables before testing."
+        ),
+    )
     gate.add(
         "security_assessment_signature",
         owner="Security",
@@ -5769,6 +5875,8 @@ def evaluate(
     expected_assessment_projection = (
         {
             "assessment_id": derived_assessment.get("assessment_id"),
+            "engagement_id": derived_engagement.get("engagement_id"),
+            "engagement_sha256": engagement_signed_evidence.get("sha256"),
             "scope": derived_assessment.get("scope"),
             "methodologies": derived_assessment.get("methodologies"),
             "started_at": raw_assessment.get("started_at"),
@@ -5809,6 +5917,7 @@ def evaluate(
             "assessment",
             "findings",
             "release_authority",
+            "authorized_engagement",
             "signed_assessment",
         }
         and _report_release_target_binding(
@@ -5838,6 +5947,8 @@ def evaluate(
             no_later_than=_control_observed_at(security),
         )
         and signed_assessment_ok
+        and assessor_identity == derived_engagement.get("assessor_identity")
+        and engagement_ok
         and release_authority_ok
         and bool(derived_assessment)
         and not _contains_secret_material_key(security_report)
@@ -5858,6 +5969,8 @@ def evaluate(
         and security.get("frontend_image") == release.get("frontend_image")
         and security_report_matches
         and signed_assessment_ok
+        and assessor_identity == derived_engagement.get("assessor_identity")
+        and engagement_ok
         and derived_assessment.get("critical_high_retest_completed") is True
     )
     gate.add(
@@ -5868,8 +5981,9 @@ def evaluate(
         expected="independent scoped assessment; 0 open critical/high; exact commit and image digests",
         detail=(
             "The signed raw assessor JSON and linked PDF must bind the exact target, contract, "
-            "commit and images. Finding counts, Critical/High closure and projections are recomputed "
-            f"instead of trusted from wrapper fields. Validation={assessment_validation_detail}."
+            "commit, images and pre-authorized rules of engagement. Finding counts, Critical/High "
+            "closure and projections are recomputed instead of trusted from wrapper fields. "
+            f"Engagement={engagement_validation_detail}; assessment={assessment_validation_detail}."
         ),
     )
 

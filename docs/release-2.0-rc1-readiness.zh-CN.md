@@ -1,6 +1,6 @@
 # DuckDock 2.0.0-rc.1 发布就绪评估
 
-> 评估日期：2026-08-06
+> 评估日期：2026-08-07
 > 候选版本：`2.0.0-rc.1`
 > 分支：`codex/release-2.0-rc1`
 > 结论：**达到应用与仓库工程 RC 发布门槛；未达到 2.0 GA 发布门槛，也不构成任意生产环境上线授权。**
@@ -37,7 +37,7 @@ Runtime/Reporter
 | SLO | PASS | `HEALTHY`；142 个发布窗口请求、0 错误；ingest p95 7.729 ms、timeline p95 12.636 ms、policy p95 54.426 ms |
 | Readiness | PASS | `READY`；14 PASS / 0 WARN / 0 BLOCK |
 | 浏览器 | PASS | Playwright 3/3：未登录守卫、登录表单、审批→执行→回执→验证→完成；应用内浏览器复核 Operations/Release Control，console 0 warning/error |
-| 后端回归 | PASS | 1221 passed、19 skipped；核心覆盖率历史门禁 81.04%（门槛 65%） |
+| 后端回归 | PASS | 1232 passed、19 skipped；核心覆盖率 81.04%（门槛 65%） |
 | Python 3.12 锁定环境 | PASS | hashed dev lock；runtime lock `pip-audit` 0 已知漏洞；Ruff/compile 通过 |
 | 真实 MySQL 测试 lane | PASS | 独立临时数据库 17/17；验证后数据库与用户均已删除 |
 | 前端 | PASS | npm audit 0；lint 0 warning；11 files / 56 tests；生产 build 最大入口块 569.69 kB（门槛 600 kB） |
@@ -46,6 +46,7 @@ Runtime/Reporter
 | 最终发布供应链协议 | PASS（协议）/ PENDING（真实执行） | `v2.0.0` tag 将重跑 backend/frontend/E2E/Compose，四镜像 commit 候选均通过扫描、原始 SARIF 留存且最终 tag 不存在后才晋升；builder 签名报告绑定 tag/source/SLSA v1/SPDX/SARIF/scan，最终授权器独立复验并作为 FOUNDATION；真实 tag、registry digest 和签名 bundle 尚未产生 |
 | 目标证据组装协议 | PASS（协议）/ PENDING（真实输入） | 组装器从 release provenance 和九份目标 wrapper 自动投影审批空底稿，approval policy 仅能从独立 CLI 参数选择，落盘前后均要求 `APPROVAL_COLLECTION` 且 foundation/evidence 无失败；真实目标证据仍未产生 |
 | 全局组织信任拓扑 | PASS（协议）/ PENDING（真实配置） | 九策略 manifest 和独立预检要求每个组织职责的 identity/公钥全局唯一；最终授权器从证据引用策略再次重算，跨策略复用停在 `FOUNDATION`；发布机构尚未提供真实策略、人员身份和公钥 |
+| 独立安全评估双签名协议 | PASS（协议）/ PENDING（真实执行） | campaign 创建后由 policy 授权的 Security identity 先签署 release/target/window/source/account/禁止动作/急停/数据删除委托，独立 assessor 再签署绑定委托、实际执行身份、数据处置、逐条 finding 和 PDF 的 v2 报告；v3 collector 与最终门禁重验双方签名和全部时序；真实委托、测试、整改复测和删除证明仍未发生 |
 | 真实验收执行编排 | PASS（协议）/ PENDING（外部执行） | 不可覆盖 campaign 绑定最终 release/target、九策略 topology、最长 14 天窗口和新 evidence root；全部 phase 初始为 `PENDING_EXTERNAL_EVIDENCE`，自动生成后续 assembly request，明确不授权目标变更或声称 PASS |
 | 四方签字活动协议 | PASS（协议）/ PENDING（真人执行） | 发布机构先以不可覆盖、限时 freeze 绑定空 approvals base、policy 与 release digest；每位审批人重跑完整 preflight 并签署同一 campaign/freeze，finalizer 拒绝跨轮混签、过期与窗口外签字，四份 entry 只有让持久化文件达到 `GA_AUTHORIZED` 才能输出；真实 Product/Architecture/Security/Operations 决策仍未发生 |
 | 授权归档与独立复验协议 | PASS（协议）/ PENDING（真实 bundle） | manifest v2 记录原始路径到内容寻址成员的完整索引；只在当前时间和 bounded canonical time 均为 `GA_AUTHORIZED` 时生成确定性不可覆盖 tar.gz/manifest/SHA-256；接收方以外部摘要、严格无主机回退路径重映射复验全部成员/签名/授权；真实 bundle/digest 尚未产生和外部发布 |
@@ -84,7 +85,7 @@ Langfuse 保持可替换的 provider adapter：关闭或不可用时，依赖它
 
 ## 5. RC 后仍存在的风险
 
-1. **独立安全审计尚未由第三方执行。** 仓库现提供 `collect_ga_independent_security.py` 和 v2 门禁：组织发布策略预先固定评估机构 identity/公钥，评估方签署逐条 finding 的原始 JSON 并绑定最终 PDF，门禁重算严重度统计且拒绝自选信任根、隐藏 High、投影篡改或签名后改 PDF。但仍没有与最终 target/contract/commit/镜像摘要绑定的真实第三方渗透测试或审计报告。
+1. **独立安全审计尚未由第三方执行。** 仓库现提供测试前/后双签名 v3 门禁：组织策略预先固定 Security 与独立评估方 identity/公钥；Security 先签署绑定最终 release/target、最长 30 天窗口、来源 CIDR、测试账号、禁止动作、急停和数据处置的委托，评估方再签署逐条 finding、绑定委托与最终 PDF 的 v2 报告。门禁独立重验双方签名、窗口、边界、摘要和严重度统计，拒绝自选信任根、放宽禁止动作、越窗、替换委托、隐藏 High、投影篡改或签名后改 PDF。但真实委托仍须由真实 Security 负责人签署，第三方也仍须实际执行测试并交付报告/删除证明。
 2. **目标 TLS 与网络隔离尚未取得真实回执。** TLS 已升级为 v3 双层证据：发布机构策略固定外部 probe identity/key、probe/vantage ID 与全球可路由来源 CIDR，探测者签署含证书指纹、有效期、HSTS header 和旧协议 OpenSSL 原始输出的报告，组合器与最终门禁重新验签并重算；它能拒绝 wrapper 投影篡改、签名后改报告、伪造 legacy 摘要和未批准来源，但尚未从真实外部探测点运行。网络也已升级为 v3 双层证据：发布机构策略额外固定精确 kube context、Namespace 与 CNI，外部执行者签署含 1–65535 TCP、三个数据端口 nmap 原始 XML、CNI/Namespace/Pod/NetworkPolicy 身份和 ingress/egress 正反例的报告；组合器和最终门禁重新验签、验证来源/cluster 身份并重算原始字段，能拒绝签名后篡改、未批准观测点、wrapper 投影和伪造扫描摘要。但该执行器同样尚未在真实目标网络/CNI 上运行。
 3. **HA 已完成本机真实 Kubernetes 无状态演练，但未完成目标环境承诺。** `ops/kubernetes/ha` 的受限镜像、PDB/HPA、严格且 taint-aware/revision-aware 的拓扑分散已经在三模拟 zone 中执行节点/整区 drain、Beat 迁移与恢复后再均衡；仓库现提供 fail-closed 的目标 v2 执行器，可校验精确 context/镜像、整区节点、持续公网 HTTPS、自动清理和网络证据。托管 MySQL/Redis/S3/RWX 也已升级为多方 v2：发布策略固定 provider/verifier 身份与公钥，provider 签署自动跨域切换事件，独立 verifier 签署故障前后数据摘要与写后读结果，Operations 只签署组合 wrapper，最终门禁重验三层签名；但尚未在真实目标集群和服务商上运行。本地单节点 MySQL/Redis/MinIO、`emptyDir` 和未证明 enforcement 的 kindnet 不代表托管 MySQL/Redis/S3/RWX/CNI。
 4. **目标容量尚未证明。** 本地真实 MySQL 工程基线通过，300 rps 边界探针也能 fail closed；仓库现提供容量 v3 闭环：负载执行人签署 G2 原始报告，存储观察人签署压测前后 MySQL 行数/bytes/outbox/lag，独立清理验证人签署 Namespace 删除、凭证撤销与残留归零，组合器和最终门禁重算三份原始证据。它能拒绝只靠 HTTP 201、篡改汇总、合法重签但增长不足或清理不完整的报告，但尚未在真实目标 HTTPS、负载均衡器和托管数据服务上执行。
@@ -106,9 +107,9 @@ Langfuse 保持可替换的 provider adapter：关闭或不可用时，依赖它
 - 用 `collect_ga_target_recovery.py` 从异地、加密、至少 30 天 Object Lock 的介质做破坏性 staging 恢复，取得存储/执行/独立验证三类签名回执；
 - 用 `collect_ga_target_secrets.py` 采集生产 Secret Manager 轮换，取得 provider/verifier 不同密钥的原始签名回执，并证明 backend/worker/beat 全量滚动；
 - 用 `collect_ga_target_alerting.py` 触发和恢复目标告警，由 delivery 服务签署投递回执、实际值班人员签署 ack，并证明目标接收人与 on-call schedule；
-- 由组织策略预授权的第三方使用 `security-assessment-report.example.json` 交付并签署原始报告，再运行 `collect_ga_independent_security.py`，关闭最终应用镜像和依赖中的全部 Critical/High；
+- 由组织策略授权的 Security 负责人先填写并签署 `security-assessment-engagement.example.json`，第三方在其窗口/来源/禁止动作边界内执行后，使用 `security-assessment-report.example.json` 交付并签署绑定委托的 v2 原始报告，再运行 `collect_ga_independent_security.py` 生成 v3 证据，关闭最终应用镜像和依赖中的全部 Critical/High 并交付删除证明；
 - 创建 GitHub 验证通过的签名 annotated `v2.0.0` tag，让受控 CI 在最终 commit 上重跑 backend/frontend/E2E/Compose 并推送带 BuildKit attestation 的 GHCR 镜像；按发布 provenance 策略由独立 builder 签署 tag/source/SLSA/SPDX/scan 原始报告，运行 `collect_ga_release_provenance.py`，将输出绑定到授权文件 `release.provenance`；
-- 真实采集后运行 `close_ga_execution_campaign.py`，只接受与已审阅 campaign 的 64 份外部产物、执行窗口和显式引用完全一致且落盘重验后的 `APPROVAL_COLLECTION` 空审批底稿、assembly receipt 与非授权 closure receipt；禁止直接用通用 assembler 绕过 campaign 对齐；
+- 真实采集后运行 `close_ga_execution_campaign.py`，只接受与已审阅 campaign 的 66 份外部产物（含 Security 签署的安全评估委托及其签名）、执行窗口和显式引用完全一致且落盘重验后的 `APPROVAL_COLLECTION` 空审批底稿、assembly receipt 与非授权 closure receipt；禁止直接用通用 assembler 绕过 campaign 对齐；
 - 由发布机构通过受控、内容寻址的组织策略固定共享信任库和角色身份；在四方签字前运行生产授权器 `--require-evidence-ready`，确认 `campaign_stage=APPROVAL_COLLECTION`、`evidence_ready_for_approval=true` 且 foundation/evidence 失败列表为空；
 - 运行 `freeze_ga_approval_campaign.py` 生成同一份不可覆盖、限时 campaign freeze，再由 Product、Architecture、Security、Operations 四个不同身份在窗口内签署同一 release/target/evidence/policy/campaign 摘要；
 - 用 finalizer 组装并重验，运行生产授权器取得唯一可接受结果 `GA_AUTHORIZED`，随后生成可搬运授权归档并通过独立渠道发布其摘要。

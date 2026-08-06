@@ -282,7 +282,7 @@ def verify(env_file: Path) -> dict[str, Any]:
         and "EXPIRED_INCOMPLETE" in execution_progress_text
         and "verify_persisted_closure" in execution_progress_text,
         "immutable non-authorizing checkpoints detect partial/missing/invalid evidence and exact next phase",
-        "external execution mistakes are visible before the final 64-artifact closure attempt",
+        "external execution mistakes are visible before the final 66-artifact closure attempt",
     )
     add(
         "ga_preapproval_assembly",
@@ -302,7 +302,7 @@ def verify(env_file: Path) -> dict[str, Any]:
         and "PREAPPROVAL_ASSEMBLED" in execution_closure_text
         and "campaign input changed before closure receipt emission"
         in execution_closure_text,
-        "exact 64-artifact/reference closure plus transactional preapproval assembly",
+        "exact 66-artifact/reference closure including signed security engagement plus transactional preapproval assembly",
         "planned paths equal actual evidence before immutable non-authorizing closure",
     )
     add(

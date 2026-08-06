@@ -140,7 +140,7 @@ python backend/scripts/prepare_ga_execution_campaign.py \
    外部负责人仍须逐步审阅并执行 acknowledgement。工具同时生成后续 assembler 可直接
    使用的预审批 request，避免采集结束后再次手抄 release/target 和九份 evidence 路径。
 
-   外部执行期间不要等到第 64 份产物才发现早期错误。可随时运行非授权增量检查器：
+   外部执行期间不要等到第 66 份产物才发现早期错误。可随时运行非授权增量检查器：
 
 ```bash
 python backend/scripts/inspect_ga_execution_campaign.py \
@@ -149,7 +149,7 @@ python backend/scripts/inspect_ga_execution_campaign.py \
 ```
 
    它会独立重验 campaign/request/topology/九份 policy/trust store，按原始 lexical 计划路径
-   检查 64 份外部产物的 missing/regular-file/symlink/size/JSON/private-key marker，并验证
+   检查 66 份外部产物的 missing/regular-file/symlink/size/JSON/private-key marker，并验证
    所有已出现 `path+sha256`、manifest、allowed-signers 和 signature 引用只能指向计划产物
    或内容寻址的发布机构输入。输出的 `duckdock-ga-execution-campaign-progress-v1` 按 phase
    区分 `PENDING`、`PARTIAL`、`INVALID`、`BLOCKED_BY_DEPENDENCIES` 与
@@ -671,14 +671,35 @@ python backend/scripts/collect_ga_target_alerting.py \
     若任一阶段失败，采集器会尽力自动 resolve 已注入的告警；重试必须使用新的
     exercise ID 和全新的 receipt/signature 路径，不能复用失败演练留下的文件。
 12. 委托与项目实现方、四方审批人均独立的安全机构按指定范围执行渗透测试和人工
-    代码审查，关闭并复测全部 Critical/High。组织发布策略必须先升级为
+    代码审查，关闭并复测全部 Critical/High。测试开始前必须先完成机器可验证的
+    rules-of-engagement 双阶段握手，不能只在测试结束后接收一份报告。组织发布策略必须先升级为
     `duckdock-ga-approval-policy-v2`，在 `independent_security_assessors` 中把机构名称
     映射到评估方精确 identity，并将其公钥放入与四方审批共享的 allowed-signers；
     外部评估人与内部审批人不得复用 identity 或公钥。
 
-    评估方按 `ops/ga/security-assessment-report.example.json` 交付机器可读原始 JSON，
-    逐条列出 findings 并绑定最终 PDF SHA-256、相同 target、contract、commit 和两个
-    镜像摘要。评估方直接对该 JSON 签名：
+    execution campaign 创建并审阅后，Security 角色先按
+    `ops/ga/security-assessment-engagement.example.json` 填写不可变委托：
+    精确 provider/assessor、target、contract、commit、镜像、最长 30 天测试窗口、非全网
+    来源 CIDR、非秘密测试账号 ID、测试机 ID、急停联系人和 15 分钟内停止 SLA。委托必须
+    禁止 DoS、破坏性改数、生产数据外传、持久化/后门、社工、物理测试以及越界测试第三方
+    系统，并要求证据静态加密、不记录秘密、不保留生产数据、窗口后最多 90 天删除且交付
+    删除证明。`authorized_at` 不得早于 campaign 创建，assessment window 必须完全落在
+    campaign window 内；只有 approval policy 中精确授权的 Security identity 能签署该委托：
+
+```bash
+ssh-keygen -Y sign \
+  -n duckdock-security-assessment-engagement \
+  -f /secure/security-role-signing-key \
+  /secure/duckdock-2.0-security-engagement.json
+shasum -a 256 /secure/duckdock-2.0-security-engagement.json
+```
+
+    评估方按 `ops/ga/security-assessment-report.example.json` 交付 v2 机器可读原始 JSON，
+    逐条列出 findings，并绑定前述 engagement ID/SHA-256、最终 PDF SHA-256、相同 target、
+    contract、commit 和两个镜像摘要；`started_at`/`completed_at` 必须落在委托窗口内，
+    `execution_identity` 必须逐项等于批准的 CIDR/测试机/账号，且
+    `data_handling_attestation` 必须确认工作证据加密、未记录 secret、未保留生产数据并已
+    在截止日前删除。评估方直接对该 JSON 签名：
 
 ```bash
 ssh-keygen -Y sign \
@@ -693,16 +714,21 @@ python backend/scripts/collect_ga_independent_security.py \
   --frontend-image "$DUCKDOCK_GA_FRONTEND_IMAGE" \
   --contract-digest "$DUCKDOCK_GA_CONTRACT_DIGEST" \
   --provider "Independent Security Lab" \
+  --security-authorizer-identity security@duckdock.example \
   --assessor-signer-identity assessor@independent-security.example \
+  --assessment-engagement /secure/duckdock-2.0-security-engagement.json \
+  --engagement-signature /secure/duckdock-2.0-security-engagement.json.sig \
   --assessment-report /secure/duckdock-2.0-final-assessment.json \
   --assessment-signature /secure/duckdock-2.0-final-assessment.json.sig \
   --approval-policy /release-authority/duckdock-ga-approval-policy.json \
   --output /secure/evidence/independent-security.json
 ```
 
-    v2 采集器和最终门禁都只信任显式传入的组织策略，重新验签原始 JSON、重算 PDF
-    digest 和逐级 finding 统计，并核对 wrapper 投影。自选 allowed-signers、隐藏 High、
-    修改投影或签名后改 PDF 均不能通过。
+    v3 采集器和最终门禁都只信任显式传入的组织策略：先用 Security 角色重新验签委托并
+    验证安全边界，再用独立 assessor 角色验签报告，重算 engagement/PDF digest 和逐级
+    finding 统计，并核对 wrapper 投影。自选 allowed-signers、越过窗口、放宽禁止动作、
+    替换委托、隐藏 High、修改投影或签名后改 PDF 均不能通过。campaign 会将委托 JSON、
+    委托签名、报告 JSON、报告签名、PDF 和 v3 wrapper 六份文件列为精确计划工件。
 13. 为每份证据填绝对或授权文件相对路径、SHA-256 与 UTC 时间。Readiness、TLS、
     Secrets、网络、告警、恢复、容量、HA 和独立安全报告内部 `observed_at` 必须与
     各自授权证据时间相同，且 `scope` 只能是 `target-production`。本地 dev/kind
@@ -748,7 +774,7 @@ python backend/scripts/close_ga_execution_campaign.py \
   --assembly-request /release-authority/duckdock-2.0.0-preapproval-request.json
 ```
 
-闭环工具按 campaign 预分配路径要求 64 份外部产物全部存在，拒绝 symlink、缺失、摘要
+闭环工具按 campaign 预分配路径要求 66 份外部产物全部存在，拒绝 symlink、缺失、摘要
 冲突和任何指向未计划路径的 `path+sha256`、`path+manifest_sha256`、allowed-signers 或
 signature 引用；十份最终 wrapper 的 `observed_at` 必须位于执行窗口内。它重新生成并逐字
 比较 campaign/request、重验 topology/九份 policy/trust store 和单独内容寻址的 backup
@@ -790,7 +816,7 @@ next_action=collect_organizational_approvals
 `campaign_stage=FOUNDATION`。这两种状态都禁止继续签字。
 
 预签字门禁通过后，先冻结一次有时限的审批活动。正式 freeze v2 先独立重验 persisted
-execution closure 的 campaign/request/topology、64 份外部产物、88 个闭包输入、133 条
+execution closure 的 campaign/request/topology、66 份外部产物、90 个闭包输入、135 条
 引用和预审批评估，再把 closure、空 `approvals` 授权文件、发布机构策略、release digest、
 冻结时间和审批截止时间共同内容寻址到不可覆盖的回执；窗口默认 24 小时，最大 72 小时：
 
@@ -903,7 +929,7 @@ python backend/scripts/archive_ga_authorized_bundle.py \
 它不会扫描目录，只沿 JSON 中显式的 `path+sha256`、`path+manifest_sha256`、
 `allowed_signers_path+allowed_signers_sha256`、`signature_path` 引用闭包，并加入明确
 传入的 supplemental receipt/result。正式 v2 campaign freeze 已内容寻址 execution closure；
-closure 又显式引用 campaign/request/topology、64 份外部产物和 preapproval outputs，因此
+closure 又显式引用 campaign/request/topology、66 份外部产物和 preapproval outputs，因此
 完整“计划→实际证据”图会自动进入 portable archive，不再需要把 closure 作为 supplemental
 重复传入。campaign freeze 及其空 base 同样由最终授权中的内容寻址引用自动进入闭包。
 因此同目录审批私钥、builder 私钥和未引用文件不会进入归档；即使显式引用，常见
