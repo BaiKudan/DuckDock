@@ -44,6 +44,7 @@ from scripts.verify_ga_production_authorization import (
     _verify_ssh_signature,
     evaluate,
     lint_authorization,
+    main as verify_main,
 )
 from scripts.ga_security_assessment import (
     ASSESSMENT_REPORT_SCHEMA_VERSION,
@@ -2007,7 +2008,122 @@ def test_complete_target_bundle_is_cryptographically_authorized(tmp_path: Path) 
     )
 
     assert result["status"] == "GA_AUTHORIZED"
+    assert result["campaign_stage"] == "AUTHORIZED"
+    assert result["foundation_ready"] is True
+    assert result["evidence_ready_for_approval"] is True
+    assert result["approvals_complete"] is True
+    assert result["failed_foundation_checks"] == []
+    assert result["failed_evidence_checks"] == []
+    assert result["failed_approval_checks"] == []
+    assert result["next_action"] == "archive_authorized_bundle"
     assert result["block_count"] == 0
+
+
+def test_complete_evidence_bundle_enters_approval_collection_only(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _add_signed_approvals(document, tmp_path, now)
+    document["approvals"] = []
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    assert result["status"] == "AWAITING_EXTERNAL_APPROVALS"
+    assert result["campaign_stage"] == "APPROVAL_COLLECTION"
+    assert result["foundation_ready"] is True
+    assert result["evidence_ready_for_approval"] is True
+    assert result["approvals_complete"] is False
+    assert result["failed_foundation_checks"] == []
+    assert result["failed_evidence_checks"] == []
+    assert set(result["failed_approval_checks"]) == {
+        "approval_roles",
+        "approval_four_eyes",
+        *(f"approval_{role}" for role in REQUIRED_APPROVAL_ROLES),
+    }
+    assert result["next_action"] == "collect_organizational_approvals"
+
+
+def test_require_evidence_ready_cli_blocks_signing_until_evidence_is_complete(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _add_signed_approvals(document, tmp_path, now)
+    document["approvals"] = []
+    authorization_path = tmp_path / "authorization.json"
+    authorization_path.write_text(
+        json.dumps(document, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    args = [
+        str(authorization_path),
+        "--approval-policy",
+        str(tmp_path / "approval-policy.json"),
+        "--require-evidence-ready",
+    ]
+
+    assert verify_main(args) == 0
+    ready_result = json.loads(capsys.readouterr().out)
+    assert ready_result["evidence_ready_for_approval"] is True
+
+    document["controls"]["security_assessment"]["independent"] = False
+    authorization_path.write_text(
+        json.dumps(document, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    assert verify_main(args) == 2
+    blocked_result = json.loads(capsys.readouterr().out)
+    assert blocked_result["campaign_stage"] == "EVIDENCE_COLLECTION"
+    assert blocked_result["evidence_ready_for_approval"] is False
+
+
+@pytest.mark.parametrize("mutation", ["missing", "stale", "cross_release"])
+def test_campaign_cannot_enter_approvals_with_unusable_target_evidence(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    evidence = document["controls"]["tls"]["evidence"]
+    evidence_path = Path(evidence["path"])
+    if mutation == "missing":
+        evidence_path.unlink()
+    else:
+        report = json.loads(evidence_path.read_text(encoding="utf-8"))
+        if mutation == "stale":
+            stale_at = (now - timedelta(days=8)).isoformat()
+            report["observed_at"] = stale_at
+            evidence["observed_at"] = stale_at
+        else:
+            report["source_commit"] = "9" * 40
+        evidence_path.write_text(
+            json.dumps(report, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        evidence["sha256"] = hashlib.sha256(evidence_path.read_bytes()).hexdigest()
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    assert result["status"] == "BLOCKED"
+    assert result["campaign_stage"] == "EVIDENCE_COLLECTION"
+    assert result["foundation_ready"] is True
+    assert result["evidence_ready_for_approval"] is False
+    assert any(key.startswith("tls") for key in result["failed_evidence_checks"])
+    assert result["next_action"] == "collect_or_replace_external_evidence"
 
 
 def test_signing_tool_emits_verifier_compatible_metadata_bound_statement(tmp_path: Path) -> None:
@@ -2077,6 +2193,9 @@ def test_approval_policy_must_be_supplied_out_of_band(tmp_path: Path) -> None:
     )
 
     assert result["status"] == "BLOCKED"
+    assert result["campaign_stage"] == "FOUNDATION"
+    assert result["foundation_ready"] is False
+    assert result["next_action"] == "repair_release_foundation"
     statuses = {item["key"]: item["status"] for item in result["checks"]}
     assert statuses["approval_policy"] == "BLOCK"
     assert statuses["approval_trust_store"] == "BLOCK"
@@ -2169,6 +2288,11 @@ def test_valid_signature_from_wrong_policy_role_cannot_approve(tmp_path: Path) -
     )
 
     assert result["status"] == "AWAITING_EXTERNAL_APPROVALS"
+    assert result["campaign_stage"] == "APPROVAL_COLLECTION"
+    assert result["evidence_ready_for_approval"] is True
+    assert result["failed_foundation_checks"] == []
+    assert result["failed_evidence_checks"] == []
+    assert result["next_action"] == "collect_organizational_approvals"
     four_eyes = next(item for item in result["checks"] if item["key"] == "approval_four_eyes")
     product_check = next(item for item in result["checks"] if item["key"] == "approval_Product")
     security_check = next(item for item in result["checks"] if item["key"] == "approval_Security")
@@ -2198,6 +2322,47 @@ def test_unsigned_approval_timestamp_edit_invalidates_signature(tmp_path: Path) 
     assert "Signature verification failed" in product_check["observed"]
 
 
+def test_valid_signature_before_latest_evidence_stays_in_approval_collection(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _add_signed_approvals(document, tmp_path, now)
+    product = next(item for item in document["approvals"] if item["role"] == "Product")
+    product["approved_at"] = (now - timedelta(minutes=10)).isoformat()
+    statement = tmp_path / "early-product-statement"
+    statement.write_bytes(_approval_statement(product, product["signed_digest"]))
+    subprocess.run(
+        [
+            "ssh-keygen",
+            "-q",
+            "-Y",
+            "sign",
+            "-f",
+            str(tmp_path / "product_key"),
+            "-n",
+            "duckdock-ga",
+            str(statement),
+        ],
+        check=True,
+    )
+    statement.with_suffix(".sig").replace(Path(product["signature_path"]))
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    assert result["status"] == "AWAITING_EXTERNAL_APPROVALS"
+    assert result["campaign_stage"] == "APPROVAL_COLLECTION"
+    assert result["evidence_ready_for_approval"] is True
+    assert result["approvals_complete"] is False
+    assert result["failed_evidence_checks"] == []
+    assert result["failed_approval_checks"] == ["approval_Product"]
+
+
 def test_v2_rejects_per_approval_trust_store_override(tmp_path: Path) -> None:
     now = datetime.now(timezone.utc)
     document = _document(tmp_path, now)
@@ -2222,7 +2387,12 @@ def test_internal_security_claim_is_not_independent_authorization(tmp_path: Path
         now=now,
     )
 
-    assert result["status"] == "AWAITING_EXTERNAL_APPROVALS"
+    assert result["status"] == "BLOCKED"
+    assert result["campaign_stage"] == "EVIDENCE_COLLECTION"
+    assert result["evidence_ready_for_approval"] is False
+    assert result["failed_foundation_checks"] == []
+    assert "security_assessment" in result["failed_evidence_checks"]
+    assert result["next_action"] == "collect_or_replace_external_evidence"
     check = next(item for item in result["checks"] if item["key"] == "security_assessment")
     assert check["status"] == "BLOCK"
 
@@ -2455,7 +2625,7 @@ def test_alerting_gate_revalidates_signed_receipts_and_exact_identity_roles(
         ("network", "BLOCKED"),
         ("alerting", "BLOCKED"),
         ("recovery", "BLOCKED"),
-        ("security_assessment", "AWAITING_EXTERNAL_APPROVALS"),
+        ("security_assessment", "BLOCKED"),
     ],
 )
 def test_unrelated_digest_bound_json_cannot_substitute_for_target_control_evidence(
@@ -2803,7 +2973,9 @@ def test_tampered_assessor_report_fails_even_when_digest_claim_is_updated(
         now=now,
     )
 
-    assert result["status"] == "AWAITING_EXTERNAL_APPROVALS"
+    assert result["status"] == "BLOCKED"
+    assert result["campaign_stage"] == "EVIDENCE_COLLECTION"
+    assert "security_assessment_signature" in result["failed_evidence_checks"]
     signature_check = next(item for item in result["checks"] if item["key"] == "security_assessment_signature")
     assert signature_check["status"] == "BLOCK"
 

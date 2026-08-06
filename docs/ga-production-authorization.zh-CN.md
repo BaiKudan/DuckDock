@@ -484,14 +484,37 @@ shasum -a 256 /release-authority/duckdock-ga-approval-policy.json
 # 将策略摘要和 policy_id 填入 authorization.json
 ```
 
-14. 使用受控策略运行门禁取得 `release_digest`，四个不同负责人分别签署：
+14. 使用受控策略先运行不可绕过的预签字门禁。授权文件的 `approvals` 可以暂为空，
+    但发布基础、九类目标证据、外部安全签名及所有内容摘要必须已经完整：
 
 ```bash
 python backend/scripts/verify_ga_production_authorization.py \
   /secure/duckdock-2.0.0-authorization.json \
   --approval-policy /release-authority/duckdock-ga-approval-policy.json \
-  --allow-blocked
+  --require-evidence-ready \
+  --output /secure/duckdock-2.0.0-preapproval-result.json
+```
 
+只有命令退出 `0`，且结果同时满足以下条件，才能把其中的 `release_digest` 交给审批人：
+
+```text
+status=AWAITING_EXTERNAL_APPROVALS
+campaign_stage=APPROVAL_COLLECTION
+foundation_ready=true
+evidence_ready_for_approval=true
+failed_foundation_checks=[]
+failed_evidence_checks=[]
+next_action=collect_organizational_approvals
+```
+
+`--allow-blocked` 仅供诊断，不能作为流水线签字前置条件。缺文件、证据过期、跨 commit/
+镜像复用、签名或内容不一致时，门禁保持 `BLOCKED` 且
+`campaign_stage=EVIDENCE_COLLECTION`；版本、目标或发布机构策略无效时停在
+`campaign_stage=FOUNDATION`。这两种状态都禁止继续签字。
+
+预签字门禁通过后，四个不同负责人分别签署：
+
+```bash
 bash scripts/sign-ga-approval.sh \
   --digest <release_digest> \
   --role Product \
@@ -522,3 +545,8 @@ python backend/scripts/verify_ga_production_authorization.py \
 阻断，退出码 `3` 是授权文件结构错误。授权结果、原文件、全部证据、签名和
 审批策略、共享 allowed-signers 应与授权结果一同不可变归档，但生产验证时仍必须
 从发布机构控制的独立只读路径选择策略，不能从待验证授权包自动发现信任根。
+
+授权结果还会固定输出 `failed_foundation_checks`、`failed_evidence_checks`、
+`failed_approval_checks` 和 `next_action`。发布活动只能按 `next_action` 前进，不能因
+总状态文字相近而把外部证据阻断误判成“只等签字”。任何证据在预签字后发生变化，
+都会改变 `release_digest`；必须重新跑 `--require-evidence-ready` 并废弃旧签名。

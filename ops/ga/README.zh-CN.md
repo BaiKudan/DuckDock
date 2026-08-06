@@ -10,6 +10,20 @@ allowed-signers 误提交到公开仓库。
 不得复用。授权文件只保存 policy ID 和 SHA-256；个人 approval 和安全证据都不允许
 覆盖信任库。正式验证必须使用 `--approval-policy` 显式选择受控策略文件。
 
+在收集任何四方签字前，必须使用同一个权威授权器执行预签字门禁：
+
+```bash
+python backend/scripts/verify_ga_production_authorization.py \
+  /secure/duckdock-2.0.0-authorization.json \
+  --approval-policy /release-authority/duckdock-ga-approval-policy.json \
+  --require-evidence-ready
+```
+
+只有 `campaign_stage=APPROVAL_COLLECTION` 且
+`evidence_ready_for_approval=true` 才会退出 0。`FOUNDATION` 或
+`EVIDENCE_COLLECTION` 均表示当前 release digest 禁止签字；`--allow-blocked` 只用于
+查看诊断，不是发布流水线成功条件。
+
 结构检查：
 
 ```bash

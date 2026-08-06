@@ -101,13 +101,19 @@ REQUIRED_CONTROLS = {
     "security_assessment",
 }
 REQUIRED_APPROVAL_ROLES = {"Product", "Architecture", "Security", "Operations"}
-EXTERNAL_CHECK_KEYS = {
-    "security_assessment",
-    "security_assessment_signature",
-    "approval_roles",
-    "approval_four_eyes",
+FOUNDATION_CHECK_KEYS = {
+    "release_version",
+    "release_commit",
+    "backend_image",
+    "frontend_image",
+    "contract_digest",
+    "target_identity",
     "approval_policy",
     "approval_trust_store",
+}
+APPROVAL_CHECK_KEYS = {
+    "approval_roles",
+    "approval_four_eyes",
     "approval_Product",
     "approval_Architecture",
     "approval_Security",
@@ -4604,15 +4610,39 @@ def evaluate(
         )
 
     failed = {check.key for check in gate.checks if not check.passed}
-    if not failed:
+    failed_foundation = failed.intersection(FOUNDATION_CHECK_KEYS)
+    failed_approvals = failed.intersection(APPROVAL_CHECK_KEYS)
+    failed_evidence = failed - FOUNDATION_CHECK_KEYS - APPROVAL_CHECK_KEYS
+    foundation_ready = not failed_foundation
+    evidence_ready_for_approval = foundation_ready and not failed_evidence
+    approvals_complete = evidence_ready_for_approval and not failed_approvals
+    if approvals_complete:
         status = "GA_AUTHORIZED"
-    elif failed.issubset(EXTERNAL_CHECK_KEYS | {f"{key}_evidence" for key in EXTERNAL_CHECK_KEYS}):
+        campaign_stage = "AUTHORIZED"
+        next_action = "archive_authorized_bundle"
+    elif evidence_ready_for_approval:
         status = "AWAITING_EXTERNAL_APPROVALS"
+        campaign_stage = "APPROVAL_COLLECTION"
+        next_action = "collect_organizational_approvals"
+    elif foundation_ready:
+        status = "BLOCKED"
+        campaign_stage = "EVIDENCE_COLLECTION"
+        next_action = "collect_or_replace_external_evidence"
     else:
         status = "BLOCKED"
+        campaign_stage = "FOUNDATION"
+        next_action = "repair_release_foundation"
     return {
         "schema_version": SCHEMA_VERSION,
         "status": status,
+        "campaign_stage": campaign_stage,
+        "foundation_ready": foundation_ready,
+        "evidence_ready_for_approval": evidence_ready_for_approval,
+        "approvals_complete": approvals_complete,
+        "failed_foundation_checks": sorted(failed_foundation),
+        "failed_evidence_checks": sorted(failed_evidence),
+        "failed_approval_checks": sorted(failed_approvals),
+        "next_action": next_action,
         "release_digest": release_digest,
         "checked_at": current.isoformat(),
         "pass_count": sum(check.passed for check in gate.checks),
@@ -4631,7 +4661,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--lint", action="store_true", help="validate structure only; placeholders are allowed")
     parser.add_argument("--output", type=Path, help="write the JSON evaluation report")
-    parser.add_argument("--allow-blocked", action="store_true", help="return zero after emitting a non-GA report")
+    outcome = parser.add_mutually_exclusive_group()
+    outcome.add_argument(
+        "--require-evidence-ready",
+        action="store_true",
+        help="return zero only after all non-approval checks pass",
+    )
+    outcome.add_argument(
+        "--allow-blocked",
+        action="store_true",
+        help="return zero after emitting any structurally valid non-GA report",
+    )
     return parser.parse_args(argv)
 
 
@@ -4658,7 +4698,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(payload, encoding="utf-8")
     print(payload, end="")
-    if result["status"] == "GA_AUTHORIZED" or args.allow_blocked:
+    if (
+        result["status"] == "GA_AUTHORIZED"
+        or (args.require_evidence_ready and result["evidence_ready_for_approval"] is True)
+        or args.allow_blocked
+    ):
         return 0
     return 2
 

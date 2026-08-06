@@ -37,7 +37,7 @@ Runtime/Reporter
 | SLO | PASS | `HEALTHY`；142 个发布窗口请求、0 错误；ingest p95 7.729 ms、timeline p95 12.636 ms、policy p95 54.426 ms |
 | Readiness | PASS | `READY`；14 PASS / 0 WARN / 0 BLOCK |
 | 浏览器 | PASS | Playwright 3/3：未登录守卫、登录表单、审批→执行→回执→验证→完成；应用内浏览器复核 Operations/Release Control，console 0 warning/error |
-| 后端回归 | PASS | 1134 passed、19 skipped；核心覆盖率历史门禁 81.04%（门槛 65%） |
+| 后端回归 | PASS | 1140 passed、19 skipped；核心覆盖率历史门禁 81.04%（门槛 65%） |
 | Python 3.12 锁定环境 | PASS | hashed dev lock；runtime lock `pip-audit` 0 已知漏洞；Ruff/compile 通过 |
 | 真实 MySQL 测试 lane | PASS | 独立临时数据库 17/17；验证后数据库与用户均已删除 |
 | 前端 | PASS | npm audit 0；lint 0 warning；11 files / 56 tests；生产 build 最大入口块 569.69 kB（门槛 600 kB） |
@@ -86,7 +86,7 @@ Langfuse 保持可替换的 provider adapter：关闭或不可用时，依赖它
 6. **随 Compose 打包的第三方数据镜像不属于 GA 路径。** 本地扫描发现 MySQL/MinIO 官方镜像仍含 Critical/High；单机 Compose 仅作加固参考，GA 强制使用经独立评估的外部 HA MySQL/Redis/S3。Prometheus 的 1 个 High 需要独立评估/VEX 确认，项目不得自行豁免。
 7. **类型债务仍有 81 项。** ratchet 阻止恶化，但后续版本应持续清零。
 8. **外部 Provider 兼容性是持续门禁。** Langfuse、Hermes、OTel Collector 或其他 Harness 升级后必须重跑对应 compatibility gate。
-9. **RC 不是 GA。** 最终版本必须改为 `2.0.0`，使用 registry `@sha256` 镜像，在同一 commit 上重跑全部门禁并取得 `GA_AUTHORIZED`。
+9. **RC 不是 GA。** 最终版本必须改为 `2.0.0`，使用 registry `@sha256` 镜像，在同一 commit 上重跑全部门禁。权威授权器现把活动阶段严格分为 FOUNDATION、EVIDENCE_COLLECTION、APPROVAL_COLLECTION 和 AUTHORIZED；只有 `--require-evidence-ready` 证明全部非审批检查通过后才能收集四方签名，最终仍必须取得 `GA_AUTHORIZED`。
 
 ## 6. GA 前必须完成
 
@@ -99,6 +99,7 @@ Langfuse 保持可替换的 provider adapter：关闭或不可用时，依赖它
 - 由组织策略预授权的第三方使用 `security-assessment-report.example.json` 交付并签署原始报告，再运行 `collect_ga_independent_security.py`，关闭最终应用镜像和依赖中的全部 Critical/High；
 - 将版本冻结为 `2.0.0`，使用 registry `@sha256` 镜像，在最终 commit 上重跑全部门禁；
 - 由发布机构通过受控、内容寻址的组织策略固定共享信任库和角色身份，再由 Product、Architecture、Security、Operations 四个不同身份签署同一 release/target/evidence/policy 摘要；
+- 在四方签字前运行生产授权器 `--require-evidence-ready`，确认 `campaign_stage=APPROVAL_COLLECTION`、`evidence_ready_for_approval=true` 且 foundation/evidence 失败列表为空；
 - 运行生产授权器并取得唯一可接受结果 `GA_AUTHORIZED`。
 
 机器级详细结果见 [`release-candidate-rc1-20260805.md`](../specs/015-ga-candidate/evidence/release-candidate-rc1-20260805.md)、[`capacity-reference-small-pass-20260805.json`](../specs/016-ga-production-authorization/evidence/capacity-reference-small-pass-20260805.json)、[`local-kubernetes-ha-rehearsal-20260805.json`](../specs/016-ga-production-authorization/evidence/local-kubernetes-ha-rehearsal-20260805.json) 和 [`local-infrastructure-20260805.json`](../specs/016-ga-production-authorization/evidence/local-infrastructure-20260805.json)。目标授权流程见 [`ga-production-authorization.zh-CN.md`](ga-production-authorization.zh-CN.md)。历史 `2.0.0-ga` 文档不再作为当前版本事实源。
