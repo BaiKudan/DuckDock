@@ -100,6 +100,7 @@
     },
     "capacity": {
       "status": "PASSED",
+      "database_provider": "__CHANGE_ME_APPROVED_MANAGED_MYSQL_PROVIDER__",
       "sustained_seconds": 900,
       "sustained_rps": 50,
       "materialized_runs": 50000,
@@ -107,6 +108,11 @@
       "write_p95_ms": 1000,
       "timeline_p95_ms": 250,
       "post_growth_query_passed": true,
+      "agent_runs_delta": 50000,
+      "audit_logs_delta": 50000,
+      "outbox_events_delta": 50000,
+      "database_growth_bytes": 5000000,
+      "cleanup_verified": true,
       "evidence": {
         "path": "__CHANGE_ME_TARGET_CAPACITY_EVIDENCE_PATH__",
         "sha256": "__CHANGE_ME_64_HEX__",

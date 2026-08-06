@@ -33,6 +33,12 @@ python backend/scripts/verify_ga_production_authorization.py \
 - `network-evidence.example.json`：`collect_ga_target_network.py` 输出的 v2 结构示例；
   执行器从已确认的集群外视角做 nmap 全端口/数据端口扫描，并保留 CNI、探针身份、
   完整 NetworkPolicy 与 ingress/egress 正反向连接原始结果；禁止手填；
+- `capacity-trust-policy.example.json`：托管 MySQL provider、必查计数器、数据增长/
+  pending outbox/replica lag 阈值，以及负载、存储、清理三种互斥精确身份的信任策略；
+- `capacity-growth-receipt.example.json`、`capacity-cleanup-receipt.example.json`：
+  存储观察人签署压测前后真实 MySQL 行数/bytes/lag，独立清理验证人签署 Namespace
+  删除、凭证撤销与 exercise 残留归零；`collect_ga_target_capacity.py` 会把它们与 G2
+  原始 v2 负载报告及三份签名组合成不可手填的 `duckdock-target-capacity-gate-v3`；
 - `alerting-evidence.example.json`：`collect_ga_target_alerting.py` 输出的主动演练 v2
   结构；绑定 Alertmanager active/inactive API 观测与三份原始签名回执；禁止手填；
 - `alerting-trust-policy.example.json`：delivery 服务身份和命名 on-call schedule 的
@@ -56,7 +62,7 @@ python backend/scripts/verify_ga_production_authorization.py \
 - `state-services-ha-evidence.example.json`：托管 MySQL、Redis、对象存储与 RWX
   的真实故障切换回执；必须由审批策略中的 Operations 身份签名。
 
-所有这些目标报告以及 readiness v1、TLS v2、容量 v2 报告都必须绑定相同 target
+所有这些目标报告以及 readiness v1、TLS v2、容量 v3 报告都必须绑定相同 target
 ID、source commit、backend/frontend 镜像摘要；报告内部 `observed_at` 必须与授权
 文件的证据时间相同。模板中的 PASS 值只
 描述合格结构，不是可提交的证据，所有 `__CHANGE_ME` 和示例快照都必须替换为

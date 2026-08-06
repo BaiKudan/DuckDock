@@ -51,6 +51,17 @@ from scripts.ga_security_assessment import (
     FINDING_SEVERITIES,
     REQUIRED_ASSESSMENT_SCOPE,
 )
+from scripts.ga_capacity_evidence import (
+    CAPACITY_EVIDENCE_SCHEMA_VERSION,
+    CAPACITY_POLICY_SCHEMA_VERSION,
+    CLEANUP_RECEIPT_SCHEMA_VERSION,
+    CLEANUP_RECEIPT_SIGNATURE_NAMESPACE,
+    GROWTH_RECEIPT_SCHEMA_VERSION,
+    GROWTH_RECEIPT_SIGNATURE_NAMESPACE,
+    LOAD_REPORT_SCHEMA_VERSION,
+    LOAD_REPORT_SIGNATURE_NAMESPACE,
+    REQUIRED_COUNTERS as CAPACITY_REQUIRED_COUNTERS,
+)
 
 
 def _evidence(tmp_path: Path, name: str, observed_at: datetime) -> dict[str, str]:
@@ -126,13 +137,19 @@ def _document(tmp_path: Path, now: datetime) -> dict:
         },
         "capacity": {
             "status": "PASSED",
+            "database_provider": "Managed MySQL",
             "sustained_seconds": 900,
             "sustained_rps": 50,
-            "materialized_runs": 50_000,
+            "materialized_runs": 51_000,
             "error_rate": 0,
             "write_p95_ms": 50,
             "timeline_p95_ms": 30,
             "post_growth_query_passed": True,
+            "agent_runs_delta": 51_000,
+            "audit_logs_delta": 51_000,
+            "outbox_events_delta": 51_000,
+            "database_growth_bytes": 15_000_000,
+            "cleanup_verified": True,
             "evidence": _evidence(tmp_path, "capacity", observed_at),
         },
         "high_availability": {
@@ -227,42 +244,331 @@ def _document(tmp_path: Path, now: datetime) -> dict:
         encoding="utf-8",
     )
     controls["tls"]["evidence"]["sha256"] = hashlib.sha256(tls_path.read_bytes()).hexdigest()
-    capacity_path = Path(controls["capacity"]["evidence"]["path"])
-    capacity_path.write_text(
-        json.dumps(
-            {
-                "schema_version": "duckdock-target-capacity-gate-v2",
-                "scope": "target-production",
-                "status": "PASSED",
-                "observed_at": observed_at.isoformat(),
-                "target_environment": "customer-production",
-                "source_commit": commit,
-                "images": {
-                    "backend": {"name": backend_image},
-                    "frontend": {"name": frontend_image},
-                },
-                "base_url": "https://duckdock.example.com",
-                "transport": "network HTTPS against target",
-                "phases": [
-                    {
-                        "name": "sustained",
-                        "duration_seconds": 900,
-                        "target_rate": 50,
-                        "p95_ms": 50,
-                        "passed": True,
-                    }
-                ],
-                "materialized_runs": 50_000,
-                "error_rate": 0,
-                "post_growth_timeline_query": {"p95_ms": 30, "passed": True},
-                "passed": True,
-            },
-            sort_keys=True,
+    capacity_exercise_id = "capacity-ga-20260806"
+    capacity_run_tag = "abcdef123456"
+    capacity_namespace_id = 321
+    capacity_database_provider = "Managed MySQL"
+    capacity_load_started = now - timedelta(minutes=30)
+    capacity_load_finished = now - timedelta(minutes=10)
+
+    def capacity_phase(
+        name: str,
+        rate: float,
+        duration: float,
+        requests: int,
+        p95: float,
+    ) -> dict:
+        return {
+            "name": name,
+            "target_rate": rate,
+            "duration_seconds": duration,
+            "request_count": requests,
+            "success_count": requests,
+            "failure_count": 0,
+            "elapsed_seconds": duration,
+            "completion_rate": 1.0,
+            "drain_seconds": 0.1,
+            "schedule_lag_ms": 2.0,
+            "p50_ms": p95 / 2,
+            "p95_ms": p95,
+            "p99_ms": p95 * 1.2,
+            "max_ms": p95 * 1.5,
+            "minimum_completion_rate": 0.95 if name == "sustained" else 0,
+            "maximum_p95_ms": 1000 if name == "sustained" else 2000,
+            "maximum_drain_seconds": 2 if name == "sustained" else 5,
+            "maximum_schedule_lag_ms": 100,
+            "error_codes": {},
+            "passed": True,
+        }
+
+    capacity_phases = [
+        capacity_phase("sustained", 50, 900, 45_000, 50),
+        capacity_phase("burst", 100, 60, 6_000, 100),
+    ]
+    capacity_timeline = {
+        "sample_count": 100,
+        "success_count": 100,
+        "p50_ms": 15,
+        "p95_ms": 30,
+        "p99_ms": 40,
+        "maximum_p95_ms": 250,
+        "passed": True,
+    }
+    capacity_load_report = {
+        "schema_version": LOAD_REPORT_SCHEMA_VERSION,
+        "scope": "target-production",
+        "target_environment": "customer-production",
+        "source_commit": commit,
+        "images": {
+            "backend": {"name": backend_image},
+            "frontend": {"name": frontend_image},
+        },
+        "status": "PASSED",
+        "observed_at": capacity_load_finished.isoformat(),
+        "base_url": "https://duckdock.example.com",
+        "namespace_id": capacity_namespace_id,
+        "exercise_id": capacity_exercise_id,
+        "run_tag": capacity_run_tag,
+        "transport": "network HTTPS against target",
+        "started_at": capacity_load_started.isoformat(),
+        "finished_at": capacity_load_finished.isoformat(),
+        "phases": capacity_phases,
+        "offered_runs": 51_000,
+        "materialized_runs": 51_000,
+        "minimum_materialized_runs": 50_000,
+        "failure_count": 0,
+        "error_rate": 0.0,
+        "maximum_error_rate": 0.001,
+        "idempotency": {
+            "same_key_same_payload_status": 201,
+            "same_key_different_payload_status": 409,
+            "passed": True,
+        },
+        "post_growth_timeline_query": capacity_timeline,
+        "passed": True,
+        "cleanup_required": "run signed capacity cleanup collection",
+    }
+    capacity_baseline_mysql = {
+        "agent_runs_rows": 100,
+        "audit_logs_rows": 200,
+        "outbox_events_rows": 200,
+        "tagged_agent_runs_rows": 0,
+        "pending_outbox_events": 0,
+        "data_bytes": 10_000_000,
+        "index_bytes": 2_000_000,
+        "replica_lag_seconds": 0,
+    }
+    capacity_post_mysql = {
+        "agent_runs_rows": 51_100,
+        "audit_logs_rows": 51_200,
+        "outbox_events_rows": 51_200,
+        "tagged_agent_runs_rows": 51_000,
+        "pending_outbox_events": 0,
+        "data_bytes": 20_000_000,
+        "index_bytes": 7_000_000,
+        "replica_lag_seconds": 2,
+    }
+    capacity_growth_receipt = {
+        "schema_version": GROWTH_RECEIPT_SCHEMA_VERSION,
+        "exercise_id": capacity_exercise_id,
+        "target_environment": "customer-production",
+        "namespace_id": capacity_namespace_id,
+        "run_tag": capacity_run_tag,
+        "source_commit": commit,
+        "images": {
+            "backend": {"name": backend_image},
+            "frontend": {"name": frontend_image},
+        },
+        "database_provider": capacity_database_provider,
+        "provider_receipt_id": "mysql-growth-receipt-001",
+        "baseline": {
+            "phase": "baseline",
+            "snapshot_id": "mysql-snapshot-before-001",
+            "captured_at": (capacity_load_started - timedelta(minutes=1)).isoformat(),
+            "query_sha256": "1" * 64,
+            "mysql": capacity_baseline_mysql,
+        },
+        "post_growth": {
+            "phase": "post-growth",
+            "snapshot_id": "mysql-snapshot-after-001",
+            "captured_at": (capacity_load_finished + timedelta(minutes=1)).isoformat(),
+            "query_sha256": "2" * 64,
+            "mysql": capacity_post_mysql,
+        },
+        "completed_at": (capacity_load_finished + timedelta(minutes=2)).isoformat(),
+    }
+    capacity_cleanup_receipt = {
+        "schema_version": CLEANUP_RECEIPT_SCHEMA_VERSION,
+        "exercise_id": capacity_exercise_id,
+        "target_environment": "customer-production",
+        "namespace_id": capacity_namespace_id,
+        "run_tag": capacity_run_tag,
+        "source_commit": commit,
+        "images": {
+            "backend": {"name": backend_image},
+            "frontend": {"name": frontend_image},
+        },
+        "cleanup_receipt_id": "capacity-cleanup-001",
+        "namespace_deleted": True,
+        "credentials": {
+            "reporter_credential_revoked": True,
+            "user_credential_revoked": True,
+        },
+        "remaining_rows": {counter: 0 for counter in CAPACITY_REQUIRED_COUNTERS},
+        "completed_at": (capacity_load_finished + timedelta(minutes=3)).isoformat(),
+    }
+    capacity_load_identity = "capacity-load@example.com"
+    capacity_storage_identity = "capacity-dba@example.com"
+    capacity_cleanup_identity = "capacity-cleanup@example.com"
+    capacity_keys = {
+        capacity_load_identity: tmp_path / "capacity_load_key",
+        capacity_storage_identity: tmp_path / "capacity_storage_key",
+        capacity_cleanup_identity: tmp_path / "capacity_cleanup_key",
+    }
+    for key in capacity_keys.values():
+        subprocess.run(
+            ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)],
+            check=True,
         )
-        + "\n",
+    capacity_allowed_signers = tmp_path / "capacity_allowed_signers"
+    capacity_allowed_signers.write_text(
+        "".join(
+            f"{identity} {key.with_suffix('.pub').read_text(encoding='utf-8').strip()}\n"
+            for identity, key in capacity_keys.items()
+        ),
         encoding="utf-8",
     )
-    controls["capacity"]["evidence"]["sha256"] = hashlib.sha256(capacity_path.read_bytes()).hexdigest()
+    capacity_policy = {
+        "schema_version": CAPACITY_POLICY_SCHEMA_VERSION,
+        "policy_id": "duckdock-target-capacity-authority",
+        "organization": "DuckDock Test Operations",
+        "allowed_signers_path": str(capacity_allowed_signers),
+        "allowed_signers_sha256": hashlib.sha256(
+            capacity_allowed_signers.read_bytes()
+        ).hexdigest(),
+        "approved_database_providers": [capacity_database_provider],
+        "load_executor_identities": [capacity_load_identity],
+        "storage_observer_identities": [capacity_storage_identity],
+        "cleanup_verifier_identities": [capacity_cleanup_identity],
+        "required_counters": list(CAPACITY_REQUIRED_COUNTERS),
+        "minimum_database_growth_bytes": 5_000_000,
+        "maximum_pending_outbox_events": 100,
+        "maximum_replica_lag_seconds": 30,
+    }
+    capacity_policy_path = tmp_path / "capacity-policy.json"
+    capacity_policy_path.write_text(
+        json.dumps(capacity_policy, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    capacity_load_path = tmp_path / "capacity-load.json"
+    capacity_growth_path = tmp_path / "capacity-growth.json"
+    capacity_cleanup_path = tmp_path / "capacity-cleanup.json"
+    for path, payload, identity, namespace in (
+        (
+            capacity_load_path,
+            capacity_load_report,
+            capacity_load_identity,
+            LOAD_REPORT_SIGNATURE_NAMESPACE,
+        ),
+        (
+            capacity_growth_path,
+            capacity_growth_receipt,
+            capacity_storage_identity,
+            GROWTH_RECEIPT_SIGNATURE_NAMESPACE,
+        ),
+        (
+            capacity_cleanup_path,
+            capacity_cleanup_receipt,
+            capacity_cleanup_identity,
+            CLEANUP_RECEIPT_SIGNATURE_NAMESPACE,
+        ),
+    ):
+        path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+        subprocess.run(
+            [
+                "ssh-keygen",
+                "-q",
+                "-Y",
+                "sign",
+                "-f",
+                str(capacity_keys[identity]),
+                "-n",
+                namespace,
+                str(path),
+            ],
+            check=True,
+        )
+
+    def capacity_signed_reference(path: Path, identity: str) -> dict:
+        return {
+            "path": str(path),
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "signature_path": str(Path(f"{path}.sig")),
+            "signer_identity": identity,
+        }
+
+    capacity_report = {
+        "schema_version": CAPACITY_EVIDENCE_SCHEMA_VERSION,
+        "scope": "target-production",
+        "status": "PASSED",
+        "passed": True,
+        "observed_at": observed_at.isoformat(),
+        "target_environment": "customer-production",
+        "source_commit": commit,
+        "images": {
+            "backend": {"name": backend_image},
+            "frontend": {"name": frontend_image},
+        },
+        "base_url": "https://duckdock.example.com",
+        "namespace_id": capacity_namespace_id,
+        "database_provider": capacity_database_provider,
+        "transport": "network HTTPS against target",
+        "exercise": {
+            "exercise_id": capacity_exercise_id,
+            "run_tag": capacity_run_tag,
+            "started_at": capacity_load_started.isoformat(),
+            "finished_at": capacity_load_finished.isoformat(),
+            "completed_at": observed_at.isoformat(),
+        },
+        "requirements": {
+            "minimum_sustained_seconds": 900,
+            "minimum_sustained_rps": 50,
+            "minimum_materialized_runs": 50_000,
+            "maximum_error_rate": 0.001,
+            "maximum_write_p95_ms": 1000,
+            "maximum_timeline_p95_ms": 250,
+        },
+        "phases": capacity_phases,
+        "offered_runs": 51_000,
+        "materialized_runs": 51_000,
+        "failure_count": 0,
+        "error_rate": 0.0,
+        "post_growth_timeline_query": capacity_timeline,
+        "data_growth": {
+            "agent_runs_delta": 51_000,
+            "audit_logs_delta": 51_000,
+            "outbox_events_delta": 51_000,
+            "tagged_agent_runs": 51_000,
+            "database_growth_bytes": 15_000_000,
+            "pending_outbox_events": 0,
+            "replica_lag_seconds": 2.0,
+            "counts_monotonic": True,
+        },
+        "cleanup_verified": True,
+        "capacity_policy": {
+            "path": str(capacity_policy_path),
+            "sha256": hashlib.sha256(capacity_policy_path.read_bytes()).hexdigest(),
+            "policy_id": capacity_policy["policy_id"],
+            "allowed_signers_path": str(capacity_allowed_signers),
+            "allowed_signers_sha256": capacity_policy["allowed_signers_sha256"],
+        },
+        "load_report": {
+            **capacity_load_report,
+            "signed_evidence": capacity_signed_reference(
+                capacity_load_path, capacity_load_identity
+            ),
+        },
+        "growth_receipt": {
+            **capacity_growth_receipt,
+            "signed_evidence": capacity_signed_reference(
+                capacity_growth_path, capacity_storage_identity
+            ),
+        },
+        "cleanup_receipt": {
+            **capacity_cleanup_receipt,
+            "signed_evidence": capacity_signed_reference(
+                capacity_cleanup_path, capacity_cleanup_identity
+            ),
+        },
+    }
+    capacity_path = Path(controls["capacity"]["evidence"]["path"])
+    capacity_path.write_text(
+        json.dumps(capacity_report, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    controls["capacity"]["evidence"]["sha256"] = hashlib.sha256(
+        capacity_path.read_bytes()
+    ).hexdigest()
     ha_path = Path(controls["high_availability"]["evidence"]["path"])
 
     def ha_snapshot(zones: list[str]) -> dict:
@@ -2694,6 +3000,163 @@ def test_capacity_report_from_previous_image_cannot_authorize_current_release(
     report["images"]["frontend"]["name"] = f"registry.example.com/duckdock/frontend@sha256:{'9' * 64}"
     path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
     evidence["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    assert result["status"] == "BLOCKED"
+    capacity = next(item for item in result["checks"] if item["key"] == "capacity")
+    assert capacity["status"] == "BLOCK"
+
+
+def test_capacity_wrapper_cannot_override_signed_growth_projection(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    evidence = document["controls"]["capacity"]["evidence"]
+    path = Path(evidence["path"])
+    report = json.loads(path.read_text(encoding="utf-8"))
+    report["data_growth"]["agent_runs_delta"] = 99_999
+    path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+    evidence["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    assert result["status"] == "BLOCKED"
+    capacity = next(item for item in result["checks"] if item["key"] == "capacity")
+    assert capacity["status"] == "BLOCK"
+
+
+def test_capacity_thresholds_reject_non_numeric_type_without_crashing(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    evidence = document["controls"]["capacity"]["evidence"]
+    path = Path(evidence["path"])
+    report = json.loads(path.read_text(encoding="utf-8"))
+    report["requirements"]["minimum_materialized_runs"] = "50000"
+    path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+    evidence["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    assert result["status"] == "BLOCKED"
+    capacity = next(item for item in result["checks"] if item["key"] == "capacity")
+    assert capacity["status"] == "BLOCK"
+
+
+def test_capacity_rejects_validly_resigned_insufficient_database_growth(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    evidence = document["controls"]["capacity"]["evidence"]
+    report_path = Path(evidence["path"])
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    embedded = report["growth_receipt"]
+    signed = embedded["signed_evidence"]
+    receipt_path = Path(signed["path"])
+    signature_path = Path(signed["signature_path"])
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt["post_growth"]["mysql"]["agent_runs_rows"] = 50_099
+    receipt["post_growth"]["mysql"]["tagged_agent_runs_rows"] = 49_999
+    receipt_path.write_text(json.dumps(receipt, sort_keys=True) + "\n", encoding="utf-8")
+    signature_path.unlink()
+    subprocess.run(
+        [
+            "ssh-keygen",
+            "-q",
+            "-Y",
+            "sign",
+            "-f",
+            str(tmp_path / "capacity_storage_key"),
+            "-n",
+            GROWTH_RECEIPT_SIGNATURE_NAMESPACE,
+            str(receipt_path),
+        ],
+        check=True,
+    )
+    report["growth_receipt"] = {
+        **receipt,
+        "signed_evidence": {
+            **signed,
+            "sha256": hashlib.sha256(receipt_path.read_bytes()).hexdigest(),
+        },
+    }
+    report_path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+    evidence["sha256"] = hashlib.sha256(report_path.read_bytes()).hexdigest()
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    assert result["status"] == "BLOCKED"
+    capacity = next(item for item in result["checks"] if item["key"] == "capacity")
+    assert capacity["status"] == "BLOCK"
+
+
+def test_capacity_rejects_validly_resigned_incomplete_cleanup(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    evidence = document["controls"]["capacity"]["evidence"]
+    report_path = Path(evidence["path"])
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    embedded = report["cleanup_receipt"]
+    signed = embedded["signed_evidence"]
+    receipt_path = Path(signed["path"])
+    signature_path = Path(signed["signature_path"])
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt["remaining_rows"]["tagged_agent_runs_rows"] = 1
+    receipt_path.write_text(json.dumps(receipt, sort_keys=True) + "\n", encoding="utf-8")
+    signature_path.unlink()
+    subprocess.run(
+        [
+            "ssh-keygen",
+            "-q",
+            "-Y",
+            "sign",
+            "-f",
+            str(tmp_path / "capacity_cleanup_key"),
+            "-n",
+            CLEANUP_RECEIPT_SIGNATURE_NAMESPACE,
+            str(receipt_path),
+        ],
+        check=True,
+    )
+    report["cleanup_receipt"] = {
+        **receipt,
+        "signed_evidence": {
+            **signed,
+            "sha256": hashlib.sha256(receipt_path.read_bytes()).hexdigest(),
+        },
+    }
+    report_path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+    evidence["sha256"] = hashlib.sha256(report_path.read_bytes()).hexdigest()
     _add_signed_approvals(document, tmp_path, now)
 
     result = evaluate(

@@ -15,6 +15,8 @@ requirements-dev.lock
 uv.lock
 scripts/g1_run_control_load_gate.py
 scripts/g2_target_capacity_gate.py
+scripts/collect_ga_target_capacity.py
+scripts/ga_capacity_evidence.py
 scripts/collect_ga_target_readiness.py
 scripts/collect_ga_target_ha.py
 scripts/collect_ga_target_alerting.py

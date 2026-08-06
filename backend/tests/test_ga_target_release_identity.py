@@ -135,6 +135,8 @@ def test_capacity_cli_rejects_local_http_under_production_scope() -> None:
         "local-capacity",
         "--namespace-id",
         "1",
+        "--exercise-id",
+        "capacity-local-validation",
         "--source-commit",
         COMMIT,
         "--backend-image",

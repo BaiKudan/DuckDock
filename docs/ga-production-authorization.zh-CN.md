@@ -61,7 +61,12 @@ python backend/scripts/probe_ga_target_tls.py \
    输出必须是 `duckdock-ga-tls-probe-v2`；旧 v1、local-validation 或绑定到其他
    候选版本的报告不能授权生产。
 5. 在专用 performance Namespace 创建限时 Reporter/User token，通过环境变量运行
-   真实 HTTPS 容量门禁（token 不得写入命令行或报告）：
+   真实 HTTPS 容量门禁（token 不得写入命令行或报告）。先由发布机构从
+   `ops/ga/capacity-trust-policy.example.json` 建立只读、内容寻址的容量策略；
+   策略固定托管 MySQL provider、必查计数器与增长/积压/复制延迟阈值，并分别授权
+   负载执行人、存储观察人和清理验证人。三种精确 identity 与公钥必须互不重合，
+   allowed-signers 禁止通配 principal 和公钥复用。存储观察人在压测前先保留 baseline
+   快照，再开始负载：
 
 ```bash
 export DUCKDOCK_CAPACITY_REPORTER_TOKEN='<dedicated reporter token>'
@@ -74,15 +79,75 @@ python backend/scripts/g2_target_capacity_gate.py \
   --backend-image "$DUCKDOCK_GA_BACKEND_IMAGE" \
   --frontend-image "$DUCKDOCK_GA_FRONTEND_IMAGE" \
   --namespace-id 123 \
+  --exercise-id ga-capacity-20260806 \
+  --output /secure/evidence/target-capacity-load.json
+```
+
+   G2 输出的是待组合的 `duckdock-target-capacity-gate-v2` 原始负载报告。负载执行人
+   必须直接对该文件签名；不得签署人工整理的摘要：
+
+```bash
+ssh-keygen -Y sign \
+  -f /release-authority/capacity-load-key \
+  -n duckdock-capacity-load-report \
+  /secure/evidence/target-capacity-load.json
+```
+
+   存储观察人从目标 MySQL/供应商监控取得压测前后快照，按
+   `ops/ga/capacity-growth-receipt.example.json` 写入原始行数、当前 exercise/run tag
+   行数、pending outbox、data/index bytes 与 replica lag。baseline 必须早于负载开始，
+   post-growth 必须晚于负载结束；然后由存储观察人直接签署：
+
+```bash
+ssh-keygen -Y sign \
+  -f /release-authority/capacity-storage-key \
+  -n duckdock-capacity-growth-receipt \
+  /secure/evidence/capacity-growth.json
+```
+
+   确认增长回执已落盘后，删除专用 performance Namespace、撤销两个 token，并按
+   `ops/ga/capacity-cleanup-receipt.example.json` 记录 exercise 作用域的残留计数。独立
+   清理验证人确认 Namespace 已删除、两类凭证均已撤销、四类残留均为 0 后签名：
+
+```bash
+unset DUCKDOCK_CAPACITY_REPORTER_TOKEN DUCKDOCK_CAPACITY_USER_TOKEN
+ssh-keygen -Y sign \
+  -f /release-authority/capacity-cleanup-key \
+  -n duckdock-capacity-cleanup-receipt \
+  /secure/evidence/capacity-cleanup.json
+```
+
+   最后用无数据库密码、无 token 参数的组合器重新验签并生成最终 v3 证据：
+
+```bash
+python backend/scripts/collect_ga_target_capacity.py \
+  --target-environment customer-production \
+  --source-commit "$DUCKDOCK_GA_SOURCE_COMMIT" \
+  --backend-image "$DUCKDOCK_GA_BACKEND_IMAGE" \
+  --frontend-image "$DUCKDOCK_GA_FRONTEND_IMAGE" \
+  --base-url https://duckdock.example.com \
+  --namespace-id 123 \
+  --exercise-id ga-capacity-20260806 \
+  --database-provider "Managed MySQL" \
+  --capacity-policy /release-authority/duckdock-capacity-policy.json \
+  --load-signer-identity capacity-load@example.com \
+  --storage-signer-identity capacity-dba@example.com \
+  --cleanup-signer-identity capacity-cleanup@example.com \
+  --load-report /secure/evidence/target-capacity-load.json \
+  --load-signature /secure/evidence/target-capacity-load.json.sig \
+  --growth-receipt /secure/evidence/capacity-growth.json \
+  --growth-signature /secure/evidence/capacity-growth.json.sig \
+  --cleanup-receipt /secure/evidence/capacity-cleanup.json \
+  --cleanup-signature /secure/evidence/capacity-cleanup.json.sig \
   --output /secure/evidence/target-capacity.json
 ```
 
-   它输出 `duckdock-target-capacity-gate-v2`，默认执行 900 秒持续写入、60 秒突发、
-   50,000+ AgentRun 和增长后时间线查询。
-   保留 DBA 存储增长证据后删除专用 Namespace 并撤销两个 token。生产授权门禁
-   会解析报告 schema/target/base URL/transport/指标，并逐项对照 commit 与镜像；
-   本机 ASGI + MySQL 报告或上一候选版本的报告只能证明工程基线，不能替代当前
-   release 的真实目标 HTTPS 报告。
+   只有 `duckdock-target-capacity-gate-v3` 可授权生产。组合器和最终生产授权器都会
+   重读策略、信任库、三份原始 JSON 与 OpenSSH 签名，重算 50,000+ materialized
+   AgentRun 是否等于真实 MySQL 行增量和 run-tag 行数，Audit/Outbox 增量是否足够，
+   数据文件是否达到批准的增长下限，积压/复制延迟是否在阈值内，以及清理是否完成。
+   仅有 HTTP 201 数、人工 DBA 摘要、本机 ASGI + MySQL 报告、旧 v2 wrapper 或上一
+   候选版本报告都不能替代当前 release 的真实目标 v3 证据。
 6. 先运行本地参考演练，确认发布镜像能在受限安全上下文启动、三类无状态服务
    正常跨域、节点 drain 时持续可用、Beat 能迁移且故障域返回后重新均衡：
 

@@ -1,0 +1,29 @@
+{
+  "schema_version": "duckdock-ga-capacity-cleanup-receipt-v1",
+  "exercise_id": "ga-capacity-20260806",
+  "target_environment": "__CHANGE_ME_TARGET_ENVIRONMENT__",
+  "namespace_id": 123,
+  "run_tag": "abcdef123456",
+  "source_commit": "__CHANGE_ME_40_HEX__",
+  "images": {
+    "backend": {
+      "name": "__CHANGE_ME_BACKEND_IMAGE_AT_SHA256__"
+    },
+    "frontend": {
+      "name": "__CHANGE_ME_FRONTEND_IMAGE_AT_SHA256__"
+    }
+  },
+  "cleanup_receipt_id": "__CHANGE_ME_CAPACITY_CLEANUP_RECEIPT_ID__",
+  "namespace_deleted": true,
+  "credentials": {
+    "reporter_credential_revoked": true,
+    "user_credential_revoked": true
+  },
+  "remaining_rows": {
+    "agent_runs_rows": 0,
+    "audit_logs_rows": 0,
+    "outbox_events_rows": 0,
+    "tagged_agent_runs_rows": 0
+  },
+  "completed_at": "2026-08-06T00:30:00Z"
+}

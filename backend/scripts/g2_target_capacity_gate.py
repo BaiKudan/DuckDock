@@ -12,6 +12,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import sys
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -27,6 +28,9 @@ try:
 except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
     from g1_run_control_load_gate import LoadPhase, build_run_start_request, run_load_phase
     from ga_release_identity import EVIDENCE_SCOPES, build_release_binding
+
+
+EXERCISE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{7,63}$")
 
 
 def require_safe_target(base_url: str, *, allow_http_localhost: bool) -> str:
@@ -188,6 +192,8 @@ async def run_gate(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         "observed_at": finished_at.isoformat(),
         "base_url": base_url,
         "namespace_id": args.namespace_id,
+        "exercise_id": args.exercise_id,
+        "run_tag": run_tag,
         "transport": "network HTTPS against target" if base_url.startswith("https://") else "local HTTP validation",
         "started_at": started_at.isoformat(),
         "finished_at": finished_at.isoformat(),
@@ -205,7 +211,10 @@ async def run_gate(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         },
         "post_growth_timeline_query": timeline,
         "passed": passed,
-        "cleanup_required": "delete the dedicated performance namespace only after DBA storage evidence is retained",
+        "cleanup_required": (
+            "sign the database growth receipt, delete the dedicated performance namespace, "
+            "revoke both tokens, then run collect_ga_target_capacity.py"
+        ),
     }
     return (0 if passed else 2), payload
 
@@ -220,6 +229,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--frontend-image", required=True)
     parser.add_argument("--acknowledge-target-mutation", required=True)
     parser.add_argument("--namespace-id", type=int, required=True)
+    parser.add_argument("--exercise-id", required=True)
     parser.add_argument("--reporter-token-env", default="DUCKDOCK_CAPACITY_REPORTER_TOKEN")
     parser.add_argument("--user-token-env", default="DUCKDOCK_CAPACITY_USER_TOKEN")
     parser.add_argument("--allow-http-localhost", action="store_true")
@@ -249,6 +259,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("durations must be positive")
     if args.minimum_materialized_runs < 1:
         parser.error("minimum materialized runs must be positive")
+    if not EXERCISE_RE.fullmatch(args.exercise_id):
+        parser.error("exercise ID must be 8-64 safe characters")
     if args.allow_http_localhost and args.scope != "local-validation":
         parser.error("--allow-http-localhost requires --scope local-validation")
     try:

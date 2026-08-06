@@ -25,12 +25,34 @@ from typing import Any, Sequence
 from urllib.parse import urlparse
 
 try:
+    from scripts.ga_capacity_evidence import (
+        CAPACITY_EVIDENCE_SCHEMA_VERSION as CAPACITY_SCHEMA_VERSION,
+        CAPACITY_POLICY_SCHEMA_VERSION,
+        CLEANUP_RECEIPT_SIGNATURE_NAMESPACE as CAPACITY_CLEANUP_SIGNATURE_NAMESPACE,
+        GROWTH_RECEIPT_SIGNATURE_NAMESPACE as CAPACITY_GROWTH_SIGNATURE_NAMESPACE,
+        LOAD_REPORT_SIGNATURE_NAMESPACE as CAPACITY_LOAD_SIGNATURE_NAMESPACE,
+        REQUIRED_COUNTERS as CAPACITY_REQUIRED_COUNTERS,
+        validate_cleanup_receipt as validate_capacity_cleanup_receipt,
+        validate_growth_receipt as validate_capacity_growth_receipt,
+        validate_load_report as validate_capacity_load_report,
+    )
     from scripts.ga_security_assessment import (
         ASSESSMENT_EVIDENCE_SCHEMA_VERSION as SECURITY_EVIDENCE_SCHEMA_VERSION,
         ASSESSMENT_SIGNATURE_NAMESPACE as SECURITY_ASSESSMENT_SIGNATURE_NAMESPACE,
         validate_assessment_report,
     )
 except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
+    from ga_capacity_evidence import (
+        CAPACITY_EVIDENCE_SCHEMA_VERSION as CAPACITY_SCHEMA_VERSION,
+        CAPACITY_POLICY_SCHEMA_VERSION,
+        CLEANUP_RECEIPT_SIGNATURE_NAMESPACE as CAPACITY_CLEANUP_SIGNATURE_NAMESPACE,
+        GROWTH_RECEIPT_SIGNATURE_NAMESPACE as CAPACITY_GROWTH_SIGNATURE_NAMESPACE,
+        LOAD_REPORT_SIGNATURE_NAMESPACE as CAPACITY_LOAD_SIGNATURE_NAMESPACE,
+        REQUIRED_COUNTERS as CAPACITY_REQUIRED_COUNTERS,
+        validate_cleanup_receipt as validate_capacity_cleanup_receipt,
+        validate_growth_receipt as validate_capacity_growth_receipt,
+        validate_load_report as validate_capacity_load_report,
+    )
     from ga_security_assessment import (
         ASSESSMENT_EVIDENCE_SCHEMA_VERSION as SECURITY_EVIDENCE_SCHEMA_VERSION,
         ASSESSMENT_SIGNATURE_NAMESPACE as SECURITY_ASSESSMENT_SIGNATURE_NAMESPACE,
@@ -1608,6 +1630,151 @@ def _recovery_policy_context(
         storage_identities,
         restore_identities,
         verification_identities,
+        detail,
+    )
+
+
+def _capacity_policy_context(
+    reference: Any,
+    *,
+    authorization_path: Path,
+    database_provider: Any,
+) -> tuple[
+    bool,
+    dict[str, Any],
+    Path | None,
+    set[str],
+    set[str],
+    set[str],
+    str,
+]:
+    if not isinstance(reference, dict):
+        return False, {}, None, set(), set(), set(), "missing capacity policy reference"
+    policy_path = _resolve_file(reference.get("path"), authorization_path)
+    trust_path_from_reference = _resolve_file(
+        reference.get("allowed_signers_path"), authorization_path
+    )
+    policy: dict[str, Any] = {}
+    if policy_path is not None and policy_path.is_file():
+        try:
+            loaded = json.loads(policy_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            loaded = None
+        if isinstance(loaded, dict):
+            policy = loaded
+    expected_policy_keys = {
+        "schema_version",
+        "policy_id",
+        "organization",
+        "allowed_signers_path",
+        "allowed_signers_sha256",
+        "approved_database_providers",
+        "load_executor_identities",
+        "storage_observer_identities",
+        "cleanup_verifier_identities",
+        "required_counters",
+        "minimum_database_growth_bytes",
+        "maximum_pending_outbox_events",
+        "maximum_replica_lag_seconds",
+    }
+    expected_reference_keys = {
+        "path",
+        "sha256",
+        "policy_id",
+        "allowed_signers_path",
+        "allowed_signers_sha256",
+    }
+
+    def exact_identity_set(value: Any) -> set[str]:
+        if not (
+            isinstance(value, list)
+            and bool(value)
+            and all(_meaningful_string(item) for item in value)
+            and len(value) == len(set(value))
+        ):
+            return set()
+        return {str(item) for item in value}
+
+    load_identities = exact_identity_set(policy.get("load_executor_identities"))
+    storage_identities = exact_identity_set(policy.get("storage_observer_identities"))
+    cleanup_identities = exact_identity_set(policy.get("cleanup_verifier_identities"))
+    identity_sets = (load_identities, storage_identities, cleanup_identities)
+    identities_disjoint = all(
+        not identity_sets[left].intersection(identity_sets[right])
+        for left in range(len(identity_sets))
+        for right in range(left + 1, len(identity_sets))
+    )
+    providers = policy.get("approved_database_providers")
+    providers_valid = (
+        isinstance(providers, list)
+        and bool(providers)
+        and all(_meaningful_string(provider) for provider in providers)
+        and len(providers) == len(set(providers))
+        and database_provider in providers
+    )
+    thresholds_valid = (
+        isinstance(policy.get("minimum_database_growth_bytes"), int)
+        and not isinstance(policy.get("minimum_database_growth_bytes"), bool)
+        and policy["minimum_database_growth_bytes"] > 0
+        and isinstance(policy.get("maximum_pending_outbox_events"), int)
+        and not isinstance(policy.get("maximum_pending_outbox_events"), bool)
+        and policy["maximum_pending_outbox_events"] >= 0
+        and isinstance(policy.get("maximum_replica_lag_seconds"), (int, float))
+        and not isinstance(policy.get("maximum_replica_lag_seconds"), bool)
+        and math.isfinite(float(policy["maximum_replica_lag_seconds"]))
+        and float(policy["maximum_replica_lag_seconds"]) >= 0
+    )
+    policy_digest = (
+        _sha256(policy_path) if policy_path is not None and policy_path.is_file() else "missing"
+    )
+    policy_trust_path = (
+        _resolve_file(policy.get("allowed_signers_path"), policy_path)
+        if policy_path is not None
+        else None
+    )
+    trust_digest = (
+        _sha256(policy_trust_path)
+        if policy_trust_path is not None and policy_trust_path.is_file()
+        else "missing"
+    )
+    signer_bindings: dict[str, set[str]] | None = None
+    signer_detail = "missing trust store"
+    if policy_trust_path is not None and policy_trust_path.is_file():
+        signer_bindings, signer_detail = _allowed_signer_bindings(policy_trust_path)
+    configured_identities = set().union(*identity_sets)
+    valid = (
+        set(reference) == expected_reference_keys
+        and bool(DIGEST_RE.fullmatch(str(reference.get("sha256", ""))))
+        and policy_digest == reference.get("sha256")
+        and set(policy) == expected_policy_keys
+        and policy.get("schema_version") == CAPACITY_POLICY_SCHEMA_VERSION
+        and _meaningful_string(policy.get("policy_id"))
+        and policy.get("policy_id") == reference.get("policy_id")
+        and _meaningful_string(policy.get("organization"))
+        and providers_valid
+        and all(identity_sets)
+        and identities_disjoint
+        and policy.get("required_counters") == list(CAPACITY_REQUIRED_COUNTERS)
+        and thresholds_valid
+        and policy_trust_path is not None
+        and trust_path_from_reference == policy_trust_path
+        and bool(DIGEST_RE.fullmatch(str(reference.get("allowed_signers_sha256", ""))))
+        and trust_digest == reference.get("allowed_signers_sha256")
+        and trust_digest == policy.get("allowed_signers_sha256")
+        and signer_bindings is not None
+        and set(signer_bindings) == configured_identities
+    )
+    detail = (
+        f"policy={policy_path or 'missing'}, digest={policy_digest}, "
+        f"trust={policy_trust_path or 'missing'}, trust_digest={trust_digest}, {signer_detail}"
+    )
+    return (
+        valid,
+        policy,
+        policy_trust_path,
+        load_identities,
+        storage_identities,
+        cleanup_identities,
         detail,
     )
 
@@ -3509,51 +3676,305 @@ def evaluate(
     capacity = controls["capacity"]
     minimum_sustained_rps = float(target.get("minimum_sustained_rps", 50))
     capacity_report = _evidence_json(capacity, authorization_path)
-    sustained_report = None
-    timeline_report: dict[str, Any] = {}
-    if capacity_report is not None and isinstance(capacity_report.get("phases"), list):
-        sustained_report = next(
-            (
-                phase
-                for phase in capacity_report["phases"]
-                if isinstance(phase, dict) and phase.get("name") == "sustained"
-            ),
-            None,
+    database_provider = (
+        capacity_report.get("database_provider") if isinstance(capacity_report, dict) else None
+    )
+    capacity_policy_reference = (
+        capacity_report.get("capacity_policy")
+        if isinstance(capacity_report, dict)
+        and isinstance(capacity_report.get("capacity_policy"), dict)
+        else {}
+    )
+    (
+        capacity_policy_ok,
+        capacity_policy,
+        capacity_trust_store,
+        load_identities,
+        storage_identities,
+        cleanup_identities,
+        capacity_policy_detail,
+    ) = _capacity_policy_context(
+        capacity_policy_reference,
+        authorization_path=authorization_path,
+        database_provider=database_provider,
+    )
+    load_embedded = capacity_report.get("load_report") if isinstance(capacity_report, dict) else None
+    growth_embedded = (
+        capacity_report.get("growth_receipt") if isinstance(capacity_report, dict) else None
+    )
+    cleanup_embedded = (
+        capacity_report.get("cleanup_receipt") if isinstance(capacity_report, dict) else None
+    )
+    load_signature_ok, raw_load_report, load_signature_detail = _verified_embedded_receipt(
+        load_embedded,
+        authorization_path=authorization_path,
+        allowed_signers=capacity_trust_store if capacity_policy_ok else None,
+        allowed_identities=load_identities,
+        namespace=CAPACITY_LOAD_SIGNATURE_NAMESPACE,
+    )
+    growth_signature_ok, raw_growth_receipt, growth_signature_detail = (
+        _verified_embedded_receipt(
+            growth_embedded,
+            authorization_path=authorization_path,
+            allowed_signers=capacity_trust_store if capacity_policy_ok else None,
+            allowed_identities=storage_identities,
+            namespace=CAPACITY_GROWTH_SIGNATURE_NAMESPACE,
         )
-    if capacity_report is not None and isinstance(capacity_report.get("post_growth_timeline_query"), dict):
-        timeline_report = capacity_report["post_growth_timeline_query"]
+    )
+    cleanup_signature_ok, raw_cleanup_receipt, cleanup_signature_detail = (
+        _verified_embedded_receipt(
+            cleanup_embedded,
+            authorization_path=authorization_path,
+            allowed_signers=capacity_trust_store if capacity_policy_ok else None,
+            allowed_identities=cleanup_identities,
+            namespace=CAPACITY_CLEANUP_SIGNATURE_NAMESPACE,
+        )
+    )
+    capacity_signers = [
+        embedded.get("signed_evidence", {}).get("signer_identity")
+        if isinstance(embedded, dict) and isinstance(embedded.get("signed_evidence"), dict)
+        else None
+        for embedded in (load_embedded, growth_embedded, cleanup_embedded)
+    ]
+    capacity_signers_distinct = (
+        all(_meaningful_string(identity) for identity in capacity_signers)
+        and len(set(capacity_signers)) == 3
+    )
+    exercise = (
+        capacity_report.get("exercise")
+        if isinstance(capacity_report, dict) and isinstance(capacity_report.get("exercise"), dict)
+        else {}
+    )
+    requirements = (
+        capacity_report.get("requirements")
+        if isinstance(capacity_report, dict)
+        and isinstance(capacity_report.get("requirements"), dict)
+        else {}
+    )
+    data_growth = (
+        capacity_report.get("data_growth")
+        if isinstance(capacity_report, dict) and isinstance(capacity_report.get("data_growth"), dict)
+        else {}
+    )
+    derived_load: dict[str, Any] = {}
+    derived_growth: dict[str, Any] = {}
+    derived_cleanup: dict[str, Any] = {}
+    capacity_validation_detail = "signed capacity receipts unavailable"
+    try:
+        if not (raw_load_report and raw_growth_receipt and raw_cleanup_receipt):
+            raise ValueError(capacity_validation_detail)
+        derived_load = validate_capacity_load_report(
+            raw_load_report,
+            target_environment=str(target.get("target_id")),
+            source_commit=str(release.get("git_commit")),
+            backend_image=str(release.get("backend_image")),
+            frontend_image=str(release.get("frontend_image")),
+            base_url=str(target.get("public_base_url")),
+            namespace_id=int(capacity_report.get("namespace_id", 0)),
+            exercise_id=str(exercise.get("exercise_id", "")),
+            now=current,
+        )
+        derived_growth = validate_capacity_growth_receipt(
+            raw_growth_receipt,
+            load=derived_load,
+            target_environment=str(target.get("target_id")),
+            source_commit=str(release.get("git_commit")),
+            backend_image=str(release.get("backend_image")),
+            frontend_image=str(release.get("frontend_image")),
+            namespace_id=int(capacity_report.get("namespace_id", 0)),
+            exercise_id=str(exercise.get("exercise_id", "")),
+            database_provider=str(database_provider),
+        )
+        derived_cleanup = validate_capacity_cleanup_receipt(
+            raw_cleanup_receipt,
+            load=derived_load,
+            growth=derived_growth,
+            target_environment=str(target.get("target_id")),
+            source_commit=str(release.get("git_commit")),
+            backend_image=str(release.get("backend_image")),
+            frontend_image=str(release.get("frontend_image")),
+            namespace_id=int(capacity_report.get("namespace_id", 0)),
+            exercise_id=str(exercise.get("exercise_id", "")),
+        )
+    except (OSError, UnicodeError, TypeError, ValueError) as exc:
+        capacity_validation_detail = str(exc)
+    else:
+        capacity_validation_detail = "load, data growth and cleanup receipts validated"
+    growth_passed = (
+        bool(derived_growth)
+        and derived_growth.get("counts_monotonic") is True
+        and derived_growth.get("agent_runs_delta") == derived_load.get("materialized_runs")
+        and derived_growth.get("tagged_agent_runs") == derived_load.get("materialized_runs")
+        and int(derived_growth.get("audit_logs_delta", -1))
+        >= int(derived_load.get("materialized_runs", 0))
+        and int(derived_growth.get("outbox_events_delta", -1))
+        >= int(derived_load.get("materialized_runs", 0))
+        and int(derived_growth.get("database_growth_bytes", -1))
+        >= int(capacity_policy.get("minimum_database_growth_bytes", 0))
+        and int(derived_growth.get("pending_outbox_events", 1))
+        <= int(capacity_policy.get("maximum_pending_outbox_events", -1))
+        and float(derived_growth.get("replica_lag_seconds", 1e12))
+        <= float(capacity_policy.get("maximum_replica_lag_seconds", -1))
+    )
+    requirement_numeric_fields = {
+        "minimum_sustained_seconds",
+        "minimum_sustained_rps",
+        "minimum_materialized_runs",
+        "maximum_error_rate",
+        "maximum_write_p95_ms",
+        "maximum_timeline_p95_ms",
+    }
+    requirements_types_valid = all(
+        isinstance(requirements.get(field), (int, float))
+        and not isinstance(requirements.get(field), bool)
+        and math.isfinite(float(requirements[field]))
+        for field in requirement_numeric_fields
+    )
+    requirements_valid = (
+        set(requirements)
+        == requirement_numeric_fields
+        and requirements_types_valid
+        and float(requirements.get("minimum_sustained_seconds", 0)) >= 900
+        and float(requirements.get("minimum_sustained_rps", 0)) >= minimum_sustained_rps
+        and int(requirements.get("minimum_materialized_runs", 0)) >= 50_000
+        and float(requirements.get("maximum_error_rate", 1)) <= 0.001
+        and float(requirements.get("maximum_write_p95_ms", 1e12)) <= 1_000
+        and float(requirements.get("maximum_timeline_p95_ms", 1e12)) <= 250
+    )
+    expected_growth_projection = (
+        {
+            "agent_runs_delta": derived_growth.get("agent_runs_delta"),
+            "audit_logs_delta": derived_growth.get("audit_logs_delta"),
+            "outbox_events_delta": derived_growth.get("outbox_events_delta"),
+            "tagged_agent_runs": derived_growth.get("tagged_agent_runs"),
+            "database_growth_bytes": derived_growth.get("database_growth_bytes"),
+            "pending_outbox_events": derived_growth.get("pending_outbox_events"),
+            "replica_lag_seconds": derived_growth.get("replica_lag_seconds"),
+            "counts_monotonic": derived_growth.get("counts_monotonic"),
+        }
+        if derived_growth
+        else {}
+    )
     report_matches_target = (
-        _report_release_target_binding(
+        isinstance(capacity_report, dict)
+        and set(capacity_report)
+        == {
+            "schema_version",
+            "scope",
+            "target_environment",
+            "source_commit",
+            "images",
+            "status",
+            "passed",
+            "observed_at",
+            "base_url",
+            "namespace_id",
+            "database_provider",
+            "transport",
+            "exercise",
+            "requirements",
+            "phases",
+            "offered_runs",
+            "materialized_runs",
+            "failure_count",
+            "error_rate",
+            "post_growth_timeline_query",
+            "data_growth",
+            "cleanup_verified",
+            "capacity_policy",
+            "load_report",
+            "growth_receipt",
+            "cleanup_receipt",
+        }
+        and _report_release_target_binding(
             capacity_report,
-            schema_version="duckdock-target-capacity-gate-v2",
+            schema_version=CAPACITY_SCHEMA_VERSION,
             status="PASSED",
             control=capacity,
             target=target,
             release=release,
         )
-        and capacity_report.get("passed") is True
         and capacity_report.get("transport") == "network HTTPS against target"
-        and capacity_report.get("target_environment") == target.get("target_id")
-        and str(capacity_report.get("base_url", "")).rstrip("/") == str(target.get("public_base_url", "")).rstrip("/")
-        and isinstance(sustained_report, dict)
-        and sustained_report.get("passed") is True
-        and int(sustained_report.get("duration_seconds", 0)) == int(capacity.get("sustained_seconds", -1))
-        and float(sustained_report.get("target_rate", 0)) == float(capacity.get("sustained_rps", -1))
-        and int(capacity_report.get("materialized_runs", -1)) == int(capacity.get("materialized_runs", -2))
-        and float(capacity_report.get("error_rate", -1)) == float(capacity.get("error_rate", -2))
-        and float(sustained_report.get("p95_ms", -1)) == float(capacity.get("write_p95_ms", -2))
-        and float(timeline_report.get("p95_ms", -1)) == float(capacity.get("timeline_p95_ms", -2))
-        and timeline_report.get("passed") is capacity.get("post_growth_query_passed")
+        and str(capacity_report.get("base_url", "")).rstrip("/")
+        == str(target.get("public_base_url", "")).rstrip("/")
+        and capacity_report.get("database_provider") == capacity.get("database_provider")
+        and capacity_policy_ok
+        and load_signature_ok
+        and growth_signature_ok
+        and cleanup_signature_ok
+        and capacity_signers_distinct
+        and bool(derived_load)
+        and bool(derived_growth)
+        and bool(derived_cleanup)
+        and requirements_valid
+        and exercise
+        == {
+            "exercise_id": raw_load_report.get("exercise_id"),
+            "run_tag": raw_load_report.get("run_tag"),
+            "started_at": raw_load_report.get("started_at"),
+            "finished_at": raw_load_report.get("finished_at"),
+            "completed_at": capacity_report.get("observed_at"),
+        }
+        and _parse_time(exercise.get("completed_at")) is not None
+        and derived_cleanup.get("completed_at") <= _parse_time(exercise.get("completed_at"))
+        and capacity_report.get("phases") == raw_load_report.get("phases")
+        and capacity_report.get("offered_runs") == derived_load.get("offered_runs")
+        and capacity_report.get("materialized_runs") == derived_load.get("materialized_runs")
+        and capacity_report.get("failure_count") == raw_load_report.get("failure_count")
+        and capacity_report.get("error_rate") == derived_load.get("error_rate")
+        and capacity_report.get("post_growth_timeline_query")
+        == raw_load_report.get("post_growth_timeline_query")
+        and data_growth == expected_growth_projection
+        and capacity_report.get("cleanup_verified") is derived_cleanup.get("passed")
+        and growth_passed
+        and derived_cleanup.get("passed") is True
+        and not _contains_secret_material_key(capacity_report)
+    )
+    capacity_numeric_fields = (
+        "sustained_seconds",
+        "sustained_rps",
+        "materialized_runs",
+        "error_rate",
+        "write_p95_ms",
+        "timeline_p95_ms",
+        "agent_runs_delta",
+        "audit_logs_delta",
+        "outbox_events_delta",
+        "database_growth_bytes",
+    )
+    capacity_types_valid = all(
+        isinstance(capacity.get(field), (int, float))
+        and not isinstance(capacity.get(field), bool)
+        and math.isfinite(float(capacity[field]))
+        for field in capacity_numeric_fields
+    )
+    capacity_claims_match = (
+        capacity.get("sustained_seconds") == derived_load.get("sustained_seconds")
+        and capacity.get("sustained_rps") == derived_load.get("sustained_rps")
+        and capacity.get("materialized_runs") == derived_load.get("materialized_runs")
+        and capacity.get("error_rate") == derived_load.get("error_rate")
+        and capacity.get("write_p95_ms") == derived_load.get("write_p95_ms")
+        and capacity.get("timeline_p95_ms") == derived_load.get("timeline_p95_ms")
+        and capacity.get("post_growth_query_passed") is True
+        and capacity.get("agent_runs_delta") == derived_growth.get("agent_runs_delta")
+        and capacity.get("audit_logs_delta") == derived_growth.get("audit_logs_delta")
+        and capacity.get("outbox_events_delta") == derived_growth.get("outbox_events_delta")
+        and capacity.get("database_growth_bytes")
+        == derived_growth.get("database_growth_bytes")
+        and capacity.get("cleanup_verified") is derived_cleanup.get("passed")
     )
     capacity_ok = (
         capacity.get("status") == "PASSED"
-        and int(capacity.get("sustained_seconds", 0)) >= 900
+        and capacity_types_valid
+        and float(capacity.get("sustained_seconds", 0)) >= 900
         and float(capacity.get("sustained_rps", 0)) >= minimum_sustained_rps
-        and int(capacity.get("materialized_runs", 0)) >= 50_000
+        and float(capacity.get("materialized_runs", 0)) >= 50_000
         and float(capacity.get("error_rate", 1)) <= 0.001
         and float(capacity.get("write_p95_ms", 1e12)) <= 1_000
         and float(capacity.get("timeline_p95_ms", 1e12)) <= 250
         and capacity.get("post_growth_query_passed") is True
+        and capacity.get("cleanup_verified") is True
+        and capacity_claims_match
         and report_matches_target
     )
     gate.add(
@@ -3563,10 +3984,21 @@ def evaluate(
         observed=(
             f"status={capacity.get('status')}, duration={capacity.get('sustained_seconds')}s, "
             f"rps={capacity.get('sustained_rps')}, runs={capacity.get('materialized_runs')}, "
-            f"errors={capacity.get('error_rate')}"
+            f"errors={capacity.get('error_rate')}, DB_growth={capacity.get('database_growth_bytes')}, "
+            f"cleanup={capacity.get('cleanup_verified')}"
         ),
-        expected=f">=900s at >={minimum_sustained_rps} rps; >=50k rows; error<=0.1%; write p95<=1s; query p95<=250ms",
-        detail="The evidence must be a passing network-HTTPS target report; local ASGI/MySQL engineering results cannot authorize production.",
+        expected=(
+            f">=900s at >={minimum_sustained_rps} rps; >=50k reconciled AgentRun/Audit/Outbox rows; "
+            "signed DB byte growth/lag/backlog; error<=0.1%; write p95<=1s; query p95<=250ms; "
+            "namespace deletion and both credentials revoked"
+        ),
+        detail=(
+            "The v3 evidence must re-verify three role-separated signatures and recompute load, "
+            "database growth and cleanup from raw files. Local/v2 HTTP summaries cannot authorize "
+            f"production. Validation={capacity_validation_detail}; policy=({capacity_policy_detail}); "
+            f"load=({load_signature_detail}); growth=({growth_signature_detail}); "
+            f"cleanup=({cleanup_signature_detail})"
+        ),
     )
 
     ha = controls["high_availability"]

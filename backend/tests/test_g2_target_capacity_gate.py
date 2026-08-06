@@ -93,6 +93,8 @@ async def test_capacity_report_v2_retains_release_binding(monkeypatch: pytest.Mo
             FRONTEND_IMAGE,
             "--namespace-id",
             "1",
+            "--exercise-id",
+            "capacity-local-20260806",
             "--allow-http-localhost",
             "--sustained-rate",
             "1",
@@ -116,3 +118,5 @@ async def test_capacity_report_v2_retains_release_binding(monkeypatch: pytest.Mo
     assert report["source_commit"] == COMMIT
     assert report["images"]["backend"]["name"] == BACKEND_IMAGE
     assert report["observed_at"] == report["finished_at"]
+    assert report["exercise_id"] == "capacity-local-20260806"
+    assert len(report["run_tag"]) == 12
