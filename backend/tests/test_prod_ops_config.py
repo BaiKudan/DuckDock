@@ -187,6 +187,8 @@ def test_production_image_context_excludes_test_and_local_validation_artifacts()
         "scripts/g2_target_capacity_gate.py",
         "scripts/collect_ga_target_capacity.py",
         "scripts/ga_capacity_evidence.py",
+        "scripts/collect_ga_target_tls.py",
+        "scripts/ga_tls_evidence.py",
         "scripts/ga_release_identity.py",
         "scripts/probe_ga_target_tls.py",
         "scripts/verify_ga_production_authorization.py",

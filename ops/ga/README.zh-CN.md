@@ -36,6 +36,10 @@ python backend/scripts/verify_ga_production_authorization.py \
 `backend/scripts/collect_ga_target_readiness.py` 通过目标 HTTPS 采集；TLS、网络、容量
 和 HA 使用各自工具输出。以下模板定义了其余必须由目标执行结果填充的版本化协议：
 
+- `tls-trust-policy.example.json`：发布机构批准的外部 TLS probe/operator/vantage/
+  全球可路由来源 CIDR 与精确签名身份；`probe_ga_target_tls.py` 生成带证书指纹和
+  OpenSSL 原始输出的 v3 报告，外部执行人签名后由 `collect_ga_target_tls.py` 组合成
+  最终 `duckdock-ga-tls-evidence-v3`，禁止直接手填 wrapper；
 - `secrets-evidence.example.json`：`collect_ga_target_secrets.py` 输出的目标轮换 v2
   结构；只采集 Secret/Deployment/Pod 元数据，绑定 provider 与独立 verifier 的两份
   原始 OpenSSH 签名回执，禁止手填；
@@ -76,7 +80,7 @@ python backend/scripts/verify_ga_production_authorization.py \
 - `state-services-ha-evidence.example.json`：托管 MySQL、Redis、对象存储与 RWX
   的真实故障切换回执；必须由审批策略中的 Operations 身份签名。
 
-所有这些目标报告以及 readiness v1、TLS v2、容量 v3 报告都必须绑定相同 target
+所有这些目标报告以及 readiness v1、TLS evidence v3、容量 v3 报告都必须绑定相同 target
 ID、source commit、backend/frontend 镜像摘要；报告内部 `observed_at` 必须与授权
 文件的证据时间相同。模板中的 PASS 值只
 描述合格结构，不是可提交的证据，所有 `__CHANGE_ME` 和示例快照都必须替换为

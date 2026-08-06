@@ -4,6 +4,7 @@ import hashlib
 import json
 import shutil
 import subprocess
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -62,6 +63,13 @@ from scripts.ga_capacity_evidence import (
     LOAD_REPORT_SCHEMA_VERSION,
     LOAD_REPORT_SIGNATURE_NAMESPACE,
     REQUIRED_COUNTERS as CAPACITY_REQUIRED_COUNTERS,
+)
+from scripts.ga_tls_evidence import (
+    TLS_EVIDENCE_SCHEMA_VERSION,
+    TLS_POLICY_SCHEMA_VERSION,
+    TLS_RAW_SCHEMA_VERSION,
+    TLS_SIGNATURE_NAMESPACE,
+    canonical_digest as tls_canonical_digest,
 )
 
 
@@ -213,35 +221,201 @@ def _document(tmp_path: Path, now: datetime) -> dict:
     )
     controls["application_readiness"]["evidence"]["sha256"] = hashlib.sha256(application_path.read_bytes()).hexdigest()
     tls_path = Path(controls["tls"]["evidence"]["path"])
-    tls_path.write_text(
-        json.dumps(
+    tls_exercise_id = "tls-ga-20260806"
+    tls_probe_identity = "tls-probe@example.com"
+    tls_probe_observed_at = observed_at - timedelta(seconds=10)
+    tls_capture_at = tls_probe_observed_at - timedelta(seconds=3)
+
+    def tls_handshake(protocol: str, certificate_digest: str) -> dict:
+        return {
+            "ok": True,
+            "captured_at": tls_capture_at.isoformat(),
+            "protocol": protocol,
+            "cipher": "TLS_AES_256_GCM_SHA384",
+            "peer_ip": "203.0.113.10",
+            "peer_certificate_sha256": certificate_digest,
+            "certificate_serial_number": "01ABCD",
+            "certificate_subject": "commonName=duckdock.example.com",
+            "certificate_issuer": "commonName=Example Public CA",
+            "certificate_not_before": (tls_capture_at - timedelta(days=1)).isoformat(),
+            "expires_at": (tls_capture_at + timedelta(days=60)).isoformat(),
+            "certificate_days_remaining": 60,
+            "hostname_verified": True,
+        }
+
+    def tls_http() -> dict:
+        headers = [
             {
-                "schema_version": "duckdock-ga-tls-probe-v2",
-                "scope": "target-production",
-                "status": "PASS",
-                "passed": True,
-                "observed_at": observed_at.isoformat(),
-                "target_environment": "customer-production",
-                "source_commit": commit,
-                "images": {
-                    "backend": {"name": backend_image},
-                    "frontend": {"name": frontend_image},
-                },
-                "application_url": "https://duckdock.example.com/health",
-                "object_store_url": "https://objects.example.com/minio/health/live",
-                "negotiated_protocols": ["TLSv1.2", "TLSv1.3"],
-                "legacy_protocols_rejected": ["TLSv1", "TLSv1.1"],
-                "certificate_days_remaining": 60,
-                "hostname_verified": True,
-                "hsts_max_age_seconds": 31_536_000,
-                "endpoints": {
-                    "application": {"passed": True},
-                    "object_store": {"passed": True},
-                },
+                "name": "strict-transport-security",
+                "value": "max-age=31536000; includeSubDomains",
+            }
+        ]
+        body = b'{"status":"ok"}'
+        return {
+            "ok": True,
+            "observed_at": (tls_capture_at + timedelta(seconds=1)).isoformat(),
+            "status_code": 200,
+            "hsts": "max-age=31536000; includeSubDomains",
+            "hsts_max_age_seconds": 31_536_000,
+            "response_headers": headers,
+            "response_headers_sha256": tls_canonical_digest(headers),
+            "body_prefix_bytes": len(body),
+            "body_prefix_sha256": hashlib.sha256(body).hexdigest(),
+        }
+
+    def tls_legacy() -> dict:
+        raw_output = "legacy protocol rejected by target\n"
+        return {
+            "rejected": True,
+            "openssl_exit_code": 1,
+            "result": "rejected",
+            "raw_output": raw_output,
+            "raw_output_sha256": hashlib.sha256(raw_output.encode()).hexdigest(),
+        }
+
+    def tls_endpoint(host: str, path: str, certificate_digest: str) -> dict:
+        return {
+            "host": host,
+            "port": 443,
+            "path": path,
+            "handshakes": {
+                "TLSv1.2": tls_handshake("TLSv1.2", certificate_digest),
+                "TLSv1.3": tls_handshake("TLSv1.3", certificate_digest),
             },
-            sort_keys=True,
-        )
-        + "\n",
+            "http": tls_http(),
+            "legacy_protocols": {"TLSv1": tls_legacy(), "TLSv1.1": tls_legacy()},
+            "passed": True,
+        }
+
+    tls_endpoints = {
+        "application": tls_endpoint("duckdock.example.com", "/health", "1" * 64),
+        "object_store": tls_endpoint(
+            "objects.example.com",
+            "/minio/health/live",
+            "2" * 64,
+        ),
+    }
+    tls_raw_report = {
+        "schema_version": TLS_RAW_SCHEMA_VERSION,
+        "scope": "target-production",
+        "status": "PASS",
+        "passed": True,
+        "observed_at": tls_probe_observed_at.isoformat(),
+        "target_environment": "customer-production",
+        "source_commit": commit,
+        "images": {
+            "backend": {"name": backend_image},
+            "frontend": {"name": frontend_image},
+        },
+        "exercise_id": tls_exercise_id,
+        "probe": {
+            "probe_id": "external-tls-probe-01",
+            "vantage_id": "internet-hangzhou-01",
+            "vantage_class": "external-internet",
+            "source_ip": "1.1.1.1",
+        },
+        "application_url": "https://duckdock.example.com/health",
+        "object_store_url": "https://objects.example.com/minio/health/live",
+        "negotiated_protocols": ["TLSv1.2", "TLSv1.3"],
+        "legacy_protocols_rejected": ["TLSv1", "TLSv1.1"],
+        "certificate_days_remaining": 60,
+        "hostname_verified": True,
+        "hsts_max_age_seconds": 31_536_000,
+        "minimum_certificate_days": 30,
+        "minimum_hsts_max_age_seconds": 31_536_000,
+        "endpoints": tls_endpoints,
+    }
+    tls_key = tmp_path / "tls_probe_key"
+    subprocess.run(
+        ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(tls_key)],
+        check=True,
+    )
+    tls_allowed_signers = tmp_path / "tls_allowed_signers"
+    tls_allowed_signers.write_text(
+        f"{tls_probe_identity} "
+        f"{tls_key.with_suffix('.pub').read_text(encoding='utf-8').strip()}\n",
+        encoding="utf-8",
+    )
+    tls_policy = {
+        "schema_version": TLS_POLICY_SCHEMA_VERSION,
+        "policy_id": "duckdock-target-tls-authority",
+        "organization": "DuckDock Test Security",
+        "allowed_signers_path": str(tls_allowed_signers),
+        "allowed_signers_sha256": hashlib.sha256(
+            tls_allowed_signers.read_bytes()
+        ).hexdigest(),
+        "probe_operator_identities": [tls_probe_identity],
+        "approved_probe_ids": ["external-tls-probe-01"],
+        "approved_vantage_ids": ["internet-hangzhou-01"],
+        "approved_vantage_classes": ["external-internet"],
+        "approved_source_cidrs": ["1.1.1.0/24"],
+    }
+    tls_policy_path = tmp_path / "tls-policy.json"
+    tls_policy_path.write_text(
+        json.dumps(tls_policy, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    tls_raw_path = tmp_path / "tls-raw.json"
+    tls_raw_path.write_text(
+        json.dumps(tls_raw_report, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            "ssh-keygen",
+            "-q",
+            "-Y",
+            "sign",
+            "-f",
+            str(tls_key),
+            "-n",
+            TLS_SIGNATURE_NAMESPACE,
+            str(tls_raw_path),
+        ],
+        check=True,
+    )
+    tls_report = {
+        "schema_version": TLS_EVIDENCE_SCHEMA_VERSION,
+        "scope": "target-production",
+        "status": "PASS",
+        "passed": True,
+        "observed_at": observed_at.isoformat(),
+        "probe_observed_at": tls_probe_observed_at.isoformat(),
+        "target_environment": "customer-production",
+        "source_commit": commit,
+        "images": {
+            "backend": {"name": backend_image},
+            "frontend": {"name": frontend_image},
+        },
+        "exercise_id": tls_exercise_id,
+        "probe": tls_raw_report["probe"],
+        "application_url": tls_raw_report["application_url"],
+        "object_store_url": tls_raw_report["object_store_url"],
+        "negotiated_protocols": tls_raw_report["negotiated_protocols"],
+        "legacy_protocols_rejected": tls_raw_report["legacy_protocols_rejected"],
+        "certificate_days_remaining": 60,
+        "hostname_verified": True,
+        "hsts_max_age_seconds": 31_536_000,
+        "endpoints": tls_endpoints,
+        "tls_policy": {
+            "path": str(tls_policy_path),
+            "sha256": hashlib.sha256(tls_policy_path.read_bytes()).hexdigest(),
+            "policy_id": tls_policy["policy_id"],
+            "allowed_signers_path": str(tls_allowed_signers),
+            "allowed_signers_sha256": tls_policy["allowed_signers_sha256"],
+        },
+        "signed_probe": {
+            **tls_raw_report,
+            "signed_evidence": {
+                "path": str(tls_raw_path),
+                "sha256": hashlib.sha256(tls_raw_path.read_bytes()).hexdigest(),
+                "signature_path": f"{tls_raw_path}.sig",
+                "signer_identity": tls_probe_identity,
+            },
+        },
+    }
+    tls_path.write_text(
+        json.dumps(tls_report, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     controls["tls"]["evidence"]["sha256"] = hashlib.sha256(tls_path.read_bytes()).hexdigest()
@@ -1994,6 +2168,66 @@ def _add_signed_approvals(document: dict, tmp_path: Path, now: datetime) -> None
     document["approvals"] = approvals
 
 
+def _resign_tls_probe(
+    document: dict,
+    tmp_path: Path,
+    mutate: Callable[[dict], None],
+) -> None:
+    evidence = document["controls"]["tls"]["evidence"]
+    report_path = Path(evidence["path"])
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    embedded = report["signed_probe"]
+    signed = embedded["signed_evidence"]
+    raw_path = Path(signed["path"])
+    signature_path = Path(signed["signature_path"])
+    raw = json.loads(raw_path.read_text(encoding="utf-8"))
+    mutate(raw)
+    raw_path.write_text(json.dumps(raw, sort_keys=True) + "\n", encoding="utf-8")
+    signature_path.unlink()
+    subprocess.run(
+        [
+            "ssh-keygen",
+            "-q",
+            "-Y",
+            "sign",
+            "-f",
+            str(tmp_path / "tls_probe_key"),
+            "-n",
+            TLS_SIGNATURE_NAMESPACE,
+            str(raw_path),
+        ],
+        check=True,
+    )
+    report["signed_probe"] = {
+        **raw,
+        "signed_evidence": {
+            **signed,
+            "sha256": hashlib.sha256(raw_path.read_bytes()).hexdigest(),
+        },
+    }
+    for field in (
+        "probe",
+        "endpoints",
+        "negotiated_protocols",
+        "legacy_protocols_rejected",
+        "certificate_days_remaining",
+        "hostname_verified",
+        "hsts_max_age_seconds",
+    ):
+        report[field] = raw[field]
+    control = document["controls"]["tls"]
+    for field in (
+        "negotiated_protocols",
+        "legacy_protocols_rejected",
+        "certificate_days_remaining",
+        "hostname_verified",
+        "hsts_max_age_seconds",
+    ):
+        control[field] = raw[field]
+    report_path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+    evidence["sha256"] = hashlib.sha256(report_path.read_bytes()).hexdigest()
+
+
 def test_complete_target_bundle_is_cryptographically_authorized(tmp_path: Path) -> None:
     now = datetime.now(timezone.utc)
     document = _document(tmp_path, now)
@@ -3158,6 +3392,137 @@ def test_tls_report_from_previous_release_cannot_authorize_current_release(
 
     assert result["status"] == "BLOCKED"
     tls = next(item for item in result["checks"] if item["key"] == "tls")
+    assert tls["status"] == "BLOCK"
+
+
+def test_tls_rejects_raw_probe_modified_after_signature(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    evidence = document["controls"]["tls"]["evidence"]
+    report_path = Path(evidence["path"])
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    embedded = report["signed_probe"]
+    signed = embedded["signed_evidence"]
+    raw_path = Path(signed["path"])
+    raw = json.loads(raw_path.read_text(encoding="utf-8"))
+    raw["endpoints"]["application"]["http"]["status_code"] = 204
+    raw_path.write_text(json.dumps(raw, sort_keys=True) + "\n", encoding="utf-8")
+    report["signed_probe"] = {
+        **raw,
+        "signed_evidence": {
+            **signed,
+            "sha256": hashlib.sha256(raw_path.read_bytes()).hexdigest(),
+        },
+    }
+    report["endpoints"] = raw["endpoints"]
+    report_path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+    evidence["sha256"] = hashlib.sha256(report_path.read_bytes()).hexdigest()
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    assert result["status"] == "BLOCKED"
+    signature = next(
+        item for item in result["checks"] if item["key"] == "tls_probe_signature"
+    )
+    assert signature["status"] == "BLOCK"
+
+
+def test_tls_rejects_legitimately_signed_forged_legacy_summary(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+
+    def mutate(raw: dict) -> None:
+        legacy = raw["endpoints"]["application"]["legacy_protocols"]["TLSv1"]
+        output = "Protocol version: TLSv1\n"
+        legacy.update(
+            {
+                "rejected": True,
+                "openssl_exit_code": 0,
+                "result": "rejected",
+                "raw_output": output,
+                "raw_output_sha256": hashlib.sha256(output.encode()).hexdigest(),
+            }
+        )
+
+    _resign_tls_probe(document, tmp_path, mutate)
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    assert result["status"] == "BLOCKED"
+    signature = next(
+        item for item in result["checks"] if item["key"] == "tls_probe_signature"
+    )
+    assert signature["status"] == "BLOCK"
+    assert "raw observations" in signature["observed"]
+
+
+def test_tls_rejects_legitimately_signed_unapproved_source_vantage(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _resign_tls_probe(
+        document,
+        tmp_path,
+        lambda raw: raw["probe"].update({"source_ip": "8.8.8.8"}),
+    )
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    assert result["status"] == "BLOCKED"
+    signature = next(
+        item for item in result["checks"] if item["key"] == "tls_probe_signature"
+    )
+    assert signature["status"] == "BLOCK"
+    assert "source_ip" in signature["observed"]
+
+
+def test_tls_wrapper_cannot_override_signed_certificate_projection(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    control = document["controls"]["tls"]
+    evidence = control["evidence"]
+    report_path = Path(evidence["path"])
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["certificate_days_remaining"] = 999
+    control["certificate_days_remaining"] = 999
+    report_path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+    evidence["sha256"] = hashlib.sha256(report_path.read_bytes()).hexdigest()
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    assert result["status"] == "BLOCKED"
+    signature = next(
+        item for item in result["checks"] if item["key"] == "tls_probe_signature"
+    )
+    tls = next(item for item in result["checks"] if item["key"] == "tls")
+    assert signature["status"] == "PASS"
     assert tls["status"] == "BLOCK"
 
 

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import http.client
 import json
 import re
@@ -17,8 +18,20 @@ from typing import Any, Sequence
 from urllib.parse import urlparse
 
 try:
+    from scripts.ga_tls_evidence import (
+        EXERCISE_RE,
+        TLS_RAW_SCHEMA_VERSION,
+        canonical_digest,
+        globally_routable_ip,
+    )
     from scripts.ga_release_identity import EVIDENCE_SCOPES, build_release_binding
 except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
+    from ga_tls_evidence import (
+        EXERCISE_RE,
+        TLS_RAW_SCHEMA_VERSION,
+        canonical_digest,
+        globally_routable_ip,
+    )
     from ga_release_identity import EVIDENCE_SCOPES, build_release_binding
 
 
@@ -43,6 +56,18 @@ def _context(ca_file: Path | None, version: ssl.TLSVersion) -> ssl.SSLContext:
     return context
 
 
+def _certificate_name(value: Any) -> str:
+    if not isinstance(value, tuple):
+        return ""
+    return ",".join(
+        f"{key}={item}"
+        for relative_name in value
+        if isinstance(relative_name, tuple)
+        for key, item in relative_name
+        if isinstance(key, str) and isinstance(item, str)
+    )
+
+
 def _handshake(
     host: str,
     port: int,
@@ -55,7 +80,15 @@ def _handshake(
         with socket.create_connection((host, port), timeout=timeout) as raw_socket:
             with _context(ca_file, version).wrap_socket(raw_socket, server_hostname=host) as tls_socket:
                 certificate = tls_socket.getpeercert()
+                certificate_der = tls_socket.getpeercert(binary_form=True)
+                captured_at = datetime.now(timezone.utc)
+                not_before = certificate.get("notBefore")
                 not_after = certificate.get("notAfter")
+                starts_at = (
+                    datetime.fromtimestamp(ssl.cert_time_to_seconds(not_before), timezone.utc)
+                    if isinstance(not_before, str)
+                    else None
+                )
                 expires_at = (
                     datetime.fromtimestamp(ssl.cert_time_to_seconds(not_after), timezone.utc)
                     if isinstance(not_after, str)
@@ -63,11 +96,20 @@ def _handshake(
                 )
                 return {
                     "ok": True,
+                    "captured_at": captured_at.isoformat(),
                     "protocol": tls_socket.version(),
                     "cipher": tls_socket.cipher()[0] if tls_socket.cipher() else None,
+                    "peer_ip": str(tls_socket.getpeername()[0]),
+                    "peer_certificate_sha256": hashlib.sha256(certificate_der).hexdigest(),
+                    "certificate_serial_number": certificate.get("serialNumber"),
+                    "certificate_subject": _certificate_name(certificate.get("subject")),
+                    "certificate_issuer": _certificate_name(certificate.get("issuer")),
+                    "certificate_not_before": starts_at.isoformat() if starts_at else None,
                     "expires_at": expires_at.isoformat() if expires_at else None,
                     "certificate_days_remaining": (
-                        int((expires_at - datetime.now(timezone.utc)).total_seconds() // 86400) if expires_at else -1
+                        int((expires_at - captured_at).total_seconds() // 86400)
+                        if expires_at
+                        else -1
                     ),
                     "hostname_verified": True,
                 }
@@ -88,14 +130,23 @@ def _http_probe(
     try:
         connection.request("GET", path, headers={"User-Agent": "DuckDock-GA-TLS-Probe/1"})
         response = connection.getresponse()
-        response.read(4096)
+        body_prefix = response.read(4096)
+        response_headers = [
+            {"name": name.lower(), "value": value}
+            for name, value in response.getheaders()
+        ]
         hsts = response.getheader("Strict-Transport-Security", "")
         match = HSTS_MAX_AGE_RE.search(hsts)
         return {
             "ok": 200 <= response.status < 400,
+            "observed_at": datetime.now(timezone.utc).isoformat(),
             "status_code": response.status,
             "hsts": hsts,
             "hsts_max_age_seconds": int(match.group(1)) if match else 0,
+            "response_headers": response_headers,
+            "response_headers_sha256": canonical_digest(response_headers),
+            "body_prefix_bytes": len(body_prefix),
+            "body_prefix_sha256": hashlib.sha256(body_prefix).hexdigest(),
         }
     except Exception as exc:
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "hsts_max_age_seconds": 0}
@@ -124,12 +175,14 @@ def _legacy_protocol_rejected(host: str, port: int, *, flag: str, timeout: float
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return {"rejected": False, "error": f"{type(exc).__name__}: {exc}"}
-    output = completed.stdout.decode("utf-8", errors="replace")
+    output = completed.stdout[:16_384].decode("utf-8", errors="replace")
     negotiated = completed.returncode == 0 and "Protocol version:" in output
     return {
         "rejected": not negotiated,
         "openssl_exit_code": completed.returncode,
         "result": "negotiated" if negotiated else "rejected",
+        "raw_output": output,
+        "raw_output_sha256": hashlib.sha256(output.encode("utf-8")).hexdigest(),
     }
 
 
@@ -195,11 +248,18 @@ def probe(args: argparse.Namespace) -> dict[str, Any]:
     minimum_hsts = min(hsts_values, default=0)
     passed = passed and minimum_days >= args.minimum_certificate_days and minimum_hsts >= args.minimum_hsts_max_age
     return {
-        "schema_version": "duckdock-ga-tls-probe-v2",
+        "schema_version": TLS_RAW_SCHEMA_VERSION,
         **args.release_binding,
         "status": "PASS" if passed else "BLOCK",
         "passed": passed,
         "observed_at": datetime.now(timezone.utc).isoformat(),
+        "exercise_id": args.exercise_id,
+        "probe": {
+            "probe_id": args.probe_id,
+            "vantage_id": args.vantage_id,
+            "vantage_class": "external-internet",
+            "source_ip": args.source_ip,
+        },
         "application_url": args.app_url,
         "object_store_url": args.object_store_url,
         "negotiated_protocols": sorted(protocols),
@@ -222,6 +282,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--backend-image", required=True)
     parser.add_argument("--frontend-image", required=True)
+    parser.add_argument("--exercise-id", required=True)
+    parser.add_argument("--probe-id", required=True)
+    parser.add_argument("--vantage-id", required=True)
+    parser.add_argument("--source-ip", required=True)
+    parser.add_argument("--acknowledge-external-vantage", required=True)
     parser.add_argument("--ca-file", type=Path)
     parser.add_argument("--timeout", type=float, default=10)
     parser.add_argument("--minimum-certificate-days", type=int, default=30)
@@ -229,6 +294,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
     try:
+        if not EXERCISE_RE.fullmatch(args.exercise_id):
+            raise ValueError("exercise ID must be 8-64 safe characters")
+        if args.acknowledge_external_vantage != args.target_environment:
+            raise ValueError(
+                "--acknowledge-external-vantage must exactly match --target-environment"
+            )
+        if args.scope == "target-production" and not globally_routable_ip(args.source_ip):
+            raise ValueError("target-production TLS probe source IP must be globally routable")
+        if not args.probe_id.strip() or not args.vantage_id.strip():
+            raise ValueError("probe and vantage IDs must be non-empty")
         args.release_binding = build_release_binding(
             scope=args.scope,
             target_environment=args.target_environment,

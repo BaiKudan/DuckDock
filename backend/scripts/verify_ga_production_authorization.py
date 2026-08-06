@@ -41,6 +41,12 @@ try:
         ASSESSMENT_SIGNATURE_NAMESPACE as SECURITY_ASSESSMENT_SIGNATURE_NAMESPACE,
         validate_assessment_report,
     )
+    from scripts.ga_tls_evidence import (
+        TLS_EVIDENCE_SCHEMA_VERSION,
+        TLS_POLICY_SCHEMA_VERSION,
+        TLS_SIGNATURE_NAMESPACE,
+        validate_tls_probe_report,
+    )
 except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
     from ga_capacity_evidence import (
         CAPACITY_EVIDENCE_SCHEMA_VERSION as CAPACITY_SCHEMA_VERSION,
@@ -57,6 +63,12 @@ except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
         ASSESSMENT_EVIDENCE_SCHEMA_VERSION as SECURITY_EVIDENCE_SCHEMA_VERSION,
         ASSESSMENT_SIGNATURE_NAMESPACE as SECURITY_ASSESSMENT_SIGNATURE_NAMESPACE,
         validate_assessment_report,
+    )
+    from ga_tls_evidence import (
+        TLS_EVIDENCE_SCHEMA_VERSION,
+        TLS_POLICY_SCHEMA_VERSION,
+        TLS_SIGNATURE_NAMESPACE,
+        validate_tls_probe_report,
     )
 
 
@@ -745,6 +757,121 @@ def _verify_ssh_payload(
     except OSError as exc:
         return False, str(exc)
     return completed.returncode == 0, completed.stdout.decode("utf-8", errors="replace").strip()
+
+
+def _tls_policy_context(
+    reference: Any,
+    *,
+    authorization_path: Path,
+    probe: Any,
+) -> tuple[bool, dict[str, Any], Path | None, set[str], str]:
+    if not isinstance(reference, dict) or not isinstance(probe, dict):
+        return False, {}, None, set(), "missing TLS policy reference or probe identity"
+    policy_path = _resolve_file(reference.get("path"), authorization_path)
+    trust_path_from_reference = _resolve_file(
+        reference.get("allowed_signers_path"), authorization_path
+    )
+    policy: dict[str, Any] = {}
+    if policy_path is not None and policy_path.is_file():
+        try:
+            loaded = json.loads(policy_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            loaded = None
+        if isinstance(loaded, dict):
+            policy = loaded
+    expected_policy_keys = {
+        "schema_version",
+        "policy_id",
+        "organization",
+        "allowed_signers_path",
+        "allowed_signers_sha256",
+        "probe_operator_identities",
+        "approved_probe_ids",
+        "approved_vantage_ids",
+        "approved_vantage_classes",
+        "approved_source_cidrs",
+    }
+    expected_reference_keys = {
+        "path",
+        "sha256",
+        "policy_id",
+        "allowed_signers_path",
+        "allowed_signers_sha256",
+    }
+
+    def exact_values(value: Any) -> set[str]:
+        if not (
+            isinstance(value, list)
+            and bool(value)
+            and all(_meaningful_string(item) for item in value)
+            and len(value) == len(set(value))
+        ):
+            return set()
+        return {str(item) for item in value}
+
+    identities = exact_values(policy.get("probe_operator_identities"))
+    probe_ids = exact_values(policy.get("approved_probe_ids"))
+    vantage_ids = exact_values(policy.get("approved_vantage_ids"))
+    networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    raw_networks = policy.get("approved_source_cidrs")
+    if isinstance(raw_networks, list) and raw_networks and len(raw_networks) == len(set(raw_networks)):
+        try:
+            networks = [ipaddress.ip_network(str(item), strict=True) for item in raw_networks]
+        except ValueError:
+            networks = []
+    networks_valid = bool(networks) and all(network.network_address.is_global for network in networks)
+    try:
+        source_address = ipaddress.ip_address(str(probe.get("source_ip", "")))
+    except ValueError:
+        source_address = None
+    policy_digest = (
+        _sha256(policy_path) if policy_path is not None and policy_path.is_file() else "missing"
+    )
+    policy_trust_path = (
+        _resolve_file(policy.get("allowed_signers_path"), policy_path)
+        if policy_path is not None
+        else None
+    )
+    trust_digest = (
+        _sha256(policy_trust_path)
+        if policy_trust_path is not None and policy_trust_path.is_file()
+        else "missing"
+    )
+    signer_bindings: dict[str, set[str]] | None = None
+    signer_detail = "missing trust store"
+    if policy_trust_path is not None and policy_trust_path.is_file():
+        signer_bindings, signer_detail = _allowed_signer_bindings(policy_trust_path)
+    valid = (
+        set(reference) == expected_reference_keys
+        and bool(DIGEST_RE.fullmatch(str(reference.get("sha256", ""))))
+        and policy_digest == reference.get("sha256")
+        and set(policy) == expected_policy_keys
+        and policy.get("schema_version") == TLS_POLICY_SCHEMA_VERSION
+        and _meaningful_string(policy.get("policy_id"))
+        and policy.get("policy_id") == reference.get("policy_id")
+        and _meaningful_string(policy.get("organization"))
+        and bool(identities)
+        and probe.get("probe_id") in probe_ids
+        and probe.get("vantage_id") in vantage_ids
+        and policy.get("approved_vantage_classes") == ["external-internet"]
+        and probe.get("vantage_class") == "external-internet"
+        and source_address is not None
+        and source_address.is_global
+        and networks_valid
+        and any(source_address in network for network in networks)
+        and policy_trust_path is not None
+        and trust_path_from_reference == policy_trust_path
+        and bool(DIGEST_RE.fullmatch(str(reference.get("allowed_signers_sha256", ""))))
+        and trust_digest == reference.get("allowed_signers_sha256")
+        and trust_digest == policy.get("allowed_signers_sha256")
+        and signer_bindings is not None
+        and set(signer_bindings) == identities
+    )
+    detail = (
+        f"policy={policy_path or 'missing'}, digest={policy_digest}, "
+        f"trust={policy_trust_path or 'missing'}, trust_digest={trust_digest}, {signer_detail}"
+    )
+    return valid, policy, policy_trust_path, identities, detail
 
 
 def _approval_statement(approval: dict[str, Any], release_digest: str) -> bytes:
@@ -2584,29 +2711,133 @@ def evaluate(
     tls = controls["tls"]
     negotiated = tls.get("negotiated_protocols")
     tls_report = _evidence_json(tls, authorization_path)
+    tls_probe = tls_report.get("probe") if isinstance(tls_report, dict) else None
+    (
+        tls_policy_ok,
+        _,
+        tls_trust_store,
+        tls_probe_identities,
+        tls_policy_detail,
+    ) = _tls_policy_context(
+        tls_report.get("tls_policy") if isinstance(tls_report, dict) else None,
+        authorization_path=authorization_path,
+        probe=tls_probe,
+    )
+    tls_signed_probe = (
+        tls_report.get("signed_probe") if isinstance(tls_report, dict) else None
+    )
+    tls_signature_ok, raw_tls_report, tls_signature_detail = _verified_embedded_receipt(
+        tls_signed_probe,
+        authorization_path=authorization_path,
+        allowed_signers=tls_trust_store if tls_policy_ok else None,
+        allowed_identities=tls_probe_identities,
+        namespace=TLS_SIGNATURE_NAMESPACE,
+    )
+    tls_derived: dict[str, Any] = {}
+    tls_validation_detail = "signed TLS probe unavailable"
+    try:
+        if not raw_tls_report:
+            raise ValueError(tls_validation_detail)
+        tls_derived = validate_tls_probe_report(
+            raw_tls_report,
+            target_environment=str(target.get("target_id")),
+            source_commit=str(release.get("git_commit")),
+            backend_image=str(release.get("backend_image")),
+            frontend_image=str(release.get("frontend_image")),
+            application_url=str(tls_report.get("application_url", "")),
+            object_store_url=str(tls_report.get("object_store_url", "")),
+            exercise_id=str(tls_report.get("exercise_id", "")),
+            now=current,
+        )
+    except (OSError, UnicodeError, TypeError, ValueError) as exc:
+        tls_validation_detail = str(exc)
+    else:
+        tls_validation_detail = "signed external TLS observations validated"
+    tls_observed_at = _parse_time(
+        tls_report.get("observed_at") if isinstance(tls_report, dict) else None
+    )
+    tls_probe_observed_at = _parse_time(
+        tls_report.get("probe_observed_at") if isinstance(tls_report, dict) else None
+    )
     tls_report_matches_target = (
+        isinstance(tls_report, dict)
+        and set(tls_report)
+        == {
+            "schema_version",
+            "scope",
+            "target_environment",
+            "source_commit",
+            "images",
+            "status",
+            "passed",
+            "observed_at",
+            "probe_observed_at",
+            "exercise_id",
+            "probe",
+            "application_url",
+            "object_store_url",
+            "negotiated_protocols",
+            "certificate_days_remaining",
+            "hostname_verified",
+            "legacy_protocols_rejected",
+            "hsts_max_age_seconds",
+            "endpoints",
+            "tls_policy",
+            "signed_probe",
+        }
+        and
         _report_release_target_binding(
             tls_report,
-            schema_version="duckdock-ga-tls-probe-v2",
+            schema_version=TLS_EVIDENCE_SCHEMA_VERSION,
             status="PASS",
             control=tls,
             target=target,
             release=release,
         )
         and tls_report.get("passed") is True
+        and tls_policy_ok
+        and tls_signature_ok
+        and bool(tls_derived)
+        and tls_report.get("exercise_id") == raw_tls_report.get("exercise_id")
+        and tls_report.get("probe") == tls_derived.get("probe")
+        and tls_report.get("probe_observed_at") == raw_tls_report.get("observed_at")
+        and tls_probe_observed_at == tls_derived.get("observed_at")
+        and tls_observed_at is not None
+        and tls_probe_observed_at is not None
+        and timedelta(0) <= tls_observed_at - tls_probe_observed_at <= timedelta(minutes=5)
         and _origin(tls_report.get("application_url")) == str(target.get("public_base_url", "")).rstrip("/")
         and _origin(tls_report.get("object_store_url")) == str(target.get("object_store_url", "")).rstrip("/")
+        and tls_report.get("negotiated_protocols") == tls_derived.get("negotiated_protocols")
+        and tls_report.get("legacy_protocols_rejected")
+        == tls_derived.get("legacy_protocols_rejected")
+        and tls_report.get("certificate_days_remaining")
+        == tls_derived.get("certificate_days_remaining")
+        and tls_report.get("hostname_verified") is tls_derived.get("hostname_verified")
+        and tls_report.get("hsts_max_age_seconds") == tls_derived.get("hsts_max_age_seconds")
+        and tls_report.get("endpoints") == raw_tls_report.get("endpoints")
         and tls_report.get("negotiated_protocols") == negotiated
         and tls_report.get("legacy_protocols_rejected") == tls.get("legacy_protocols_rejected")
-        and int(tls_report.get("certificate_days_remaining", -1)) == int(tls.get("certificate_days_remaining", -2))
+        and tls_report.get("certificate_days_remaining") == tls.get("certificate_days_remaining")
         and tls_report.get("hostname_verified") is tls.get("hostname_verified")
-        and int(tls_report.get("hsts_max_age_seconds", -1)) == int(tls.get("hsts_max_age_seconds", -2))
-        and isinstance(tls_report.get("endpoints"), dict)
-        and set(tls_report["endpoints"]) == {"application", "object_store"}
-        and all(
-            isinstance(item, dict) and item.get("passed") is True
-            for item in (tls_report.get("endpoints") or {}).values()
-        )
+        and tls_report.get("hsts_max_age_seconds") == tls.get("hsts_max_age_seconds")
+        and not _contains_secret_material_key(tls_report)
+    )
+    gate.add(
+        "tls_probe_signature",
+        owner="Security",
+        passed=tls_policy_ok and tls_signature_ok and bool(tls_derived),
+        observed=(
+            f"probe={tls_probe}, validation={tls_validation_detail}, "
+            f"signature={tls_signature_detail}"
+        ),
+        expected=(
+            "release-authority-approved external probe identity, source CIDR and signed raw "
+            "TLS observations"
+        ),
+        detail=(
+            "The v3 gate reopens the signed probe, validates its exact external vantage policy, "
+            f"certificate fingerprints, handshakes, HSTS and legacy OpenSSL output. {tls_policy_detail}"
+        ),
     )
     tls_ok = (
         tls.get("status") == "PASS"

@@ -44,8 +44,12 @@ unset DUCKDOCK_GA_ADMIN_TOKEN
    `transport=network HTTPS against target`，且 API 检查时间与证据采集时间相差不
    超过五分钟。裸 `/ga-readiness` 响应、本地 HTTP 报告或上一候选镜像的报告均
    不能授权生产。若 API 不是 `READY`，collector 仍保留 BLOCKED 报告并退出 2。
-4. 使用 `probe_ga_target_tls.py` 探测真实公网 application/object-store health URL，
-   并把报告绑定到当前 target、commit 和两个不可变镜像：
+4. 由发布机构先从 `ops/ga/tls-trust-policy.example.json` 建立只读、内容寻址的 TLS
+   探测策略。策略固定外部探测执行人的精确 identity、公钥、probe/vantage ID 和
+   全球可路由来源 CIDR；allowed-signers 禁止通配 principal 和跨 identity 公钥复用。
+   探测必须从策略批准的目标网络之外执行，不能在目标集群或开发机内部冒充公网视角。
+   使用 `probe_ga_target_tls.py` 探测真实公网 application/object-store health URL，
+   并把原始报告绑定到当前 target、commit 和两个不可变镜像：
 
 ```bash
 python backend/scripts/probe_ga_target_tls.py \
@@ -55,11 +59,47 @@ python backend/scripts/probe_ga_target_tls.py \
   --source-commit "$DUCKDOCK_GA_SOURCE_COMMIT" \
   --backend-image "$DUCKDOCK_GA_BACKEND_IMAGE" \
   --frontend-image "$DUCKDOCK_GA_FRONTEND_IMAGE" \
+  --exercise-id ga-tls-20260806 \
+  --probe-id external-tls-probe-01 \
+  --vantage-id internet-hangzhou-01 \
+  --source-ip "$EXTERNAL_TLS_PROBE_PUBLIC_IP" \
+  --acknowledge-external-vantage customer-production \
+  --output /secure/evidence/target-tls-raw.json
+```
+
+   v3 原始报告保留 TLS 1.2/1.3 两次握手的 peer IP、证书 SHA-256、serial、subject/
+   issuer、有效期和 cipher；HTTP 状态、完整响应 header 摘要、HSTS 原文与 body prefix
+   摘要；以及 TLS 1.0/1.1 的有界 OpenSSL 原始输出。外部探测执行人直接签署该文件：
+
+```bash
+ssh-keygen -Y sign \
+  -f /release-authority/tls-probe-key \
+  -n duckdock-tls-probe-report \
+  /secure/evidence/target-tls-raw.json
+```
+
+   再由无私钥参数的组合器重新验签、核对策略来源网段并生成最终 v3 证据：
+
+```bash
+python backend/scripts/collect_ga_target_tls.py \
+  --target-environment customer-production \
+  --source-commit "$DUCKDOCK_GA_SOURCE_COMMIT" \
+  --backend-image "$DUCKDOCK_GA_BACKEND_IMAGE" \
+  --frontend-image "$DUCKDOCK_GA_FRONTEND_IMAGE" \
+  --application-url https://duckdock.example.com/health \
+  --object-store-url https://objects.example.com/minio/health/live \
+  --exercise-id ga-tls-20260806 \
+  --tls-policy /release-authority/duckdock-tls-policy.json \
+  --probe-signer-identity tls-probe@example.com \
+  --probe-report /secure/evidence/target-tls-raw.json \
+  --probe-signature /secure/evidence/target-tls-raw.json.sig \
   --output /secure/evidence/target-tls.json
 ```
 
-   输出必须是 `duckdock-ga-tls-probe-v2`；旧 v1、local-validation 或绑定到其他
-   候选版本的报告不能授权生产。
+   只有 `duckdock-ga-tls-evidence-v3` 可授权生产。最终 GA 门禁会再次重读策略、
+   allowed-signers、原始 JSON 和签名，重算证书剩余天数、TLS 协议集合、HSTS max-age
+   与旧协议是否真的未协商，并核对 wrapper/授权文件投影。旧 v1/v2、自报布尔值、
+   未签名报告、未批准来源 CIDR、local-validation 或其他候选版本报告均不能授权生产。
 5. 在专用 performance Namespace 创建限时 Reporter/User token，通过环境变量运行
    真实 HTTPS 容量门禁（token 不得写入命令行或报告）。先由发布机构从
    `ops/ga/capacity-trust-policy.example.json` 建立只读、内容寻址的容量策略；
