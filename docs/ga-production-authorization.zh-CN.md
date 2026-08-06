@@ -758,10 +758,40 @@ python backend/scripts/verify_ga_production_authorization.py \
 ```
 
 退出码 `0` 且状态 `GA_AUTHORIZED` 才是正式生产授权；退出码 `2` 是证据或签字
-阻断，退出码 `3` 是授权文件结构错误。授权结果、原文件、全部证据、签名和
-四份 approval/preflight/signature、finalization receipt、审批策略、共享
-allowed-signers 应与授权结果一同不可变归档，但生产验证时仍必须
-从发布机构控制的独立只读路径选择策略，不能从待验证授权包自动发现信任根。
+阻断，退出码 `3` 是授权文件结构错误。得到该结果后使用授权归档器收口活动：
+
+```bash
+python backend/scripts/archive_ga_authorized_bundle.py \
+  --authorization /secure/duckdock-2.0.0-authorized.json \
+  --approval-policy /release-authority/duckdock-ga-approval-policy.json \
+  --supplemental-file /secure/duckdock-2.0.0-finalization.json \
+  --supplemental-file /secure/product-preflight.json \
+  --supplemental-file /secure/architecture-preflight.json \
+  --supplemental-file /secure/security-preflight.json \
+  --supplemental-file /secure/operations-preflight.json \
+  --supplemental-file /secure/duckdock-2.0.0-ga-authorization-result.json \
+  --output /secure/duckdock-2.0.0-ga-bundle.tar.gz \
+  --manifest-output /secure/duckdock-2.0.0-ga-bundle.manifest.json \
+  --digest-output /secure/duckdock-2.0.0-ga-bundle.sha256
+```
+
+归档器在收集前后各运行一次同一权威门禁，只有两次均为无阻断
+`GA_AUTHORIZED` 才写出结果；三个输出均不可覆盖，持久化后会重新读取并验证。
+它不会扫描目录，只沿 JSON 中显式的 `path+sha256`、
+`allowed_signers_path+allowed_signers_sha256`、`signature_path` 引用闭包，并加入明确
+传入的 supplemental receipt/result。因此同目录审批私钥、builder 私钥和未引用文件
+不会进入归档；即使显式引用，常见 OpenSSH/PEM/age 私钥材料也会被拒绝。授权文件
+目录和策略目录自动成为允许根；引用位于其他受控目录时，
+必须显式追加 `--include-root evidence=/absolute/evidence/root`，越界引用、符号链接、
+摘要不符、证据中途变化或大于默认上限的输入都会 fail closed。
+
+外部 manifest 逐文件记录允许根标签、相对路径、内容寻址 archive path、size 和
+SHA-256；tar/gzip 元数据固定，因此相同输入和相同 `--created-at` 生成字节级一致的
+bundle。`--created-at` 只固定 manifest 时间，不会回拨权威门禁的当前时间或延长证据
+有效期。发布机构应把 `.sha256` 发布到独立不可变渠道。授权结果、原文件、全部证据、
+签名、四份 approval/preflight/signature、finalization receipt、审批策略和共享
+allowed-signers 均应在 manifest 中可追溯。生产验证时仍必须从发布机构控制的独立
+只读路径选择策略，不能从待验证授权包自动发现信任根。
 
 授权结果还会固定输出 `failed_foundation_checks`、`failed_evidence_checks`、
 `failed_approval_checks` 和 `next_action`。发布活动只能按 `next_action` 前进，不能因

@@ -46,6 +46,14 @@ store 当场反向验签。四份 entry 由 `backend/scripts/finalize_ga_authori
 该工具只在持久化文件重验为 `GA_AUTHORIZED` 时保留输出，并生成 finalization receipt。
 原始 base 的 `approvals` 必须为空，最终输出必须与 base 同目录。
 
+最终授权完成后，使用 `backend/scripts/archive_ga_authorized_bundle.py` 生成不可覆盖的
+确定性 tar.gz、外部 manifest 和 SHA-256 sidecar。归档器会在收集前后各重验一次
+`GA_AUTHORIZED`，只跟随显式内容摘要/签名引用并接收明确列出的
+`--supplemental-file`；它不扫描目录，因此不会把邻近私钥带入包。授权目录与独立策略
+目录是默认允许根，其他证据根必须用 `--include-root label=/absolute/path` 明确授权。
+发布前应在 supplemental 列表中加入 finalization receipt、四份 signer preflight 和
+最终授权结果，并把 bundle SHA-256 发布到独立不可变渠道。
+
 结构检查：
 
 ```bash

@@ -198,6 +198,7 @@ def test_production_image_context_excludes_test_and_local_validation_artifacts()
         "scripts/ga_release_provenance.py",
         "scripts/sign_ga_approval.py",
         "scripts/finalize_ga_authorization.py",
+        "scripts/archive_ga_authorized_bundle.py",
         "scripts/probe_ga_target_tls.py",
         "scripts/verify_ga_production_authorization.py",
         "scripts/verify_*_dev.py",
@@ -253,6 +254,7 @@ def test_final_tag_reruns_full_gate_and_publishes_attested_images():
 def test_ga_approval_tools_reverify_before_signing_and_before_final_output():
     signer = _read("backend/scripts/sign_ga_approval.py")
     finalizer = _read("backend/scripts/finalize_ga_authorization.py")
+    archiver = _read("backend/scripts/archive_ga_authorized_bundle.py")
     wrapper = _read("scripts/sign-ga-approval.sh")
 
     assert "--digest" not in wrapper
@@ -264,9 +266,18 @@ def test_ga_approval_tools_reverify_before_signing_and_before_final_output():
     assert 'result.get("status") == "GA_AUTHORIZED"' in finalizer
     assert "base authorization approvals must be empty" in finalizer
     assert "persisted final authorization did not re-verify" in finalizer
+    assert 'result.get("status") == "GA_AUTHORIZED"' in archiver
+    assert 'result.get("next_action") == "archive_authorized_bundle"' in archiver
+    assert "referenced file is outside every allowed root" in archiver
+    assert "symbolic-link evidence is forbidden" in archiver
+    assert "private-key material is forbidden" in archiver
+    assert "authorization evaluation changed during archive creation" in archiver
+    assert "GzipFile" in archiver
+    assert "mtime=0" in archiver
     workflow = _read(".github/workflows/ci.yml")
     assert "python3 backend/scripts/sign_ga_approval.py --help" in workflow
     assert "python3 backend/scripts/finalize_ga_authorization.py --help" in workflow
+    assert "python3 backend/scripts/archive_ga_authorized_bundle.py --help" in workflow
 
 
 def test_production_frontend_runtime_image_contains_only_built_assets():

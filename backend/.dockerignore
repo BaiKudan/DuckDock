@@ -36,6 +36,7 @@ scripts/collect_ga_release_provenance.py
 scripts/ga_release_provenance.py
 scripts/sign_ga_approval.py
 scripts/finalize_ga_authorization.py
+scripts/archive_ga_authorized_bundle.py
 scripts/probe_ga_target_tls.py
 scripts/verify_ga_production_authorization.py
 scripts/seed_handover_e2e.py

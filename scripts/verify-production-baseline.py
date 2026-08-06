@@ -171,10 +171,16 @@ def verify(env_file: Path) -> dict[str, Any]:
     )
     approval_signer = REPO_ROOT / "backend/scripts/sign_ga_approval.py"
     approval_finalizer = REPO_ROOT / "backend/scripts/finalize_ga_authorization.py"
+    authorized_archiver = REPO_ROOT / "backend/scripts/archive_ga_authorized_bundle.py"
     signer_text = approval_signer.read_text(encoding="utf-8") if approval_signer.is_file() else ""
     finalizer_text = (
         approval_finalizer.read_text(encoding="utf-8")
         if approval_finalizer.is_file()
+        else ""
+    )
+    archiver_text = (
+        authorized_archiver.read_text(encoding="utf-8")
+        if authorized_archiver.is_file()
         else ""
     )
     add(
@@ -186,6 +192,19 @@ def verify(env_file: Path) -> dict[str, Any]:
         and "persisted final authorization did not re-verify" in finalizer_text,
         "each signer re-evaluates evidence; final assembly emits only after persisted GA_AUTHORIZED recheck",
         "no arbitrary digest signing; four approvals and persisted authorization pass the same final gate",
+    )
+    add(
+        "ga_authorized_archive",
+        'result.get("status") == "GA_AUTHORIZED"' in archiver_text
+        and 'result.get("next_action") == "archive_authorized_bundle"' in archiver_text
+        and "referenced file is outside every allowed root" in archiver_text
+        and "symbolic-link evidence is forbidden" in archiver_text
+        and "private-key material is forbidden" in archiver_text
+        and "authorization evaluation changed during archive creation" in archiver_text
+        and "GzipFile" in archiver_text
+        and "mtime=0" in archiver_text,
+        "explicit reference closure; allowed-root isolation; double GA evaluation; deterministic immutable archive",
+        "authorized bundle is archived without directory scans or adjacent private keys",
     )
 
     if shutil.which("kubectl"):

@@ -6,12 +6,14 @@ import json
 import shutil
 import subprocess
 import sys
+import tarfile
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
+import scripts.archive_ga_authorized_bundle as authorized_bundle_archiver
 import scripts.collect_ga_release_provenance as release_provenance_collector
 
 from scripts.verify_ga_production_authorization import (
@@ -3683,6 +3685,236 @@ def test_finalization_tool_refuses_one_cross_digest_approval(tmp_path: Path) -> 
     assert completed.returncode == 3
     assert not final_authorization.exists()
     assert not finalization_receipt.exists()
+
+
+def _authorized_archive_command(
+    tmp_path: Path,
+    authorization: Path,
+    *,
+    stem: str = "duckdock-2.0.0-ga",
+    supplemental_files: tuple[Path, ...] = (),
+) -> tuple[list[str], list[Path]]:
+    outputs = [
+        tmp_path / f"{stem}.tar.gz",
+        tmp_path / f"{stem}.manifest.json",
+        tmp_path / f"{stem}.sha256",
+    ]
+    command = [
+        sys.executable,
+        str(
+            Path(__file__).parents[1]
+            / "scripts"
+            / "archive_ga_authorized_bundle.py"
+        ),
+        "--authorization",
+        str(authorization),
+        "--approval-policy",
+        str(tmp_path / "approval-policy.json"),
+        "--output",
+        str(outputs[0]),
+        "--manifest-output",
+        str(outputs[1]),
+        "--digest-output",
+        str(outputs[2]),
+    ]
+    for supplemental_file in supplemental_files:
+        command.extend(["--supplemental-file", str(supplemental_file)])
+    command.extend(["--created-at", datetime.now(timezone.utc).isoformat()])
+    return command, outputs
+
+
+def test_authorized_archive_is_deterministic_complete_and_excludes_private_keys(
+    tmp_path: Path,
+) -> None:
+    if shutil.which("ssh-keygen") is None:
+        pytest.skip("ssh-keygen is required for signed GA archive verification")
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _add_signed_approvals(document, tmp_path, now)
+    authorization = tmp_path / "authorized.json"
+    authorization.write_text(
+        json.dumps(document, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    supplemental = tmp_path / "final-authorization-result.json"
+    supplemental.write_text('{"status":"GA_AUTHORIZED"}\n', encoding="utf-8")
+    command, outputs = _authorized_archive_command(
+        tmp_path,
+        authorization,
+        supplemental_files=(supplemental,),
+    )
+    command[-1] = now.isoformat()
+
+    completed = subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stdout.decode()
+    archive_path, manifest_path, digest_path = outputs
+    manifest_payload = manifest_path.read_bytes()
+    manifest = json.loads(manifest_payload)
+    assert manifest["schema_version"] == (
+        "duckdock-ga-authorized-archive-manifest-v1"
+    )
+    assert manifest["evaluation"] == {
+        "approvals_complete": True,
+        "block_count": 0,
+        "campaign_stage": "AUTHORIZED",
+        "evidence_ready_for_approval": True,
+        "foundation_ready": True,
+        "status": "GA_AUTHORIZED",
+    }
+    assert manifest["file_count"] == len(manifest["files"])
+    assert manifest["file_count"] > 20
+    assert manifest["supplemental_files"][0]["source_relative_path"] == (
+        supplemental.name
+    )
+    assert not any(
+        record["source_relative_path"].endswith("_key")
+        or record["source_relative_path"].endswith(".pub")
+        for record in manifest["files"]
+    )
+    expected_archive_digest = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+    assert digest_path.read_text(encoding="utf-8") == (
+        f"{expected_archive_digest}  {archive_path.name}\n"
+    )
+
+    with tarfile.open(archive_path, "r:gz") as archive:
+        members = {member.name: member for member in archive.getmembers()}
+        embedded_manifest = archive.extractfile(members["manifest.json"])
+        assert embedded_manifest is not None
+        assert embedded_manifest.read() == manifest_payload
+        for record in manifest["files"]:
+            artifact = archive.extractfile(members[record["archive_path"]])
+            assert artifact is not None
+            payload = artifact.read()
+            assert len(payload) == record["size_bytes"]
+            assert hashlib.sha256(payload).hexdigest() == record["sha256"]
+            assert b"BEGIN OPENSSH PRIVATE KEY" not in payload
+
+    second_command, second_outputs = _authorized_archive_command(
+        tmp_path,
+        authorization,
+        stem="duckdock-2.0.0-ga-repeat",
+        supplemental_files=(supplemental,),
+    )
+    second_command[-1] = now.isoformat()
+    repeated = subprocess.run(
+        second_command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    assert repeated.returncode == 0, repeated.stdout.decode()
+    assert second_outputs[0].read_bytes() == archive_path.read_bytes()
+    assert second_outputs[1].read_bytes() == manifest_payload
+
+    immutable_retry = subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    assert immutable_retry.returncode == 2
+
+
+def test_authorized_archive_refuses_tampered_referenced_evidence(
+    tmp_path: Path,
+) -> None:
+    if shutil.which("ssh-keygen") is None:
+        pytest.skip("ssh-keygen is required for signed GA archive verification")
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _add_signed_approvals(document, tmp_path, now)
+    authorization = tmp_path / "authorized.json"
+    authorization.write_text(
+        json.dumps(document, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    Path(
+        document["controls"]["application_readiness"]["evidence"]["path"]
+    ).write_text(
+        '{"control":"application","passed":false}\n',
+        encoding="utf-8",
+    )
+    command, outputs = _authorized_archive_command(tmp_path, authorization)
+    command[-1] = now.isoformat()
+
+    completed = subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+
+    assert completed.returncode == 3
+    assert not any(path.exists() for path in outputs)
+
+
+def test_authorized_archive_reference_closure_rejects_files_outside_allowed_roots(
+    tmp_path: Path,
+) -> None:
+    campaign = tmp_path / "campaign"
+    campaign.mkdir()
+    outside = tmp_path / "outside.json"
+    outside.write_text('{"secret":true}\n', encoding="utf-8")
+    seed = campaign / "authorization.json"
+    seed.write_text(
+        json.dumps(
+            {
+                "evidence": {
+                    "path": str(outside),
+                    "sha256": hashlib.sha256(outside.read_bytes()).hexdigest(),
+                }
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="outside every allowed root"):
+        authorized_bundle_archiver._capture_reference_closure(
+            [seed.resolve()],
+            roots=[
+                authorized_bundle_archiver.AllowedRoot(
+                    label="campaign",
+                    path=campaign.resolve(),
+                )
+            ],
+            max_file_bytes=1024,
+            max_total_bytes=4096,
+        )
+
+
+def test_authorized_archive_reference_closure_rejects_explicit_private_key(
+    tmp_path: Path,
+) -> None:
+    private_key = tmp_path / "accidentally-referenced-key"
+    private_key.write_bytes(
+        b"-----BEGIN OPENSSH PRIVATE KEY-----\nsecret\n"
+        b"-----END OPENSSH PRIVATE KEY-----\n"
+    )
+    seed = tmp_path / "supplemental.json"
+    seed.write_text(
+        json.dumps({"signature_path": str(private_key)}) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="private-key material is forbidden"):
+        authorized_bundle_archiver._capture_reference_closure(
+            [seed.resolve()],
+            roots=[
+                authorized_bundle_archiver.AllowedRoot(
+                    label="campaign",
+                    path=tmp_path.resolve(),
+                )
+            ],
+            max_file_bytes=1024,
+            max_total_bytes=4096,
+        )
 
 
 def test_approval_policy_must_be_supplied_out_of_band(tmp_path: Path) -> None:
