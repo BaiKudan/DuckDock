@@ -196,6 +196,7 @@ def test_production_image_context_excludes_test_and_local_validation_artifacts()
         "scripts/ga_release_identity.py",
         "scripts/collect_ga_release_provenance.py",
         "scripts/ga_release_provenance.py",
+        "scripts/assemble_ga_preapproval_authorization.py",
         "scripts/ga_approval_campaign.py",
         "scripts/freeze_ga_approval_campaign.py",
         "scripts/sign_ga_approval.py",
@@ -256,6 +257,7 @@ def test_final_tag_reruns_full_gate_and_publishes_attested_images():
 
 
 def test_ga_approval_tools_reverify_before_signing_and_before_final_output():
+    assembler = _read("backend/scripts/assemble_ga_preapproval_authorization.py")
     freezer = _read("backend/scripts/freeze_ga_approval_campaign.py")
     signer = _read("backend/scripts/sign_ga_approval.py")
     finalizer = _read("backend/scripts/finalize_ga_authorization.py")
@@ -265,6 +267,9 @@ def test_ga_approval_tools_reverify_before_signing_and_before_final_output():
     wrapper = _read("scripts/sign-ga-approval.sh")
 
     assert "--digest" not in wrapper
+    assert "exactly the nine required controls" in assembler
+    assert 'result.get("campaign_stage") == "APPROVAL_COLLECTION"' in assembler
+    assert "persisted preapproval authorization did not re-verify" in assembler
     assert 'evaluation.get("campaign_stage") == "APPROVAL_COLLECTION"' in freezer
     assert "campaign authorization approvals must be empty" in freezer
     assert "validate_campaign_freeze" in signer
@@ -292,6 +297,7 @@ def test_ga_approval_tools_reverify_before_signing_and_before_final_output():
     assert "ga_file_resolution_overrides(overrides, strict=True)" in archive_verifier
     assert "return (True, None) if strict" in path_resolution
     workflow = _read(".github/workflows/ci.yml")
+    assert "python3 backend/scripts/assemble_ga_preapproval_authorization.py --help" in workflow
     assert "python3 backend/scripts/freeze_ga_approval_campaign.py --help" in workflow
     assert "python3 backend/scripts/sign_ga_approval.py --help" in workflow
     assert "python3 backend/scripts/finalize_ga_authorization.py --help" in workflow

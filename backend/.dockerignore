@@ -34,6 +34,7 @@ scripts/ga_security_assessment.py
 scripts/ga_release_identity.py
 scripts/collect_ga_release_provenance.py
 scripts/ga_release_provenance.py
+scripts/assemble_ga_preapproval_authorization.py
 scripts/ga_approval_campaign.py
 scripts/freeze_ga_approval_campaign.py
 scripts/sign_ga_approval.py

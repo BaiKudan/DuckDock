@@ -669,8 +669,27 @@ shasum -a 256 /release-authority/duckdock-ga-approval-policy.json
 # 将策略摘要和 policy_id 填入 authorization.json
 ```
 
-15. 使用受控策略先运行不可绕过的预签字门禁。授权文件的 `approvals` 可以暂为空，
-    但发布基础、九类目标证据、外部安全签名及所有内容摘要必须已经完整：
+15. 九类采集器和外部评估输出齐备后，不要再手工把报告字段、时间和摘要复制到完整
+    authorization JSON。复制 `ops/ga/preapproval-assembly-request.example.json`，只填写
+    最终 release/target 身份和九份证据路径；approval policy 仍通过独立 CLI 参数选择，
+    不能由请求文件自选信任根：
+
+```bash
+python backend/scripts/assemble_ga_preapproval_authorization.py \
+  --request /secure/duckdock-2.0.0-preapproval-request.json \
+  --approval-policy /release-authority/duckdock-ga-approval-policy.json \
+  --output /secure/duckdock-2.0.0-authorization.json \
+  --receipt-output /secure/duckdock-2.0.0-assembly.json
+```
+
+组装器重新打开 release provenance 和九份 wrapper，从签名容量原始回执重算负载/增长/
+清理投影，其余 control 也只从证据投影；随后调用同一权威授权器。只有基础和全部非审批
+检查均通过、状态精确为 `APPROVAL_COLLECTION` 时才写出 approvals 为空且不含
+`approval_campaign` 的不可覆盖底稿。落盘后再次评估，输入中途变化或输出已存在都会
+fail closed。assembly receipt 记录请求、策略、十份顶层证据摘要和完整评估结果。
+
+使用受控策略再次运行不可绕过的预签字门禁。授权文件的 `approvals` 此时为空，
+但发布基础、九类目标证据、外部安全签名及所有内容摘要已经完整：
 
 ```bash
 python backend/scripts/verify_ga_production_authorization.py \
@@ -786,6 +805,7 @@ python backend/scripts/verify_ga_production_authorization.py \
 python backend/scripts/archive_ga_authorized_bundle.py \
   --authorization /secure/duckdock-2.0.0-authorized.json \
   --approval-policy /release-authority/duckdock-ga-approval-policy.json \
+  --supplemental-file /secure/duckdock-2.0.0-assembly.json \
   --supplemental-file /secure/duckdock-2.0.0-finalization.json \
   --supplemental-file /secure/product-preflight.json \
   --supplemental-file /secure/architecture-preflight.json \

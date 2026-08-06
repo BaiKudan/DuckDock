@@ -25,6 +25,21 @@ BuildKit 的 SLSA 可省略空 `resolvedDependencies`/`byproducts`，SPDX 默认
 也可能是 `sbom`；二者都必须保留 registry predicate 原文，再由唯一 image subject
 组成 Statement v1，禁止为了迎合模板手改 predicate。
 
+`preapproval-assembly-request.example.json` 是证据接线输入，只包含 release/target 身份和
+九份最终 evidence 路径。真实采集完成后，应先使用独立 CLI 参数提供 approval policy，
+由组装器投影完整授权底稿；禁止继续手工复制 wrapper 字段和 SHA-256：
+
+```bash
+python backend/scripts/assemble_ga_preapproval_authorization.py \
+  --request /secure/duckdock-2.0.0-preapproval-request.json \
+  --approval-policy /release-authority/duckdock-ga-approval-policy.json \
+  --output /secure/duckdock-2.0.0-authorization.json \
+  --receipt-output /secure/duckdock-2.0.0-assembly.json
+```
+
+组装器只有在重新验证全部证据并得到 `APPROVAL_COLLECTION` 时才写不可覆盖输出。请求
+不能选择 policy，输出固定为空 approvals 且无 campaign 引用；后者只能由 finalizer 写入。
+
 在收集任何四方签字前，必须使用同一个权威授权器执行预签字门禁：
 
 ```bash
@@ -61,7 +76,7 @@ JSON 拼装伪造活动。
 `--supplemental-file`；它不扫描目录，因此不会把邻近私钥带入包。授权目录与独立策略
 目录是默认允许根，其他证据根必须用 `--include-root label=/absolute/path` 明确授权。
 campaign freeze 与空 base 会从最终授权的内容寻址引用自动归档。发布前应在 supplemental
-列表中加入 finalization receipt、四份 signer preflight 和最终授权结果，并把 bundle
+列表中加入 assembly/finalization receipt、四份 signer preflight 和最终授权结果，并把 bundle
 SHA-256 发布到独立不可变渠道。
 
 接收方使用 `backend/scripts/verify_ga_authorized_archive.py`，同时传入 archive、外部
@@ -72,11 +87,12 @@ manifest，以及从独立渠道取得的 `--digest` 或 `--expected-sha256`。m
 `GA_AUTHORIZED_ARCHIVE_VERIFIED`。恢复 evidence 的 backup trust store 现在也必须以
 `allowed_signers_sha256` 内容寻址。
 
-结构检查：
+请求和最终授权结构检查：
 
 ```bash
 python backend/scripts/verify_ga_production_authorization.py \
   ops/ga/production-authorization.example.json --lint
+python -m json.tool ops/ga/preapproval-assembly-request.example.json >/dev/null
 ```
 
 完整目标文件必须通过内容摘要、证据新鲜度和每类目标报告的内容级解析，不能用

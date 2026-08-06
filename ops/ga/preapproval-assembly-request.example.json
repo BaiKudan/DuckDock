@@ -1,0 +1,33 @@
+{
+  "schema_version": "duckdock-ga-preapproval-assembly-request-v1",
+  "release": {
+    "version": "2.0.0",
+    "git_commit": "__CHANGE_ME_40_HEX_GIT_COMMIT__",
+    "backend_image": "registry.example.invalid/duckdock/backend@sha256:__CHANGE_ME_64_HEX__",
+    "frontend_image": "registry.example.invalid/duckdock/frontend@sha256:__CHANGE_ME_64_HEX__",
+    "contract_digest": "aa260f301acc5c3a8004d14980952a03ce0197f9d70dcdd78cd62e986c3b1a83",
+    "provenance_evidence_path": "__CHANGE_ME_RELEASE_PROVENANCE_EVIDENCE_PATH__"
+  },
+  "target": {
+    "target_id": "__CHANGE_ME_TARGET_ID__",
+    "environment": "production",
+    "deployment_mode": "kubernetes-ha",
+    "public_base_url": "https://duckdock.example.invalid",
+    "object_store_url": "https://objects.example.invalid",
+    "fault_domains": ["__CHANGE_ME_ZONE_A__", "__CHANGE_ME_ZONE_B__"],
+    "maximum_rpo_seconds": 900,
+    "maximum_rto_seconds": 14400,
+    "minimum_sustained_rps": 50
+  },
+  "evidence": {
+    "application_readiness": "__CHANGE_ME_TARGET_READINESS_EVIDENCE_PATH__",
+    "tls": "__CHANGE_ME_TARGET_TLS_EVIDENCE_PATH__",
+    "secrets": "__CHANGE_ME_SECRETS_EVIDENCE_PATH__",
+    "network": "__CHANGE_ME_NETWORK_EVIDENCE_PATH__",
+    "alerting": "__CHANGE_ME_ALERTING_EVIDENCE_PATH__",
+    "recovery": "__CHANGE_ME_RECOVERY_EVIDENCE_PATH__",
+    "capacity": "__CHANGE_ME_TARGET_CAPACITY_EVIDENCE_PATH__",
+    "high_availability": "__CHANGE_ME_TARGET_HA_EVIDENCE_PATH__",
+    "security_assessment": "__CHANGE_ME_INDEPENDENT_SECURITY_EVIDENCE_PATH__"
+  }
+}

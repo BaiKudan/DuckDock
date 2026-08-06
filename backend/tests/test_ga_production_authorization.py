@@ -3541,6 +3541,158 @@ def _freeze_approval_campaign(
     return campaign_freeze
 
 
+def _write_preapproval_assembly_request(
+    tmp_path: Path,
+    document: dict,
+    *,
+    name: str = "preapproval-assembly-request.json",
+) -> Path:
+    release = document["release"]
+    request = {
+        "schema_version": "duckdock-ga-preapproval-assembly-request-v1",
+        "release": {
+            "version": release["version"],
+            "git_commit": release["git_commit"],
+            "backend_image": release["backend_image"],
+            "frontend_image": release["frontend_image"],
+            "contract_digest": release["contract_digest"],
+            "provenance_evidence_path": release["provenance"]["path"],
+        },
+        "target": document["target"],
+        "evidence": {
+            control: document["controls"][control]["evidence"]["path"]
+            for control in (
+                "application_readiness",
+                "tls",
+                "secrets",
+                "network",
+                "alerting",
+                "recovery",
+                "capacity",
+                "high_availability",
+                "security_assessment",
+            )
+        },
+    }
+    request_path = tmp_path / name
+    request_path.write_text(json.dumps(request, sort_keys=True) + "\n", encoding="utf-8")
+    return request_path
+
+
+def _preapproval_assembly_command(
+    tmp_path: Path,
+    request_path: Path,
+    *,
+    stem: str = "assembled",
+) -> tuple[list[str], list[Path]]:
+    outputs = [
+        tmp_path / f"{stem}-authorization.json",
+        tmp_path / f"{stem}-receipt.json",
+    ]
+    return (
+        [
+            sys.executable,
+            str(
+                Path(__file__).parents[1]
+                / "scripts"
+                / "assemble_ga_preapproval_authorization.py"
+            ),
+            "--request",
+            str(request_path),
+            "--approval-policy",
+            str(tmp_path / "approval-policy.json"),
+            "--output",
+            str(outputs[0]),
+            "--receipt-output",
+            str(outputs[1]),
+        ],
+        outputs,
+    )
+
+
+def test_preapproval_assembler_projects_nine_evidence_reports_and_reverifies(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _add_signed_approvals(document, tmp_path, now)
+    request_path = _write_preapproval_assembly_request(tmp_path, document)
+    command, outputs = _preapproval_assembly_command(tmp_path, request_path)
+
+    completed = subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stdout.decode()
+    authorization = json.loads(outputs[0].read_text(encoding="utf-8"))
+    receipt = json.loads(outputs[1].read_text(encoding="utf-8"))
+    assert authorization["approvals"] == []
+    assert "approval_campaign" not in authorization
+    assert set(authorization["controls"]) == {
+        "application_readiness",
+        "tls",
+        "secrets",
+        "network",
+        "alerting",
+        "recovery",
+        "capacity",
+        "high_availability",
+        "security_assessment",
+    }
+    assert receipt["schema_version"] == "duckdock-ga-preapproval-assembly-v1"
+    assert receipt["evaluation"]["campaign_stage"] == "APPROVAL_COLLECTION"
+    assert receipt["evaluation"]["failed_foundation_checks"] == []
+    assert receipt["evaluation"]["failed_evidence_checks"] == []
+    assert receipt["authorization"]["sha256"] == hashlib.sha256(
+        outputs[0].read_bytes()
+    ).hexdigest()
+
+    repeated = subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    assert repeated.returncode != 0
+    assert hashlib.sha256(outputs[0].read_bytes()).hexdigest() == receipt["authorization"][
+        "sha256"
+    ]
+
+
+@pytest.mark.parametrize("mutation", ["missing_control", "cross_target_evidence"])
+def test_preapproval_assembler_refuses_incomplete_or_cross_target_inputs(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _add_signed_approvals(document, tmp_path, now)
+    request_path = _write_preapproval_assembly_request(tmp_path, document)
+    if mutation == "missing_control":
+        request = json.loads(request_path.read_text(encoding="utf-8"))
+        request["evidence"].pop("network")
+        request_path.write_text(json.dumps(request, sort_keys=True) + "\n", encoding="utf-8")
+    else:
+        tls_path = Path(document["controls"]["tls"]["evidence"]["path"])
+        tls_report = json.loads(tls_path.read_text(encoding="utf-8"))
+        tls_report["target_environment"] = "another-production-target"
+        tls_path.write_text(json.dumps(tls_report, sort_keys=True) + "\n", encoding="utf-8")
+    command, outputs = _preapproval_assembly_command(tmp_path, request_path)
+
+    completed = subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+
+    assert completed.returncode == 3
+    assert not any(path.exists() for path in outputs)
+
+
 def test_campaign_freeze_binds_exact_inputs_and_is_immutable(tmp_path: Path) -> None:
     now = datetime.now(timezone.utc)
     document = _document(tmp_path, now)

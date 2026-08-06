@@ -169,6 +169,7 @@ def verify(env_file: Path) -> dict[str, Any]:
         "signed v2.0.0 after full CI; BuildKit attestations; retained SARIF; strict signed-report collector",
         "final tag reruns all CI gates and emits independently re-verifiable release evidence",
     )
+    preapproval_assembler = REPO_ROOT / "backend/scripts/assemble_ga_preapproval_authorization.py"
     approval_freezer = REPO_ROOT / "backend/scripts/freeze_ga_approval_campaign.py"
     approval_signer = REPO_ROOT / "backend/scripts/sign_ga_approval.py"
     approval_finalizer = REPO_ROOT / "backend/scripts/finalize_ga_authorization.py"
@@ -176,6 +177,11 @@ def verify(env_file: Path) -> dict[str, Any]:
     authorized_archiver = REPO_ROOT / "backend/scripts/archive_ga_authorized_bundle.py"
     authorized_archive_verifier = REPO_ROOT / "backend/scripts/verify_ga_authorized_archive.py"
     ga_path_resolution = REPO_ROOT / "backend/scripts/ga_path_resolution.py"
+    assembler_text = (
+        preapproval_assembler.read_text(encoding="utf-8")
+        if preapproval_assembler.is_file()
+        else ""
+    )
     freezer_text = (
         approval_freezer.read_text(encoding="utf-8") if approval_freezer.is_file() else ""
     )
@@ -204,6 +210,15 @@ def verify(env_file: Path) -> dict[str, Any]:
         ga_path_resolution.read_text(encoding="utf-8")
         if ga_path_resolution.is_file()
         else ""
+    )
+    add(
+        "ga_preapproval_assembly",
+        "exactly the nine required controls" in assembler_text
+        and 'result.get("campaign_stage") == "APPROVAL_COLLECTION"' in assembler_text
+        and "persisted preapproval authorization did not re-verify" in assembler_text
+        and "preapproval assembly input changed before receipt emission" in assembler_text,
+        "nine release-bound evidence reports are projected and re-evaluated into one immutable approval-empty base",
+        "no manual control projection; emit only at APPROVAL_COLLECTION with foundation/evidence clean",
     )
     add(
         "ga_approval_campaign",
