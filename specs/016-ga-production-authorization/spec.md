@@ -22,13 +22,15 @@ deployment authorization.
 | PGA-05 | A portable HA reference runs three backend/frontend/worker replicas across fault domains with PDB/HPA/default-deny policy; state services and RWX storage are HA. | Kustomize baseline plus target node/zone/Beat failover report. |
 | PGA-06 | A 900-second-or-longer capacity gate sustains the declared floor, materializes at least 50,000 runs, and proves post-growth timeline p95 through the real target HTTPS endpoint for the exact target, commit and immutable images. | `duckdock-target-capacity-gate-v2` JSON. |
 | PGA-07 | An assessor independent of implementation tests the exact commit/images; no Critical/High remains. | Independent report bound by SHA-256. |
-| PGA-08 | Product, Architecture, Security and Operations use four distinct OpenSSH identities to approve the exact release/target/evidence digest after evidence completion. | Four verified `duckdock-ga` signatures. |
-| PGA-09 | Final version is `2.0.0`, images use immutable `@sha256`, all RC gates are rerun through a release-bound target HTTPS readiness collector, and the production authorization result is `GA_AUTHORIZED`. | `duckdock-ga-target-readiness-v1` plus `duckdock-ga-production-authorization-v1` input/result bundle. |
+| PGA-08 | Product, Architecture, Security and Operations use four distinct OpenSSH identities and distinct public keys, each authorized for exactly that role by an out-of-band, content-addressed release-authority policy and one shared trust store, to approve the exact release/target/evidence/policy digest after evidence completion. Each signature also covers role, identity, decision and approval time. | `duckdock-ga-approval-policy-v1`, shared allowed-signers digest and four verified `duckdock-ga-approval-statement-v1` signatures. |
+| PGA-09 | Final version is `2.0.0`, images use immutable `@sha256`, all RC gates are rerun through a release-bound target HTTPS readiness collector, and the production authorization result is `GA_AUTHORIZED`. | `duckdock-ga-target-readiness-v1` plus `duckdock-ga-production-authorization-v2` input/result bundle. |
 
 ## Truthful current boundary
 
 PGA-01 through the repository portion of PGA-06 and the complete PGA-07/PGA-08
-protocol are implemented and automated. PGA-05 now includes a real disposable
+protocol are implemented and automated. PGA-08 now requires an out-of-band
+release-authority policy, forbids per-approval trust-store overrides and binds
+the policy digest into every signature. PGA-05 includes a real disposable
 four-node kind rehearsal: restricted images are deployed across three simulated
 zones, the Beat-hosting node is tainted/drained, stateless replicas recover in
 the two surviving zones under continuous API probes, and a revision-aware

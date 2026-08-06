@@ -22,7 +22,9 @@ from typing import Any, Sequence
 from urllib.parse import urlparse
 
 
-SCHEMA_VERSION = "duckdock-ga-production-authorization-v1"
+SCHEMA_VERSION = "duckdock-ga-production-authorization-v2"
+APPROVAL_POLICY_SCHEMA_VERSION = "duckdock-ga-approval-policy-v1"
+APPROVAL_STATEMENT_SCHEMA_VERSION = "duckdock-ga-approval-statement-v1"
 REQUIRED_CONTROLS = {
     "application_readiness",
     "tls",
@@ -40,6 +42,8 @@ EXTERNAL_CHECK_KEYS = {
     "security_assessment_signature",
     "approval_roles",
     "approval_four_eyes",
+    "approval_policy",
+    "approval_trust_store",
     "approval_Product",
     "approval_Architecture",
     "approval_Security",
@@ -113,11 +117,20 @@ def lint_authorization(document: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     if document.get("schema_version") != SCHEMA_VERSION:
         errors.append(f"schema_version must be {SCHEMA_VERSION}")
-    for key in ("release", "target", "controls"):
+    for key in ("release", "target", "controls", "approval_policy"):
         if not isinstance(document.get(key), dict):
             errors.append(f"{key} must be an object")
     if not isinstance(document.get("approvals"), list):
         errors.append("approvals must be an array")
+    else:
+        for index, approval in enumerate(document["approvals"]):
+            if not isinstance(approval, dict):
+                errors.append(f"approvals[{index}] must be an object")
+            elif "allowed_signers_path" in approval:
+                errors.append(
+                    f"approvals[{index}].allowed_signers_path is forbidden; "
+                    "use the release-authority approval policy"
+                )
     controls = document.get("controls")
     if isinstance(controls, dict):
         missing = REQUIRED_CONTROLS - set(controls)
@@ -365,18 +378,76 @@ def _https_url(value: Any) -> bool:
     return parsed.scheme == "https" and bool(parsed.hostname) and parsed.hostname not in {"localhost", "127.0.0.1"}
 
 
-def _release_digest(release: dict[str, Any], target: dict[str, Any], controls: dict[str, Any]) -> str:
+def _release_digest(
+    release: dict[str, Any],
+    target: dict[str, Any],
+    controls: dict[str, Any],
+    approval_policy: dict[str, Any],
+) -> str:
     evidence_digests = {
         key: value.get("evidence", {}).get("sha256") if isinstance(value, dict) else None
         for key, value in sorted(controls.items())
     }
     canonical = json.dumps(
-        {"schema_version": SCHEMA_VERSION, "release": release, "target": target, "evidence_digests": evidence_digests},
+        {
+            "schema_version": SCHEMA_VERSION,
+            "release": release,
+            "target": target,
+            "evidence_digests": evidence_digests,
+            "approval_policy": approval_policy,
+        },
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,
     ).encode("utf-8")
     return hashlib.sha256(canonical).hexdigest()
+
+
+def _allowed_signer_bindings(path: Path) -> tuple[dict[str, set[str]] | None, str]:
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError) as exc:
+        return None, str(exc)
+    bindings: dict[str, set[str]] = {}
+    for line_number, raw_line in enumerate(lines, start=1):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        fields = line.split()
+        if len(fields) < 3:
+            return None, f"line {line_number} is not an OpenSSH allowed-signers entry"
+        key_index = next(
+            (
+                index
+                for index, field in enumerate(fields[1:], start=1)
+                if field.startswith(("ssh-", "ecdsa-", "sk-"))
+            ),
+            None,
+        )
+        if key_index is None or key_index + 1 >= len(fields):
+            return None, f"line {line_number} does not contain an OpenSSH public key"
+        key_material = f"{fields[key_index]} {fields[key_index + 1]}"
+        for principal in fields[0].split(","):
+            if (
+                not _meaningful_string(principal)
+                or any(character in principal for character in "*?!")
+            ):
+                return None, f"line {line_number} must use exact, non-placeholder principals"
+            bindings.setdefault(principal, set()).add(key_material)
+    if not bindings:
+        return None, "no signer principals found"
+    key_owners: dict[str, set[str]] = {}
+    for principal, keys in bindings.items():
+        for key in keys:
+            key_owners.setdefault(key, set()).add(principal)
+    shared_keys = {
+        key: sorted(owners)
+        for key, owners in key_owners.items()
+        if len(owners) > 1
+    }
+    if shared_keys:
+        return None, f"public keys reused across identities={list(shared_keys.values())}"
+    return bindings, f"principals={sorted(bindings)}, unique_keys={len(key_owners)}"
 
 
 def _verify_ssh_payload(
@@ -412,20 +483,40 @@ def _verify_ssh_payload(
     return completed.returncode == 0, completed.stdout.decode("utf-8", errors="replace").strip()
 
 
+def _approval_statement(approval: dict[str, Any], release_digest: str) -> bytes:
+    return (
+        json.dumps(
+            {
+                "schema_version": APPROVAL_STATEMENT_SCHEMA_VERSION,
+                "authorization_schema_version": SCHEMA_VERSION,
+                "release_digest": release_digest,
+                "role": approval.get("role"),
+                "identity": approval.get("identity"),
+                "decision": approval.get("decision"),
+                "approved_at": approval.get("approved_at"),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
 def _verify_ssh_signature(
     *,
     identity: str,
     allowed_signers: Path,
     signature: Path,
+    approval: dict[str, Any],
     release_digest: str,
 ) -> tuple[bool, str]:
-    statement = f"{SCHEMA_VERSION}:{release_digest}\n".encode()
     return _verify_ssh_payload(
         identity=identity,
         allowed_signers=allowed_signers,
         signature=signature,
         namespace="duckdock-ga",
-        payload=statement,
+        payload=_approval_statement(approval, release_digest),
     )
 
 
@@ -519,6 +610,7 @@ def evaluate(
     document: dict[str, Any],
     *,
     authorization_path: Path,
+    approval_policy_path: Path | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     lint_errors = lint_authorization(document)
@@ -529,6 +621,7 @@ def evaluate(
     release = _object(document["release"], "release")
     target = _object(document["target"], "target")
     controls = _object(document["controls"], "controls")
+    approval_policy_reference = _object(document["approval_policy"], "approval_policy")
 
     version = str(release.get("version", ""))
     gate.add(
@@ -587,6 +680,113 @@ def evaluate(
         observed=f"target_id={target.get('target_id')}, environment={target.get('environment')}, mode={target_mode}, fault_domains={fault_domains}",
         expected="named production kubernetes-ha target; >=2 fault domains; HTTPS app/object URLs",
         detail="Authorization is target-specific and cannot be copied from local Compose evidence.",
+    )
+
+    policy_path = approval_policy_path.resolve() if approval_policy_path is not None else None
+    policy: dict[str, Any] = {}
+    policy_load_detail = "missing --approval-policy"
+    if policy_path is not None and policy_path.is_file():
+        try:
+            loaded_policy = json.loads(policy_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            policy_load_detail = str(exc)
+        else:
+            if isinstance(loaded_policy, dict):
+                policy = loaded_policy
+                policy_load_detail = "loaded"
+            else:
+                policy_load_detail = "policy root is not an object"
+
+    expected_policy_keys = {
+        "schema_version",
+        "policy_id",
+        "organization",
+        "allowed_signers_path",
+        "allowed_signers_sha256",
+        "roles",
+    }
+    expected_reference_keys = {"policy_id", "sha256"}
+    policy_roles_raw = policy.get("roles")
+    role_identities: dict[str, set[str]] = {}
+    roles_valid = isinstance(policy_roles_raw, dict) and set(policy_roles_raw) == REQUIRED_APPROVAL_ROLES
+    if roles_valid:
+        for role in REQUIRED_APPROVAL_ROLES:
+            raw_identities = policy_roles_raw.get(role)
+            if (
+                not isinstance(raw_identities, list)
+                or not raw_identities
+                or not all(_meaningful_string(identity) for identity in raw_identities)
+            ):
+                roles_valid = False
+                break
+            identities_for_role = {str(identity) for identity in raw_identities}
+            if len(identities_for_role) != len(raw_identities):
+                roles_valid = False
+                break
+            role_identities[role] = identities_for_role
+    configured_identities = set().union(*role_identities.values()) if role_identities else set()
+    identities_are_role_exclusive = (
+        roles_valid
+        and len(configured_identities) == sum(len(items) for items in role_identities.values())
+    )
+    expected_policy_digest = str(approval_policy_reference.get("sha256", ""))
+    actual_policy_digest = _sha256(policy_path) if policy_path is not None and policy_path.is_file() else "missing"
+    approval_policy_ok = (
+        set(approval_policy_reference) == expected_reference_keys
+        and bool(DIGEST_RE.fullmatch(expected_policy_digest))
+        and actual_policy_digest == expected_policy_digest
+        and set(policy) == expected_policy_keys
+        and policy.get("schema_version") == APPROVAL_POLICY_SCHEMA_VERSION
+        and _meaningful_string(policy.get("policy_id"))
+        and policy.get("policy_id") == approval_policy_reference.get("policy_id")
+        and _meaningful_string(policy.get("organization"))
+        and roles_valid
+        and identities_are_role_exclusive
+    )
+    gate.add(
+        "approval_policy",
+        owner="Security",
+        passed=approval_policy_ok,
+        observed=(
+            f"path={policy_path or 'missing'}, digest={actual_policy_digest}, "
+            f"policy_id={policy.get('policy_id', 'missing')}, load={policy_load_detail}"
+        ),
+        expected=(
+            f"out-of-band {APPROVAL_POLICY_SCHEMA_VERSION}; digest={expected_policy_digest or 'missing'}; "
+            "exactly four non-overlapping role mappings"
+        ),
+        detail="The release authority, not an individual approver, must provision the content-addressed role policy.",
+    )
+
+    allowed_signers = (
+        _resolve_file(policy.get("allowed_signers_path"), policy_path)
+        if policy_path is not None
+        else None
+    )
+    expected_trust_digest = str(policy.get("allowed_signers_sha256", ""))
+    actual_trust_digest = (
+        _sha256(allowed_signers) if allowed_signers is not None and allowed_signers.is_file() else "missing"
+    )
+    signer_bindings: dict[str, set[str]] | None = None
+    principals_detail = "missing trust store"
+    if allowed_signers is not None and allowed_signers.is_file():
+        signer_bindings, principals_detail = _allowed_signer_bindings(allowed_signers)
+    trust_store_ok = (
+        approval_policy_ok
+        and bool(DIGEST_RE.fullmatch(expected_trust_digest))
+        and actual_trust_digest == expected_trust_digest
+        and signer_bindings is not None
+        and set(signer_bindings) == configured_identities
+    )
+    gate.add(
+        "approval_trust_store",
+        owner="Security",
+        passed=trust_store_ok,
+        observed=(
+            f"path={allowed_signers or 'missing'}, digest={actual_trust_digest}, {principals_detail}"
+        ),
+        expected="policy-bound shared allowed-signers digest with exactly the configured role identities",
+        detail="Per-approval trust stores are forbidden; every signature must chain to this one release-authority trust store.",
     )
 
     evidence_times: list[datetime] = []
@@ -1305,7 +1505,7 @@ def evaluate(
         detail="The independent signed report must bind the exact target, contract, commit and images; cover application, IAM, Kubernetes, supply-chain and agent risks; and record completed retesting.",
     )
 
-    release_digest = _release_digest(release, target, controls)
+    release_digest = _release_digest(release, target, controls, approval_policy_reference)
     approvals = _list(document["approvals"], "approvals")
     approval_roles = [item.get("role") for item in approvals if isinstance(item, dict)]
     identities = [item.get("identity") for item in approvals if isinstance(item, dict)]
@@ -1331,15 +1531,22 @@ def evaluate(
         approval = matches[0] if len(matches) == 1 else {}
         identity = str(approval.get("identity", ""))
         approved_at = _parse_time(approval.get("approved_at"))
-        allowed_signers = _resolve_file(approval.get("allowed_signers_path"), authorization_path)
         signature = _resolve_file(approval.get("signature_path"), authorization_path)
+        role_authorized = identity in role_identities.get(role, set())
         signature_ok = False
         signature_detail = "missing signature artifacts"
-        if allowed_signers and allowed_signers.is_file() and signature and signature.is_file() and identity:
+        if (
+            trust_store_ok
+            and allowed_signers is not None
+            and signature is not None
+            and signature.is_file()
+            and identity
+        ):
             signature_ok, signature_detail = _verify_ssh_signature(
                 identity=identity,
                 allowed_signers=allowed_signers,
                 signature=signature,
+                approval=approval,
                 release_digest=release_digest,
             )
         approval_ok = (
@@ -1349,15 +1556,22 @@ def evaluate(
             and latest_evidence is not None
             and approved_at >= latest_evidence
             and approved_at <= current
+            and role_authorized
             and signature_ok
         )
         gate.add(
             f"approval_{role}",
             owner=role,
             passed=approval_ok,
-            observed=f"identity={identity or 'missing'}, approved_at={approved_at}, signature={signature_detail}",
-            expected=f"APPROVED after latest evidence; OpenSSH signature over {release_digest}",
-            detail="Approvals are cryptographically bound to the release, target and every evidence digest.",
+            observed=(
+                f"identity={identity or 'missing'}, role_authorized={role_authorized}, "
+                f"approved_at={approved_at}, signature={signature_detail}"
+            ),
+            expected=(
+                f"policy-authorized {role} identity; APPROVED after latest evidence; "
+                f"OpenSSH signature over {release_digest}"
+            ),
+            detail="Approvals are bound to the release, target, every evidence digest and the out-of-band role policy.",
         )
 
     failed = {check.key for check in gate.checks if not check.passed}
@@ -1381,6 +1595,11 @@ def evaluate(
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("authorization", type=Path)
+    parser.add_argument(
+        "--approval-policy",
+        type=Path,
+        help="release-authority managed approval policy (required for evaluation)",
+    )
     parser.add_argument("--lint", action="store_true", help="validate structure only; placeholders are allowed")
     parser.add_argument("--output", type=Path, help="write the JSON evaluation report")
     parser.add_argument("--allow-blocked", action="store_true", help="return zero after emitting a non-GA report")
@@ -1397,7 +1616,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.lint:
             print(json.dumps({"ok": True, "schema_version": SCHEMA_VERSION}, sort_keys=True))
             return 0
-        result = evaluate(document, authorization_path=args.authorization.resolve())
+        result = evaluate(
+            document,
+            authorization_path=args.authorization.resolve(),
+            approval_policy_path=args.approval_policy,
+        )
     except ValueError as exc:
         print(f"GA authorization error: {exc}", file=sys.stderr)
         return 3

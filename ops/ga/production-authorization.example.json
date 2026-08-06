@@ -1,5 +1,5 @@
 {
-  "schema_version": "duckdock-ga-production-authorization-v1",
+  "schema_version": "duckdock-ga-production-authorization-v2",
   "release": {
     "version": "2.0.0",
     "git_commit": "__CHANGE_ME_40_HEX_GIT_COMMIT__",
@@ -146,6 +146,10 @@
       }
     }
   },
+  "approval_policy": {
+    "policy_id": "__CHANGE_ME_RELEASE_AUTHORITY_POLICY_ID__",
+    "sha256": "__CHANGE_ME_64_HEX__"
+  },
   "approvals": [
     {
       "role": "Product",
@@ -153,7 +157,6 @@
       "decision": "APPROVED",
       "approved_at": "2026-08-05T00:00:00Z",
       "signed_digest": "__CHANGE_ME_RELEASE_DIGEST__",
-      "allowed_signers_path": "__CHANGE_ME_ALLOWED_SIGNERS_PATH__",
       "signature_path": "__CHANGE_ME_SIGNATURE_PATH__"
     },
     {
@@ -162,7 +165,6 @@
       "decision": "APPROVED",
       "approved_at": "2026-08-05T00:00:00Z",
       "signed_digest": "__CHANGE_ME_RELEASE_DIGEST__",
-      "allowed_signers_path": "__CHANGE_ME_ALLOWED_SIGNERS_PATH__",
       "signature_path": "__CHANGE_ME_SIGNATURE_PATH__"
     },
     {
@@ -171,7 +173,6 @@
       "decision": "APPROVED",
       "approved_at": "2026-08-05T00:00:00Z",
       "signed_digest": "__CHANGE_ME_RELEASE_DIGEST__",
-      "allowed_signers_path": "__CHANGE_ME_ALLOWED_SIGNERS_PATH__",
       "signature_path": "__CHANGE_ME_SIGNATURE_PATH__"
     },
     {
@@ -180,7 +181,6 @@
       "decision": "APPROVED",
       "approved_at": "2026-08-05T00:00:00Z",
       "signed_digest": "__CHANGE_ME_RELEASE_DIGEST__",
-      "allowed_signers_path": "__CHANGE_ME_ALLOWED_SIGNERS_PATH__",
       "signature_path": "__CHANGE_ME_SIGNATURE_PATH__"
     }
   ]

@@ -4,6 +4,11 @@
 复制到受控证据目录后填写，禁止把真实人员身份、内部报告路径、签名或
 allowed-signers 误提交到公开仓库。
 
+`approval-policy.example.json` 是独立的组织信任根模板。它必须由发布机构而非
+任一审批者通过只读控制路径提供，绑定唯一共享 allowed-signers 文件及四个角色
+允许的精确身份。授权文件只保存 policy ID 和 SHA-256；个人 approval 不允许覆盖
+信任库。正式验证必须使用 `--approval-policy` 显式选择受控策略文件。
+
 结构检查：
 
 ```bash

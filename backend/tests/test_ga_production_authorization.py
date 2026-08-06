@@ -10,9 +10,12 @@ from pathlib import Path
 import pytest
 
 from scripts.verify_ga_production_authorization import (
+    APPROVAL_POLICY_SCHEMA_VERSION,
     REQUIRED_APPROVAL_ROLES,
     SCHEMA_VERSION,
+    _approval_statement,
     _release_digest,
+    _verify_ssh_signature,
     evaluate,
     lint_authorization,
 )
@@ -612,6 +615,7 @@ def _document(tmp_path: Path, now: datetime) -> dict:
         "release": release,
         "target": target,
         "controls": controls,
+        "approval_policy": {},
         "approvals": [],
     }
 
@@ -619,12 +623,10 @@ def _document(tmp_path: Path, now: datetime) -> dict:
 def _add_signed_approvals(document: dict, tmp_path: Path, now: datetime) -> None:
     if shutil.which("ssh-keygen") is None:
         pytest.skip("ssh-keygen is required for production-approval signature verification")
-    digest = _release_digest(document["release"], document["target"], document["controls"])
-    statement = tmp_path / "statement"
-    statement.write_text(f"{SCHEMA_VERSION}:{digest}\n", encoding="utf-8")
     allowed_signers = tmp_path / "allowed_signers"
     public_lines: list[str] = []
-    approvals: list[dict] = []
+    role_identities: dict[str, list[str]] = {}
+    signing_keys: dict[str, Path] = {}
     for role in sorted(REQUIRED_APPROVAL_ROLES):
         identity = f"{role.lower()}@example.com"
         key = tmp_path / f"{role.lower()}_key"
@@ -634,24 +636,50 @@ def _add_signed_approvals(document: dict, tmp_path: Path, now: datetime) -> None
         )
         public_key = key.with_suffix(".pub").read_text(encoding="utf-8").strip()
         public_lines.append(f"{identity} {public_key}")
+        role_identities[role] = [identity]
+        signing_keys[role] = key
+    allowed_signers.write_text("\n".join(public_lines) + "\n", encoding="utf-8")
+    policy = {
+        "schema_version": APPROVAL_POLICY_SCHEMA_VERSION,
+        "policy_id": "duckdock-production-release-authority",
+        "organization": "DuckDock Test Release Authority",
+        "allowed_signers_path": str(allowed_signers),
+        "allowed_signers_sha256": hashlib.sha256(allowed_signers.read_bytes()).hexdigest(),
+        "roles": role_identities,
+    }
+    policy_path = tmp_path / "approval-policy.json"
+    policy_path.write_text(json.dumps(policy, sort_keys=True) + "\n", encoding="utf-8")
+    document["approval_policy"] = {
+        "policy_id": policy["policy_id"],
+        "sha256": hashlib.sha256(policy_path.read_bytes()).hexdigest(),
+    }
+    digest = _release_digest(
+        document["release"],
+        document["target"],
+        document["controls"],
+        document["approval_policy"],
+    )
+    approvals: list[dict] = []
+    for role in sorted(REQUIRED_APPROVAL_ROLES):
+        identity = role_identities[role][0]
+        key = signing_keys[role]
+        approval = {
+            "role": role,
+            "identity": identity,
+            "decision": "APPROVED",
+            "approved_at": (now - timedelta(minutes=1)).isoformat(),
+            "signed_digest": digest,
+            "signature_path": str(tmp_path / f"{role.lower()}.sig"),
+        }
+        statement = tmp_path / f"{role.lower()}-statement"
+        statement.write_bytes(_approval_statement(approval, digest))
         subprocess.run(
             ["ssh-keygen", "-q", "-Y", "sign", "-f", str(key), "-n", "duckdock-ga", str(statement)],
             check=True,
         )
-        signature = tmp_path / f"{role.lower()}.sig"
+        signature = Path(approval["signature_path"])
         statement.with_suffix(".sig").replace(signature)
-        approvals.append(
-            {
-                "role": role,
-                "identity": identity,
-                "decision": "APPROVED",
-                "approved_at": (now - timedelta(minutes=1)).isoformat(),
-                "signed_digest": digest,
-                "allowed_signers_path": str(allowed_signers),
-                "signature_path": str(signature),
-            }
-        )
-    allowed_signers.write_text("\n".join(public_lines) + "\n", encoding="utf-8")
+        approvals.append(approval)
     document["approvals"] = approvals
 
 
@@ -661,10 +689,214 @@ def test_complete_target_bundle_is_cryptographically_authorized(tmp_path: Path) 
     _add_signed_approvals(document, tmp_path, now)
 
     assert lint_authorization(document) == []
-    result = evaluate(document, authorization_path=tmp_path / "authorization.json", now=now)
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
 
     assert result["status"] == "GA_AUTHORIZED"
     assert result["block_count"] == 0
+
+
+def test_signing_tool_emits_verifier_compatible_metadata_bound_statement(tmp_path: Path) -> None:
+    if shutil.which("ssh-keygen") is None:
+        pytest.skip("ssh-keygen is required for production-approval signature verification")
+    key = tmp_path / "product_key"
+    subprocess.run(
+        ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)],
+        check=True,
+    )
+    identity = "product@example.com"
+    allowed_signers = tmp_path / "allowed_signers_for_tool"
+    allowed_signers.write_text(
+        f"{identity} {key.with_suffix('.pub').read_text(encoding='utf-8').strip()}\n",
+        encoding="utf-8",
+    )
+    digest = "d" * 64
+    approved_at = "2026-08-06T10:30:00+08:00"
+    signature = tmp_path / "product-tool.sig"
+    subprocess.run(
+        [
+            str(Path(__file__).parents[2] / "scripts" / "sign-ga-approval.sh"),
+            "--digest",
+            digest,
+            "--role",
+            "Product",
+            "--identity",
+            identity,
+            "--approved-at",
+            approved_at,
+            "--key",
+            str(key),
+            "--output",
+            str(signature),
+        ],
+        check=True,
+    )
+    approval = {
+        "role": "Product",
+        "identity": identity,
+        "decision": "APPROVED",
+        "approved_at": approved_at,
+        "signed_digest": digest,
+        "signature_path": str(signature),
+    }
+
+    verified, detail = _verify_ssh_signature(
+        identity=identity,
+        allowed_signers=allowed_signers,
+        signature=signature,
+        approval=approval,
+        release_digest=digest,
+    )
+
+    assert verified, detail
+
+
+def test_approval_policy_must_be_supplied_out_of_band(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        now=now,
+    )
+
+    assert result["status"] == "AWAITING_EXTERNAL_APPROVALS"
+    statuses = {item["key"]: item["status"] for item in result["checks"]}
+    assert statuses["approval_policy"] == "BLOCK"
+    assert statuses["approval_trust_store"] == "BLOCK"
+
+
+def test_tampered_shared_approval_trust_store_invalidates_all_approvals(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _add_signed_approvals(document, tmp_path, now)
+    allowed_signers = tmp_path / "allowed_signers"
+    allowed_signers.write_text(
+        allowed_signers.read_text(encoding="utf-8") + "# unauthorized mutation\n",
+        encoding="utf-8",
+    )
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    assert result["status"] == "AWAITING_EXTERNAL_APPROVALS"
+    statuses = {item["key"]: item["status"] for item in result["checks"]}
+    assert statuses["approval_trust_store"] == "BLOCK"
+    assert all(statuses[f"approval_{role}"] == "BLOCK" for role in REQUIRED_APPROVAL_ROLES)
+
+
+def test_one_public_key_cannot_impersonate_four_distinct_approval_identities(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _add_signed_approvals(document, tmp_path, now)
+    allowed_signers = tmp_path / "allowed_signers"
+    lines = allowed_signers.read_text(encoding="utf-8").splitlines()
+    first_fields = lines[0].split()
+    shared_key = f"{first_fields[1]} {first_fields[2]}"
+    allowed_signers.write_text(
+        "\n".join(f"{line.split()[0]} {shared_key}" for line in lines) + "\n",
+        encoding="utf-8",
+    )
+    policy_path = tmp_path / "approval-policy.json"
+    policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    policy["allowed_signers_sha256"] = hashlib.sha256(allowed_signers.read_bytes()).hexdigest()
+    policy_path.write_text(json.dumps(policy, sort_keys=True) + "\n", encoding="utf-8")
+    document["approval_policy"]["sha256"] = hashlib.sha256(policy_path.read_bytes()).hexdigest()
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=policy_path,
+        now=now,
+    )
+
+    statuses = {item["key"]: item["status"] for item in result["checks"]}
+    assert statuses["approval_policy"] == "PASS"
+    assert statuses["approval_trust_store"] == "BLOCK"
+
+
+def test_valid_signature_from_wrong_policy_role_cannot_approve(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _add_signed_approvals(document, tmp_path, now)
+    product = next(item for item in document["approvals"] if item["role"] == "Product")
+    security = next(item for item in document["approvals"] if item["role"] == "Security")
+    product["identity"], security["identity"] = security["identity"], product["identity"]
+    for approval, key_role in ((product, "Security"), (security, "Product")):
+        statement = tmp_path / f"wrong-role-{approval['role'].lower()}-statement"
+        statement.write_bytes(_approval_statement(approval, approval["signed_digest"]))
+        subprocess.run(
+            [
+                "ssh-keygen",
+                "-q",
+                "-Y",
+                "sign",
+                "-f",
+                str(tmp_path / f"{key_role.lower()}_key"),
+                "-n",
+                "duckdock-ga",
+                str(statement),
+            ],
+            check=True,
+        )
+        statement.with_suffix(".sig").replace(Path(approval["signature_path"]))
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    assert result["status"] == "AWAITING_EXTERNAL_APPROVALS"
+    four_eyes = next(item for item in result["checks"] if item["key"] == "approval_four_eyes")
+    product_check = next(item for item in result["checks"] if item["key"] == "approval_Product")
+    security_check = next(item for item in result["checks"] if item["key"] == "approval_Security")
+    assert four_eyes["status"] == "PASS"
+    assert product_check["status"] == "BLOCK"
+    assert security_check["status"] == "BLOCK"
+    assert "role_authorized=False" in product_check["observed"]
+    assert "role_authorized=False" in security_check["observed"]
+
+
+def test_unsigned_approval_timestamp_edit_invalidates_signature(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _add_signed_approvals(document, tmp_path, now)
+    product = next(item for item in document["approvals"] if item["role"] == "Product")
+    product["approved_at"] = (now - timedelta(seconds=30)).isoformat()
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    product_check = next(item for item in result["checks"] if item["key"] == "approval_Product")
+    assert product_check["status"] == "BLOCK"
+    assert "Signature verification failed" in product_check["observed"]
+
+
+def test_v2_rejects_per_approval_trust_store_override(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _add_signed_approvals(document, tmp_path, now)
+    document["approvals"][0]["allowed_signers_path"] = str(tmp_path / "attacker-trust-store")
+
+    assert lint_authorization(document) == [
+        "approvals[0].allowed_signers_path is forbidden; use the release-authority approval policy"
+    ]
 
 
 def test_internal_security_claim_is_not_independent_authorization(tmp_path: Path) -> None:
@@ -673,7 +905,12 @@ def test_internal_security_claim_is_not_independent_authorization(tmp_path: Path
     _add_signed_approvals(document, tmp_path, now)
     document["controls"]["security_assessment"]["independent"] = False
 
-    result = evaluate(document, authorization_path=tmp_path / "authorization.json", now=now)
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
 
     assert result["status"] == "AWAITING_EXTERNAL_APPROVALS"
     check = next(item for item in result["checks"] if item["key"] == "security_assessment")
@@ -704,7 +941,12 @@ def test_raw_readiness_response_without_target_binding_cannot_authorize_ga(
     evidence["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
     _add_signed_approvals(document, tmp_path, now)
 
-    result = evaluate(document, authorization_path=tmp_path / "authorization.json", now=now)
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
 
     assert result["status"] == "BLOCKED"
     readiness = next(item for item in result["checks"] if item["key"] == "application_readiness")
@@ -724,7 +966,12 @@ def test_readiness_report_from_previous_release_cannot_authorize_current_release
     evidence["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
     _add_signed_approvals(document, tmp_path, now)
 
-    result = evaluate(document, authorization_path=tmp_path / "authorization.json", now=now)
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
 
     assert result["status"] == "BLOCKED"
     readiness = next(item for item in result["checks"] if item["key"] == "application_readiness")
@@ -737,7 +984,12 @@ def test_unrestricted_target_network_blocks_ga(tmp_path: Path) -> None:
     _add_signed_approvals(document, tmp_path, now)
     document["controls"]["network"]["egress_allowlist_enforced"] = False
 
-    result = evaluate(document, authorization_path=tmp_path / "authorization.json", now=now)
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
 
     assert result["status"] == "BLOCKED"
     assert result["block_count"] == 1
@@ -769,7 +1021,12 @@ def test_unrelated_digest_bound_json_cannot_substitute_for_target_control_eviden
     evidence["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
     _add_signed_approvals(document, tmp_path, now)
 
-    result = evaluate(document, authorization_path=tmp_path / "authorization.json", now=now)
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
 
     assert result["status"] == expected_status
     check = next(item for item in result["checks"] if item["key"] == control_name)
@@ -797,7 +1054,12 @@ def test_target_control_reports_cannot_be_reused_for_another_environment(
         evidence["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
     _add_signed_approvals(document, tmp_path, now)
 
-    result = evaluate(document, authorization_path=tmp_path / "authorization.json", now=now)
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
 
     assert result["status"] == "BLOCKED"
     statuses = {item["key"]: item["status"] for item in result["checks"]}
@@ -815,7 +1077,12 @@ def test_secrets_evidence_rejects_embedded_secret_material(tmp_path: Path) -> No
     evidence["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
     _add_signed_approvals(document, tmp_path, now)
 
-    result = evaluate(document, authorization_path=tmp_path / "authorization.json", now=now)
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
 
     assert result["status"] == "BLOCKED"
     check = next(item for item in result["checks"] if item["key"] == "secrets")
@@ -839,7 +1106,12 @@ def test_tampered_backup_manifest_fails_even_when_digest_claim_is_updated(
     evidence["sha256"] = hashlib.sha256(evidence_path.read_bytes()).hexdigest()
     _add_signed_approvals(document, tmp_path, now)
 
-    result = evaluate(document, authorization_path=tmp_path / "authorization.json", now=now)
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
 
     assert result["status"] == "BLOCKED"
     signature_check = next(item for item in result["checks"] if item["key"] == "recovery_backup_signature")
@@ -861,7 +1133,12 @@ def test_tampered_assessor_report_fails_even_when_digest_claim_is_updated(
     evidence["sha256"] = hashlib.sha256(evidence_path.read_bytes()).hexdigest()
     _add_signed_approvals(document, tmp_path, now)
 
-    result = evaluate(document, authorization_path=tmp_path / "authorization.json", now=now)
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
 
     assert result["status"] == "AWAITING_EXTERNAL_APPROVALS"
     signature_check = next(item for item in result["checks"] if item["key"] == "security_assessment_signature")
@@ -880,7 +1157,12 @@ def test_local_asgi_capacity_report_cannot_authorize_target(tmp_path: Path) -> N
     evidence["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
     _add_signed_approvals(document, tmp_path, now)
 
-    result = evaluate(document, authorization_path=tmp_path / "authorization.json", now=now)
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
 
     assert result["status"] == "BLOCKED"
     capacity = next(item for item in result["checks"] if item["key"] == "capacity")
@@ -900,7 +1182,12 @@ def test_tls_report_from_previous_release_cannot_authorize_current_release(
     evidence["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
     _add_signed_approvals(document, tmp_path, now)
 
-    result = evaluate(document, authorization_path=tmp_path / "authorization.json", now=now)
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
 
     assert result["status"] == "BLOCKED"
     tls = next(item for item in result["checks"] if item["key"] == "tls")
@@ -920,7 +1207,12 @@ def test_capacity_report_from_previous_image_cannot_authorize_current_release(
     evidence["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
     _add_signed_approvals(document, tmp_path, now)
 
-    result = evaluate(document, authorization_path=tmp_path / "authorization.json", now=now)
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
 
     assert result["status"] == "BLOCKED"
     capacity = next(item for item in result["checks"] if item["key"] == "capacity")
@@ -944,7 +1236,12 @@ def test_local_reference_ha_report_cannot_authorize_target(tmp_path: Path) -> No
     evidence["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
     _add_signed_approvals(document, tmp_path, now)
 
-    result = evaluate(document, authorization_path=tmp_path / "authorization.json", now=now)
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
 
     assert result["status"] == "BLOCKED"
     high_availability = next(item for item in result["checks"] if item["key"] == "high_availability")
@@ -962,7 +1259,12 @@ def test_ha_claims_cannot_outpace_fault_injection_evidence(tmp_path: Path) -> No
     evidence["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
     _add_signed_approvals(document, tmp_path, now)
 
-    result = evaluate(document, authorization_path=tmp_path / "authorization.json", now=now)
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
 
     assert result["status"] == "BLOCKED"
     high_availability = next(item for item in result["checks"] if item["key"] == "high_availability")
@@ -980,7 +1282,12 @@ def test_ha_ready_count_must_match_retained_pod_snapshot(tmp_path: Path) -> None
     evidence["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
     _add_signed_approvals(document, tmp_path, now)
 
-    result = evaluate(document, authorization_path=tmp_path / "authorization.json", now=now)
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
 
     assert result["status"] == "BLOCKED"
     high_availability = next(item for item in result["checks"] if item["key"] == "high_availability")

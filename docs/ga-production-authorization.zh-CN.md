@@ -128,30 +128,56 @@ bash scripts/rehearse-kubernetes-ha.sh
     Secrets、网络、告警、恢复、容量、HA 和独立安全报告内部 `observed_at` 必须与
     各自授权证据时间相同，且 `scope` 只能是 `target-production`。本地 dev/kind
     回执不能转换成该 scope。
-13. 先运行门禁取得 `release_digest`，四个不同负责人分别签署：
+13. 先由组织发布机构（不能是任一审批者临时自建）从
+    `ops/ga/approval-policy.example.json` 建立受控审批策略。策略必须使用
+    `duckdock-ga-approval-policy-v1`，为 Product、Architecture、Security、
+    Operations 分配互不重叠的精确 identity，并引用同一份 OpenSSH
+    allowed-signers。信任库不得使用通配 principal；其 SHA-256 写入策略，策略
+    SHA-256 和 policy ID 再写入生产授权文件的 `approval_policy`。策略与信任库
+    应由发布流水线/发布负责人以只读方式注入验证器，不能接受审批者随授权包提交
+    的任意替代路径。例如：
+
+```bash
+shasum -a 256 /release-authority/duckdock-ga.allowed-signers
+# 将摘要填入 /release-authority/duckdock-ga-approval-policy.json
+shasum -a 256 /release-authority/duckdock-ga-approval-policy.json
+# 将策略摘要和 policy_id 填入 authorization.json
+```
+
+14. 使用受控策略运行门禁取得 `release_digest`，四个不同负责人分别签署：
 
 ```bash
 python backend/scripts/verify_ga_production_authorization.py \
-  /secure/duckdock-2.0.0-authorization.json --allow-blocked
+  /secure/duckdock-2.0.0-authorization.json \
+  --approval-policy /release-authority/duckdock-ga-approval-policy.json \
+  --allow-blocked
 
 bash scripts/sign-ga-approval.sh \
   --digest <release_digest> \
+  --role Product \
+  --identity product-release-approver@example.com \
+  --approved-at 2026-08-06T10:30:00+08:00 \
   --key ~/.ssh/product-ga-approval \
   --output /secure/signatures/product.sig
 ```
 
-签名采用 OpenSSH namespace `duckdock-ga`。`allowed_signers` 将身份绑定到公钥，
-四个 approval 必须使用不同 identity，并在最新证据之后签署。任何证据内容
-变化都会改变 release digest，使旧签名失效。
+签名采用 OpenSSH namespace `duckdock-ga`。每个 identity 必须属于组织策略中对应
+角色，四个 approval 必须使用不同 identity，并在最新证据之后签署。v2 禁止在
+approval 内提供 `allowed_signers_path`；所有签名只信任组织策略绑定的共享信任库。
+规范化签名 statement 同时覆盖 release digest、role、identity、decision 和
+approved_at，授权包组装者不能事后改写审批角色、决定或时间。任何证据、目标、
+版本或审批策略摘要变化都会改变 release digest，使旧签名失效。
 
 最终执行：
 
 ```bash
 python backend/scripts/verify_ga_production_authorization.py \
   /secure/duckdock-2.0.0-authorization.json \
+  --approval-policy /release-authority/duckdock-ga-approval-policy.json \
   --output /secure/duckdock-2.0.0-ga-authorization-result.json
 ```
 
 退出码 `0` 且状态 `GA_AUTHORIZED` 才是正式生产授权；退出码 `2` 是证据或签字
 阻断，退出码 `3` 是授权文件结构错误。授权结果、原文件、全部证据、签名和
-allowed-signers 应作为同一个不可变发布包归档。
+审批策略、共享 allowed-signers 应与授权结果一同不可变归档，但生产验证时仍必须
+从发布机构控制的独立只读路径选择策略，不能从待验证授权包自动发现信任根。

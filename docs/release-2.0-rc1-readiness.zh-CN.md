@@ -95,7 +95,7 @@ Langfuse 保持可替换的 provider adapter：关闭或不可用时，依赖它
 - 触发和恢复告警，证明两个实际接收人及 on-call schedule；
 - 完成独立安全评审/VEX，关闭最终应用镜像和依赖中的全部 Critical/High；
 - 将版本冻结为 `2.0.0`，使用 registry `@sha256` 镜像，在最终 commit 上重跑全部门禁；
-- 由 Product、Architecture、Security、Operations 四个不同身份签署同一证据摘要；
+- 由发布机构通过受控、内容寻址的组织策略固定共享信任库和角色身份，再由 Product、Architecture、Security、Operations 四个不同身份签署同一 release/target/evidence/policy 摘要；
 - 运行生产授权器并取得唯一可接受结果 `GA_AUTHORIZED`。
 
 机器级详细结果见 [`release-candidate-rc1-20260805.md`](../specs/015-ga-candidate/evidence/release-candidate-rc1-20260805.md)、[`capacity-reference-small-pass-20260805.json`](../specs/016-ga-production-authorization/evidence/capacity-reference-small-pass-20260805.json)、[`local-kubernetes-ha-rehearsal-20260805.json`](../specs/016-ga-production-authorization/evidence/local-kubernetes-ha-rehearsal-20260805.json) 和 [`local-infrastructure-20260805.json`](../specs/016-ga-production-authorization/evidence/local-infrastructure-20260805.json)。目标授权流程见 [`ga-production-authorization.zh-CN.md`](ga-production-authorization.zh-CN.md)。历史 `2.0.0-ga` 文档不再作为当前版本事实源。
