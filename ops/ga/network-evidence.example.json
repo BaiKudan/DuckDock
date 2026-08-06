@@ -1,5 +1,5 @@
 {
-  "schema_version": "duckdock-ga-network-evidence-v2",
+  "schema_version": "duckdock-ga-network-probe-v3",
   "scope": "target-production",
   "status": "PASS",
   "passed": true,
@@ -9,6 +9,13 @@
   "images": {
     "backend": {"name": "registry.example.invalid/duckdock/backend@sha256:__CHANGE_ME_64_HEX__"},
     "frontend": {"name": "registry.example.invalid/duckdock/frontend@sha256:__CHANGE_ME_64_HEX__"}
+  },
+  "exercise_id": "__CHANGE_ME_NETWORK_EXERCISE_ID__",
+  "probe": {
+    "probe_id": "__CHANGE_ME_EXTERNAL_SCANNER_ID__",
+    "vantage_id": "__CHANGE_ME_EXTERNAL_VANTAGE_ID__",
+    "vantage_class": "external-internet",
+    "source_ip": "__CHANGE_ME_GLOBAL_IP__"
   },
   "public_tcp_ports": [443],
   "database_public": false,

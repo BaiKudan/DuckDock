@@ -27,14 +27,16 @@ from urllib import request as urllib_request
 from urllib.parse import urlparse
 
 try:
+    from scripts.ga_network_evidence import NETWORK_EVIDENCE_SCHEMA_VERSION
     from scripts.ga_release_identity import build_release_binding
 except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
+    from ga_network_evidence import NETWORK_EVIDENCE_SCHEMA_VERSION
     from ga_release_identity import build_release_binding
 
 
 SCHEMA_VERSION = "duckdock-kubernetes-ha-failover-v2"
 STATE_SCHEMA_VERSION = "duckdock-ga-state-services-failover-v1"
-NETWORK_SCHEMA_VERSION = "duckdock-ga-network-evidence-v2"
+NETWORK_SCHEMA_VERSION = NETWORK_EVIDENCE_SCHEMA_VERSION
 APPROVAL_POLICY_SCHEMA_VERSION = "duckdock-ga-approval-policy-v2"
 COMPONENTS = ("backend", "frontend", "worker", "beat")
 STATE_SERVICES = ("mysql", "redis", "object_store", "rwx_repository_storage")

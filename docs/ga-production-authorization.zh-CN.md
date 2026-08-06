@@ -300,8 +300,13 @@ python backend/scripts/collect_ga_target_secrets.py \
    before/after 差异及时间线；旧 v1、自报布尔值、预先存在的 receipt、provider
    代替 verifier 签名、未滚动 Pod 或包含 secret/token/password 值都不能通过。
    opaque version/receipt/audit ID 只用于关联外部系统，不得放入任何 credential 值。
-8. 使用 `collect_ga_target_network.py` 采集 `duckdock-ga-network-evidence-v2`，不能
-   手填 PASS 模板。执行机必须位于目标网络之外，同时具备目标集群只读
+8. 使用 `collect_ga_target_network.py` 采集待签名的
+   `duckdock-ga-network-probe-v3`，再由
+   `collect_ga_target_network_evidence.py` 组合最终
+   `duckdock-ga-network-evidence-v3`，不能手填 PASS wrapper。发布机构先从
+   `ops/ga/network-trust-policy.example.json` 建立只读、内容寻址的策略，固定精确
+   probe signer/key、probe/vantage ID、全球可路由来源 CIDR、目标 kube context、
+   Namespace 和 CNI DaemonSet。执行机必须位于目标网络之外，同时具备目标集群只读
    NetworkPolicy/CNI DaemonSet 与三类 probe Pod `exec` 权限，并已安装 `nmap`。
    预先准备三个不挂载生产 Secret、包含 Python 3 的 Ready probe Pod：入口受信
    Namespace 带 `duckdock.io/ingress=true`，监控受信 Namespace 带
@@ -319,7 +324,9 @@ python backend/scripts/collect_ga_target_network.py \
   --backend-image "$DUCKDOCK_GA_BACKEND_IMAGE" \
   --frontend-image "$DUCKDOCK_GA_FRONTEND_IMAGE" \
   --base-url https://duckdock.example.com \
+  --exercise-id ga-network-20260806 \
   --scanner-id external-scanner-hz-01 \
+  --vantage-id internet-hangzhou-01 \
   --scanner-source-ip "$EXTERNAL_SCANNER_SOURCE_IP" \
   --database-address 10.20.1.10 \
   --redis-address 10.20.1.11 \
@@ -335,6 +342,23 @@ python backend/scripts/collect_ga_target_network.py \
   --unapproved-egress-host network-control.example.com \
   --unapproved-egress-port 443 \
   --cni-daemonset-name cilium \
+  --output /secure/evidence/target-network-raw.json
+
+ssh-keygen -Y sign \
+  -f /release-authority/network-probe-key \
+  -n duckdock-network-probe-report \
+  /secure/evidence/target-network-raw.json
+
+python backend/scripts/collect_ga_target_network_evidence.py \
+  --target-environment customer-production \
+  --source-commit "$DUCKDOCK_GA_SOURCE_COMMIT" \
+  --backend-image "$DUCKDOCK_GA_BACKEND_IMAGE" \
+  --frontend-image "$DUCKDOCK_GA_FRONTEND_IMAGE" \
+  --exercise-id ga-network-20260806 \
+  --network-policy /release-authority/duckdock-network-policy.json \
+  --probe-signer-identity network-probe@example.com \
+  --probe-report /secure/evidence/target-network-raw.json \
+  --probe-signature /secure/evidence/target-network-raw.json.sig \
   --output /secure/evidence/target-network.json
 ```
 
@@ -342,8 +366,11 @@ python backend/scripts/collect_ga_target_network.py \
    Redis 6379 和对象存储直连 9000；在集群内同时验证受信 ingress 放行、非受信
    ingress 拒绝、批准 egress 放行和同一对照目标的非批准 egress 拒绝。报告保留
    原始 nmap XML 及其摘要、CNI DaemonSet 不可变镜像、Namespace/Pod UID、完整
-   NetworkPolicy spec 与 kubectl exit code。生产授权器会重新计算 spec 摘要并拒绝
-   任意 `0.0.0.0/0`/`::/0` egress，即使汇总字段仍自报 PASS。该文件必须先于第 6
+   NetworkPolicy spec 与 kubectl exit code。组合器和生产授权器都会重读内容寻址
+   策略和 trust store，验证原始报告签名、外部来源、cluster/CNI 身份；生产授权器
+   还会重新计算 spec 摘要并拒绝任意 `0.0.0.0/0`/`::/0` egress，即使汇总字段仍
+   自报 PASS。修改签名后的原始报告、wrapper 投影或使用未批准的观测点都不能通过。
+   最终 v3 文件必须先于第 6
    步的目标 HA disruption 生成，并由 HA v2 报告内容寻址绑定。配置文件、server
    dry-run、本地 kind 回执或旧 v1 报告都不是目标运行证据。
 9. 使用 `collect_ga_target_recovery.py` 从异地、加密、不可变备份介质对明确命名的

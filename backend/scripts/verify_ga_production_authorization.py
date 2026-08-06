@@ -41,6 +41,12 @@ try:
         ASSESSMENT_SIGNATURE_NAMESPACE as SECURITY_ASSESSMENT_SIGNATURE_NAMESPACE,
         validate_assessment_report,
     )
+    from scripts.ga_network_evidence import (
+        NETWORK_EVIDENCE_SCHEMA_VERSION,
+        NETWORK_POLICY_SCHEMA_VERSION,
+        NETWORK_SIGNATURE_NAMESPACE,
+        validate_network_probe_envelope,
+    )
     from scripts.ga_tls_evidence import (
         TLS_EVIDENCE_SCHEMA_VERSION,
         TLS_POLICY_SCHEMA_VERSION,
@@ -63,6 +69,12 @@ except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
         ASSESSMENT_EVIDENCE_SCHEMA_VERSION as SECURITY_EVIDENCE_SCHEMA_VERSION,
         ASSESSMENT_SIGNATURE_NAMESPACE as SECURITY_ASSESSMENT_SIGNATURE_NAMESPACE,
         validate_assessment_report,
+    )
+    from ga_network_evidence import (
+        NETWORK_EVIDENCE_SCHEMA_VERSION,
+        NETWORK_POLICY_SCHEMA_VERSION,
+        NETWORK_SIGNATURE_NAMESPACE,
+        validate_network_probe_envelope,
     )
     from ga_tls_evidence import (
         TLS_EVIDENCE_SCHEMA_VERSION,
@@ -872,6 +884,137 @@ def _tls_policy_context(
         f"trust={policy_trust_path or 'missing'}, trust_digest={trust_digest}, {signer_detail}"
     )
     return valid, policy, policy_trust_path, identities, detail
+
+
+def _network_policy_context(
+    reference: Any,
+    *,
+    authorization_path: Path,
+    probe: Any,
+    policy_tests: Any,
+) -> tuple[bool, Path | None, set[str], str]:
+    if not (
+        isinstance(reference, dict)
+        and isinstance(probe, dict)
+        and isinstance(policy_tests, dict)
+    ):
+        return False, None, set(), "missing network policy, probe, or cluster identity"
+    policy_path = _resolve_file(reference.get("path"), authorization_path)
+    trust_path_from_reference = _resolve_file(
+        reference.get("allowed_signers_path"), authorization_path
+    )
+    policy: dict[str, Any] = {}
+    if policy_path is not None and policy_path.is_file():
+        try:
+            loaded = json.loads(policy_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            loaded = None
+        if isinstance(loaded, dict):
+            policy = loaded
+    expected_policy_keys = {
+        "schema_version",
+        "policy_id",
+        "organization",
+        "allowed_signers_path",
+        "allowed_signers_sha256",
+        "probe_operator_identities",
+        "approved_probe_ids",
+        "approved_vantage_ids",
+        "approved_vantage_classes",
+        "approved_source_cidrs",
+        "approved_cluster_contexts",
+        "approved_namespaces",
+        "approved_cni_daemonsets",
+    }
+    expected_reference_keys = {
+        "path",
+        "sha256",
+        "policy_id",
+        "allowed_signers_path",
+        "allowed_signers_sha256",
+    }
+
+    def exact_values(value: Any) -> set[str]:
+        if not (
+            isinstance(value, list)
+            and value
+            and all(_meaningful_string(item) for item in value)
+            and len(value) == len(set(value))
+        ):
+            return set()
+        return {str(item) for item in value}
+
+    identities = exact_values(policy.get("probe_operator_identities"))
+    probe_ids = exact_values(policy.get("approved_probe_ids"))
+    vantage_ids = exact_values(policy.get("approved_vantage_ids"))
+    contexts = exact_values(policy.get("approved_cluster_contexts"))
+    namespaces = exact_values(policy.get("approved_namespaces"))
+    cni_daemonsets = exact_values(policy.get("approved_cni_daemonsets"))
+    raw_networks = policy.get("approved_source_cidrs")
+    networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    if isinstance(raw_networks, list) and raw_networks and len(raw_networks) == len(set(raw_networks)):
+        try:
+            networks = [ipaddress.ip_network(str(item), strict=True) for item in raw_networks]
+        except ValueError:
+            networks = []
+    networks_valid = bool(networks) and all(network.network_address.is_global for network in networks)
+    try:
+        source_address = ipaddress.ip_address(str(probe.get("source_ip", "")))
+    except ValueError:
+        source_address = None
+    cni = policy_tests.get("cni") if isinstance(policy_tests.get("cni"), dict) else {}
+    cni_identity = f"{cni.get('namespace')}/{cni.get('name')}"
+    policy_digest = (
+        _sha256(policy_path) if policy_path is not None and policy_path.is_file() else "missing"
+    )
+    policy_trust_path = (
+        _resolve_file(policy.get("allowed_signers_path"), policy_path)
+        if policy_path is not None
+        else None
+    )
+    trust_digest = (
+        _sha256(policy_trust_path)
+        if policy_trust_path is not None and policy_trust_path.is_file()
+        else "missing"
+    )
+    signer_bindings: dict[str, set[str]] | None = None
+    signer_detail = "missing trust store"
+    if policy_trust_path is not None and policy_trust_path.is_file():
+        signer_bindings, signer_detail = _allowed_signer_bindings(policy_trust_path)
+    valid = (
+        set(reference) == expected_reference_keys
+        and bool(DIGEST_RE.fullmatch(str(reference.get("sha256", ""))))
+        and policy_digest == reference.get("sha256")
+        and set(policy) == expected_policy_keys
+        and policy.get("schema_version") == NETWORK_POLICY_SCHEMA_VERSION
+        and _meaningful_string(policy.get("policy_id"))
+        and policy.get("policy_id") == reference.get("policy_id")
+        and _meaningful_string(policy.get("organization"))
+        and bool(identities)
+        and probe.get("probe_id") in probe_ids
+        and probe.get("vantage_id") in vantage_ids
+        and policy.get("approved_vantage_classes") == ["external-internet"]
+        and probe.get("vantage_class") == "external-internet"
+        and source_address is not None
+        and source_address.is_global
+        and networks_valid
+        and any(source_address in network for network in networks)
+        and policy_tests.get("cluster_context") in contexts
+        and policy_tests.get("namespace") in namespaces
+        and cni_identity in cni_daemonsets
+        and policy_trust_path is not None
+        and trust_path_from_reference == policy_trust_path
+        and bool(DIGEST_RE.fullmatch(str(reference.get("allowed_signers_sha256", ""))))
+        and trust_digest == reference.get("allowed_signers_sha256")
+        and trust_digest == policy.get("allowed_signers_sha256")
+        and signer_bindings is not None
+        and set(signer_bindings) == identities
+    )
+    detail = (
+        f"policy={policy_path or 'missing'}, digest={policy_digest}, "
+        f"trust={policy_trust_path or 'missing'}, trust_digest={trust_digest}, {signer_detail}"
+    )
+    return valid, policy_trust_path, identities, detail
 
 
 def _approval_statement(approval: dict[str, Any], release_digest: str) -> bytes:
@@ -3070,7 +3213,65 @@ def evaluate(
     )
 
     network = controls["network"]
-    network_report = _evidence_json(network, authorization_path)
+    network_evidence_report = _evidence_json(network, authorization_path)
+    network_probe = (
+        network_evidence_report.get("probe")
+        if isinstance(network_evidence_report, dict)
+        else None
+    )
+    network_evidence_policy_tests = (
+        network_evidence_report.get("policy_tests")
+        if isinstance(network_evidence_report, dict)
+        else None
+    )
+    (
+        network_policy_ok,
+        network_trust_store,
+        network_probe_identities,
+        network_policy_detail,
+    ) = _network_policy_context(
+        network_evidence_report.get("network_policy")
+        if isinstance(network_evidence_report, dict)
+        else None,
+        authorization_path=authorization_path,
+        probe=network_probe,
+        policy_tests=network_evidence_policy_tests,
+    )
+    network_signed_probe = (
+        network_evidence_report.get("signed_probe")
+        if isinstance(network_evidence_report, dict)
+        else None
+    )
+    network_signature_ok, network_report, network_signature_detail = (
+        _verified_embedded_receipt(
+            network_signed_probe,
+            authorization_path=authorization_path,
+            allowed_signers=network_trust_store if network_policy_ok else None,
+            allowed_identities=network_probe_identities,
+            namespace=NETWORK_SIGNATURE_NAMESPACE,
+        )
+    )
+    network_raw_binding = False
+    network_validation_detail = "signed network probe unavailable"
+    try:
+        if not isinstance(network_report, dict):
+            raise ValueError(network_validation_detail)
+        validate_network_probe_envelope(
+            network_report,
+            target_environment=str(target.get("target_id")),
+            source_commit=str(release.get("git_commit")),
+            backend_image=str(release.get("backend_image")),
+            frontend_image=str(release.get("frontend_image")),
+            exercise_id=str(network_evidence_report.get("exercise_id", ""))
+            if isinstance(network_evidence_report, dict)
+            else "",
+            now=current,
+        )
+    except (TypeError, ValueError) as exc:
+        network_validation_detail = str(exc)
+    else:
+        network_raw_binding = True
+        network_validation_detail = "signed external network probe envelope validated"
     external_scan = (
         network_report.get("external_scan")
         if isinstance(network_report, dict) and isinstance(network_report.get("external_scan"), dict)
@@ -3241,15 +3442,84 @@ def evaluate(
         and (approved_egress.get("destination_host"), approved_port)
         != (denied_egress.get("destination_host"), unapproved_port)
     )
-    network_report_matches = (
-        _report_release_target_binding(
-            network_report,
-            schema_version="duckdock-ga-network-evidence-v2",
+    network_evidence_observed_at = _parse_time(
+        network_evidence_report.get("observed_at")
+        if isinstance(network_evidence_report, dict)
+        else None
+    )
+    network_probe_observed_at = _parse_time(
+        network_evidence_report.get("probe_observed_at")
+        if isinstance(network_evidence_report, dict)
+        else None
+    )
+    network_projection_keys = (
+        "public_tcp_ports",
+        "database_public",
+        "redis_public",
+        "object_store_direct_public",
+        "default_deny_ingress",
+        "egress_allowlist_enforced",
+        "enforced_by",
+        "external_scan",
+        "policy_tests",
+    )
+    network_evidence_matches = (
+        isinstance(network_evidence_report, dict)
+        and isinstance(network_report, dict)
+        and set(network_evidence_report)
+        == {
+            "schema_version",
+            "scope",
+            "target_environment",
+            "source_commit",
+            "images",
+            "status",
+            "passed",
+            "observed_at",
+            "probe_observed_at",
+            "exercise_id",
+            "probe",
+            "public_tcp_ports",
+            "database_public",
+            "redis_public",
+            "object_store_direct_public",
+            "default_deny_ingress",
+            "egress_allowlist_enforced",
+            "enforced_by",
+            "external_scan",
+            "policy_tests",
+            "network_policy",
+            "signed_probe",
+        }
+        and _report_release_target_binding(
+            network_evidence_report,
+            schema_version=NETWORK_EVIDENCE_SCHEMA_VERSION,
             status="PASS",
             control=network,
             target=target,
             release=release,
         )
+        and network_evidence_report.get("passed") is True
+        and network_policy_ok
+        and network_signature_ok
+        and network_raw_binding
+        and network_evidence_report.get("exercise_id") == network_report.get("exercise_id")
+        and network_evidence_report.get("probe") == network_report.get("probe")
+        and network_evidence_report.get("probe_observed_at") == network_report.get("observed_at")
+        and network_probe_observed_at is not None
+        and network_evidence_observed_at is not None
+        and timedelta(0)
+        <= network_evidence_observed_at - network_probe_observed_at
+        <= timedelta(minutes=5)
+        and all(
+            network_evidence_report.get(key) == network_report.get(key)
+            for key in network_projection_keys
+        )
+        and not _contains_secret_material_key(network_evidence_report)
+    )
+    network_report_matches = (
+        network_raw_binding
+        and network_evidence_matches
         and network_claims_match
         and network_report.get("passed") is True
         and network_report.get("enforced_by") == cni_identity
@@ -3286,6 +3556,23 @@ def evaluate(
         and network.get("default_deny_ingress") is True
         and network.get("egress_allowlist_enforced") is True
         and network_report_matches
+    )
+    gate.add(
+        "network_probe_signature",
+        owner="Security",
+        passed=network_policy_ok and network_signature_ok and network_raw_binding,
+        observed=(
+            f"probe={network_probe}, validation={network_validation_detail}, "
+            f"signature={network_signature_detail}"
+        ),
+        expected=(
+            "release-authority-approved external probe, source CIDR, target cluster and signed "
+            "raw network observations"
+        ),
+        detail=(
+            "The v3 gate reopens the signed probe before recomputing raw nmap XML, CNI identity, "
+            f"NetworkPolicies and ingress/egress paths. {network_policy_detail}"
+        ),
     )
     gate.add(
         "network",

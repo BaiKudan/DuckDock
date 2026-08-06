@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Collect release-bound external-scan and Kubernetes CNI enforcement evidence."""
+"""Probe external exposure and Kubernetes CNI enforcement for a signed GA report."""
 
 from __future__ import annotations
 
@@ -18,12 +18,22 @@ from typing import Any, Sequence
 from urllib.parse import urlparse
 
 try:
+    from scripts.ga_network_evidence import (
+        EXERCISE_RE,
+        NETWORK_RAW_SCHEMA_VERSION,
+        contains_secret_material_key,
+    )
     from scripts.ga_release_identity import build_release_binding
 except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
+    from ga_network_evidence import (
+        EXERCISE_RE,
+        NETWORK_RAW_SCHEMA_VERSION,
+        contains_secret_material_key,
+    )
     from ga_release_identity import build_release_binding
 
 
-SCHEMA_VERSION = "duckdock-ga-network-evidence-v2"
+SCHEMA_VERSION = NETWORK_RAW_SCHEMA_VERSION
 IMAGE_RE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
 DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 REQUIRED_NETWORK_POLICIES = {
@@ -601,12 +611,19 @@ def collect(
         and unapproved_egress_denied
     )
     passed = public_scan_ok and private_scans_ok and policy_passed
-    return {
+    report = {
         "schema_version": SCHEMA_VERSION,
         **args.release_binding,
         "status": "PASS" if passed else "BLOCK",
         "passed": passed,
         "observed_at": datetime.now(timezone.utc).isoformat(),
+        "exercise_id": args.exercise_id,
+        "probe": {
+            "probe_id": args.scanner_id,
+            "vantage_id": args.vantage_id,
+            "vantage_class": "external-internet",
+            "source_ip": args.scanner_source_ip,
+        },
         "public_tcp_ports": public_scan.open_ports,
         "database_public": bool(data_scans["database"].open_ports),
         "redis_public": bool(data_scans["redis"].open_ports),
@@ -642,6 +659,9 @@ def collect(
             "passed": policy_passed,
         },
     }
+    if contains_secret_material_key(report):
+        raise ValueError("network probe contains a forbidden credential field")
+    return report
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -654,7 +674,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--backend-image", required=True)
     parser.add_argument("--frontend-image", required=True)
     parser.add_argument("--base-url", required=True)
+    parser.add_argument("--exercise-id", required=True)
     parser.add_argument("--scanner-id", required=True)
+    parser.add_argument("--vantage-id", required=True)
     parser.add_argument("--scanner-source-ip", required=True)
     parser.add_argument("--database-address", required=True)
     parser.add_argument("--database-port", type=int, default=3306)
@@ -682,12 +704,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     try:
         if args.acknowledge_external_vantage != args.target_environment:
             raise ValueError("--acknowledge-external-vantage must exactly equal target environment")
+        if not EXERCISE_RE.fullmatch(args.exercise_id):
+            raise ValueError("exercise ID must be 8-64 safe characters")
         if not all(
             _meaningful(value)
             for value in (
                 args.context,
                 args.namespace,
                 args.scanner_id,
+                args.vantage_id,
                 args.trusted_probe_namespace,
                 args.trusted_probe_pod,
                 args.monitoring_probe_namespace,
@@ -760,7 +785,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         report = collect(args)
     except (ValueError, RuntimeError, json.JSONDecodeError) as exc:
-        print(f"Target network collection failed: {exc}", file=sys.stderr)
+        print(f"Target network probe failed: {exc}", file=sys.stderr)
         return 3
     payload = json.dumps(report, indent=2, sort_keys=True) + "\n"
     args.output.parent.mkdir(parents=True, exist_ok=True)

@@ -71,6 +71,12 @@ from scripts.ga_tls_evidence import (
     TLS_SIGNATURE_NAMESPACE,
     canonical_digest as tls_canonical_digest,
 )
+from scripts.ga_network_evidence import (
+    NETWORK_EVIDENCE_SCHEMA_VERSION,
+    NETWORK_POLICY_SCHEMA_VERSION,
+    NETWORK_RAW_SCHEMA_VERSION,
+    NETWORK_SIGNATURE_NAMESPACE,
+)
 
 
 def _evidence(tmp_path: Path, name: str, observed_at: datetime) -> dict[str, str]:
@@ -1201,9 +1207,20 @@ def _document(tmp_path: Path, now: datetime) -> dict:
         )
 
     cni_image = f"quay.io/cilium/cilium@sha256:{'e' * 64}"
-    network_report = target_report("duckdock-ga-network-evidence-v2")
-    network_report.update(
+    network_exercise_id = "network-ga-20260806"
+    network_probe_identity = "network-probe@example.com"
+    network_probe_observed_at = observed_at - timedelta(seconds=10)
+    network_raw_report = target_report(NETWORK_RAW_SCHEMA_VERSION)
+    network_raw_report["observed_at"] = network_probe_observed_at.isoformat()
+    network_raw_report.update(
         {
+            "exercise_id": network_exercise_id,
+            "probe": {
+                "probe_id": "external-scanner-01",
+                "vantage_id": "internet-hangzhou-01",
+                "vantage_class": "external-internet",
+                "source_ip": "8.8.8.8",
+            },
             "public_tcp_ports": [443],
             "database_public": False,
             "redis_public": False,
@@ -1319,6 +1336,96 @@ def _document(tmp_path: Path, now: datetime) -> dict:
                 "approved_egress_allowed": True,
                 "private_data_services_unreachable_externally": True,
                 "passed": True,
+            },
+        }
+    )
+    network_key = tmp_path / "network_probe_key"
+    subprocess.run(
+        ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(network_key)],
+        check=True,
+    )
+    network_allowed_signers = tmp_path / "network_allowed_signers"
+    network_allowed_signers.write_text(
+        f"{network_probe_identity} "
+        f"{network_key.with_suffix('.pub').read_text(encoding='utf-8').strip()}\n",
+        encoding="utf-8",
+    )
+    network_policy = {
+        "schema_version": NETWORK_POLICY_SCHEMA_VERSION,
+        "policy_id": "duckdock-target-network-authority",
+        "organization": "DuckDock Test Security",
+        "allowed_signers_path": str(network_allowed_signers),
+        "allowed_signers_sha256": hashlib.sha256(
+            network_allowed_signers.read_bytes()
+        ).hexdigest(),
+        "probe_operator_identities": [network_probe_identity],
+        "approved_probe_ids": ["external-scanner-01"],
+        "approved_vantage_ids": ["internet-hangzhou-01"],
+        "approved_vantage_classes": ["external-internet"],
+        "approved_source_cidrs": ["8.8.8.0/24"],
+        "approved_cluster_contexts": ["customer-production-admin"],
+        "approved_namespaces": ["duckdock"],
+        "approved_cni_daemonsets": ["kube-system/cilium"],
+    }
+    network_policy_path = tmp_path / "network-policy.json"
+    network_policy_path.write_text(
+        json.dumps(network_policy, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    network_raw_path = tmp_path / "network-raw.json"
+    network_raw_path.write_text(
+        json.dumps(network_raw_report, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            "ssh-keygen",
+            "-q",
+            "-Y",
+            "sign",
+            "-f",
+            str(network_key),
+            "-n",
+            NETWORK_SIGNATURE_NAMESPACE,
+            str(network_raw_path),
+        ],
+        check=True,
+    )
+    network_report = target_report(NETWORK_EVIDENCE_SCHEMA_VERSION)
+    network_report.update(
+        {
+            "probe_observed_at": network_raw_report["observed_at"],
+            "exercise_id": network_exercise_id,
+            "probe": network_raw_report["probe"],
+            **{
+                key: network_raw_report[key]
+                for key in (
+                    "public_tcp_ports",
+                    "database_public",
+                    "redis_public",
+                    "object_store_direct_public",
+                    "default_deny_ingress",
+                    "egress_allowlist_enforced",
+                    "enforced_by",
+                    "external_scan",
+                    "policy_tests",
+                )
+            },
+            "network_policy": {
+                "path": str(network_policy_path),
+                "sha256": hashlib.sha256(network_policy_path.read_bytes()).hexdigest(),
+                "policy_id": network_policy["policy_id"],
+                "allowed_signers_path": str(network_allowed_signers),
+                "allowed_signers_sha256": network_policy["allowed_signers_sha256"],
+            },
+            "signed_probe": {
+                **network_raw_report,
+                "signed_evidence": {
+                    "path": str(network_raw_path),
+                    "sha256": hashlib.sha256(network_raw_path.read_bytes()).hexdigest(),
+                    "signature_path": f"{network_raw_path}.sig",
+                    "signer_identity": network_probe_identity,
+                },
             },
         }
     )
@@ -2228,6 +2335,61 @@ def _resign_tls_probe(
     evidence["sha256"] = hashlib.sha256(report_path.read_bytes()).hexdigest()
 
 
+def _resign_network_probe(
+    document: dict,
+    tmp_path: Path,
+    mutate: Callable[[dict], None],
+) -> None:
+    evidence = document["controls"]["network"]["evidence"]
+    report_path = Path(evidence["path"])
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    embedded = report["signed_probe"]
+    signed = embedded["signed_evidence"]
+    raw_path = Path(signed["path"])
+    signature_path = Path(signed["signature_path"])
+    raw = json.loads(raw_path.read_text(encoding="utf-8"))
+    mutate(raw)
+    raw_path.write_text(json.dumps(raw, sort_keys=True) + "\n", encoding="utf-8")
+    signature_path.unlink()
+    subprocess.run(
+        [
+            "ssh-keygen",
+            "-q",
+            "-Y",
+            "sign",
+            "-f",
+            str(tmp_path / "network_probe_key"),
+            "-n",
+            NETWORK_SIGNATURE_NAMESPACE,
+            str(raw_path),
+        ],
+        check=True,
+    )
+    report["signed_probe"] = {
+        **raw,
+        "signed_evidence": {
+            **signed,
+            "sha256": hashlib.sha256(raw_path.read_bytes()).hexdigest(),
+        },
+    }
+    report["probe_observed_at"] = raw["observed_at"]
+    for field in (
+        "probe",
+        "public_tcp_ports",
+        "database_public",
+        "redis_public",
+        "object_store_direct_public",
+        "default_deny_ingress",
+        "egress_allowlist_enforced",
+        "enforced_by",
+        "external_scan",
+        "policy_tests",
+    ):
+        report[field] = raw[field]
+    report_path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+    evidence["sha256"] = hashlib.sha256(report_path.read_bytes()).hexdigest()
+
+
 def test_complete_target_bundle_is_cryptographically_authorized(tmp_path: Path) -> None:
     now = datetime.now(timezone.utc)
     document = _document(tmp_path, now)
@@ -2755,6 +2917,91 @@ def test_network_gate_revalidates_raw_evidence_instead_of_trusting_summaries(
 
     assert result["status"] == "BLOCKED"
     network_check = next(item for item in result["checks"] if item["key"] == "network")
+    assert network_check["status"] == "BLOCK"
+
+
+def test_network_probe_modified_after_signature_cannot_authorize_ga(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    evidence = document["controls"]["network"]["evidence"]
+    report_path = Path(evidence["path"])
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    signed = report["signed_probe"]["signed_evidence"]
+    raw_path = Path(signed["path"])
+    raw = json.loads(raw_path.read_text(encoding="utf-8"))
+    raw["policy_tests"]["required_policies_present"] = False
+    raw_path.write_text(json.dumps(raw, sort_keys=True) + "\n", encoding="utf-8")
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    signature = next(
+        item for item in result["checks"] if item["key"] == "network_probe_signature"
+    )
+    assert result["status"] == "BLOCKED"
+    assert signature["status"] == "BLOCK"
+
+
+def test_legitimately_signed_unapproved_network_vantage_cannot_authorize_ga(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+
+    def mutate(raw: dict) -> None:
+        raw["probe"]["source_ip"] = "1.1.1.1"
+        raw["external_scan"]["scanner_source_ip"] = "1.1.1.1"
+
+    _resign_network_probe(document, tmp_path, mutate)
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    signature = next(
+        item for item in result["checks"] if item["key"] == "network_probe_signature"
+    )
+    assert result["status"] == "BLOCKED"
+    assert signature["status"] == "BLOCK"
+
+
+def test_legitimately_signed_forged_network_summary_is_recomputed(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+
+    def mutate(raw: dict) -> None:
+        scan = raw["external_scan"]["public_ingress"]
+        scan["raw_nmap_xml"] = scan["raw_nmap_xml"].replace(
+            "</ports>",
+            "<port protocol='tcp' portid='8443'><state state='open'/></port></ports>",
+        )
+        scan["xml_sha256"] = hashlib.sha256(scan["raw_nmap_xml"].encode()).hexdigest()
+
+    _resign_network_probe(document, tmp_path, mutate)
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    network_check = next(item for item in result["checks"] if item["key"] == "network")
+    signature = next(
+        item for item in result["checks"] if item["key"] == "network_probe_signature"
+    )
+    assert result["status"] == "BLOCKED"
+    assert signature["status"] == "PASS"
     assert network_check["status"] == "BLOCK"
 
 

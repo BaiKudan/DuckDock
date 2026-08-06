@@ -48,9 +48,12 @@ python backend/scripts/verify_ga_production_authorization.py \
 - `secret-rotation-receipt.example.json`、`secret-verification-receipt.example.json`：
   provider 证明版本轮换/停用/审计，独立 verifier 证明旧版本拒绝和新版本可用；
   只能记录 opaque version/receipt/audit ID，绝不能记录凭证值；
-- `network-evidence.example.json`：`collect_ga_target_network.py` 输出的 v2 结构示例；
-  执行器从已确认的集群外视角做 nmap 全端口/数据端口扫描，并保留 CNI、探针身份、
-  完整 NetworkPolicy 与 ingress/egress 正反向连接原始结果；禁止手填；
+- `network-trust-policy.example.json`：发布机构批准的外部 network probe signer/key、
+  probe/vantage、全球可路由来源 CIDR，以及精确 kube context/Namespace/CNI；
+- `network-evidence.example.json`：`collect_ga_target_network.py` 输出并由外部执行人签名
+  的原始 v3 结构示例；`collect_ga_target_network_evidence.py` 验签并组合最终 network
+  evidence v3。原始报告保留 nmap、CNI、NetworkPolicy 与 ingress/egress 正反例，
+  禁止手填 wrapper；
 - `capacity-trust-policy.example.json`：托管 MySQL provider、必查计数器、数据增长/
   pending outbox/replica lag 阈值，以及负载、存储、清理三种互斥精确身份的信任策略；
 - `capacity-growth-receipt.example.json`、`capacity-cleanup-receipt.example.json`：
@@ -80,9 +83,10 @@ python backend/scripts/verify_ga_production_authorization.py \
 - `state-services-ha-evidence.example.json`：托管 MySQL、Redis、对象存储与 RWX
   的真实故障切换回执；必须由审批策略中的 Operations 身份签名。
 
-所有这些目标报告以及 readiness v1、TLS evidence v3、容量 v3 报告都必须绑定相同 target
-ID、source commit、backend/frontend 镜像摘要；报告内部 `observed_at` 必须与授权
-文件的证据时间相同。模板中的 PASS 值只
+所有最终目标报告以及 readiness v1、TLS/network evidence v3、容量 v3 报告都必须绑定
+相同 target ID、source commit、backend/frontend 镜像摘要；最终 wrapper 的
+`observed_at` 必须与授权文件的证据时间相同，内嵌签名 probe 的时间必须早于 wrapper
+且不超过协议允许的五分钟。模板中的 PASS 值只
 描述合格结构，不是可提交的证据，所有 `__CHANGE_ME` 和示例快照都必须替换为
 实际回执。完整流程见
 [`docs/ga-production-authorization.zh-CN.md`](../../docs/ga-production-authorization.zh-CN.md)。

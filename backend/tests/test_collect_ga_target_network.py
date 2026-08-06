@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 import scripts.collect_ga_target_network as target_network
+from scripts.ga_network_evidence import validate_network_probe_envelope
 from scripts.ga_release_identity import build_release_binding
 
 
@@ -213,7 +214,9 @@ def _args(tmp_path: Path) -> SimpleNamespace:
         frontend_image=FRONTEND_IMAGE,
         base_url="https://duckdock.example.com",
         public_host="duckdock.example.com",
+        exercise_id="network-ga-20260806",
         scanner_id="external-scanner-hz-01",
+        vantage_id="internet-hangzhou-01",
         scanner_source_ip="8.8.8.8",
         database_address="10.0.1.10",
         database_port=3306,
@@ -285,6 +288,14 @@ def test_target_network_collector_proves_external_and_cni_paths(tmp_path: Path) 
     assert report["policy_tests"]["unapproved_egress_denied"] is True
     assert report["policy_tests"]["broad_world_egress_absent"] is True
     assert report["policy_tests"]["probe_identities"]["untrusted"]["namespace_labels"] == {}
+    validate_network_probe_envelope(
+        report,
+        target_environment="customer-production",
+        source_commit=COMMIT,
+        backend_image=BACKEND_IMAGE,
+        frontend_image=FRONTEND_IMAGE,
+        exercise_id="network-ga-20260806",
+    )
 
 
 def test_broad_world_egress_policy_blocks_network_evidence(tmp_path: Path) -> None:
@@ -365,8 +376,12 @@ def test_parse_args_requires_exact_external_vantage_acknowledgement(tmp_path: Pa
                 FRONTEND_IMAGE,
                 "--base-url",
                 "https://duckdock.example.com",
+                "--exercise-id",
+                "network-ga-20260806",
                 "--scanner-id",
                 "scanner",
+                "--vantage-id",
+                "internet-hangzhou-01",
                 "--scanner-source-ip",
                 "8.8.8.8",
                 "--database-address",

@@ -179,6 +179,8 @@ def test_production_image_context_excludes_test_and_local_validation_artifacts()
         "scripts/collect_ga_target_ha.py",
         "scripts/collect_ga_target_alerting.py",
         "scripts/collect_ga_target_network.py",
+        "scripts/collect_ga_target_network_evidence.py",
+        "scripts/ga_network_evidence.py",
         "scripts/collect_ga_target_secrets.py",
         "scripts/collect_ga_target_recovery.py",
         "scripts/collect_ga_independent_security.py",
