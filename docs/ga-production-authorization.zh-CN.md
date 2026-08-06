@@ -928,3 +928,40 @@ python backend/scripts/verify_ga_authorized_archive.py \
 `failed_approval_checks` 和 `next_action`。发布活动只能按 `next_action` 前进，不能因
 总状态文字相近而把外部证据阻断误判成“只等签字”。任何证据在预签字后发生变化，
 都会改变 `release_digest`；必须重新跑 `--require-evidence-ready` 并废弃旧签名。
+
+## 正式发布：只发布通过授权归档复验的 draft
+
+`v2.0.0` tag 工作流负责重新运行 backend、frontend、E2E、Compose/生产基线和镜像漏洞
+门禁，并生成不可变镜像及 provenance；它本身不会创建公开 GitHub Release。完成真实
+目标 campaign、四方签字、`GA_AUTHORIZED` 归档和独立摘要发布后，发布机构才能执行
+`.github/workflows/publish-ga.yml`。仓库管理员必须先为
+`ga-production-publication` GitHub Environment 配置发布机构 required reviewers；仅创建同名
+Environment 而不配置保护规则不算完成组织审批。
+
+发布机构先为已经签名的 `v2.0.0` tag 建立 draft Release，初始只附加以下两份资产：
+
+- `duckdock-2.0.0-ga-bundle.tar.gz`；
+- `duckdock-2.0.0-ga-bundle.manifest.json`。
+
+随后从独立不可变渠道读取 archive SHA-256，在 Actions 中手动运行
+`Publish authorized DuckDock GA`，填写 draft release 数字 ID、两个资产名和该裸摘要。
+工作流只在 `BaiKudan/DuckDock` 运行，并在受保护 Environment 批准后完成以下闭环：
+
+1. checkout 并通过 GitHub tag verification API 重验 annotated signed `v2.0.0` 与 commit；
+2. 要求指定 release 仍是该 tag 的 draft，且初始资产集合精确；
+3. 下载到 runner 隔离目录，以独立摘要调用 `authorize_ga_publication.py`；该工具重新运行
+   portable archive 的成员/引用/签名/closure/full-evaluator 验证，默认且不可配置地拒绝
+   legacy unbound v1；
+4. 要求归档内版本为 `2.0.0`、目标为命名的 production `kubernetes-ha`、commit/镜像与
+   授权完全一致，并要求 canonical `GA_AUTHORIZED` 到 publication 不超过固定的 24 小时；
+   CLI 不提供放宽参数，超时必须重新执行完整 GA 门禁；
+5. 从已验证的 release provenance 取出最终 tag CI run ID，再通过 GitHub API 确认该
+   `.github/workflows/ci.yml` push run 对同一 commit 的结论为 `success`；
+6. 先把不可覆盖的 `duckdock-ga-publication-authorization-v1` 回执及其 SHA-256 sidecar
+   附到 draft，回读逐字节比较后才把同一个 draft 切换为公开 Release。失败后若 draft
+   已有两份精确回执，重跑会先验证它们并继续，不覆盖既有资产。
+
+回执状态 `GA_PUBLICATION_AUTHORIZED` 表示“允许工作流发布这个精确 draft”，同时固定
+`does_not_prove_external_publication=true`；只有工作流最后从 GitHub API 看到
+`draft=false` 才证明外部发布动作完成。当前仓库没有真实授权 archive，也没有替发布机构
+创建或公开 `v2.0.0` Release。

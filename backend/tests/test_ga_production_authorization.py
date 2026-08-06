@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 import scripts.archive_ga_authorized_bundle as authorized_bundle_archiver
+import scripts.authorize_ga_publication as ga_publication_authorizer
 import scripts.close_ga_execution_campaign as execution_campaign_closer
 import scripts.collect_ga_release_provenance as release_provenance_collector
 import scripts.prepare_ga_execution_campaign as execution_campaign_preparer
@@ -4429,6 +4430,56 @@ def test_execution_campaign_closure_reverifies_all_64_external_artifacts(
     )
     assert verified_archive.returncode == 0, verified_archive.stdout.decode()
 
+    publication_receipt = tmp_path / "formal-publication-authorization.json"
+    publication_digest = tmp_path / "formal-publication-authorization.sha256"
+    publication = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).parents[1] / "scripts" / "authorize_ga_publication.py"),
+            "--archive",
+            str(archive_outputs[0]),
+            "--manifest",
+            str(archive_outputs[1]),
+            "--digest",
+            str(archive_outputs[2]),
+            "--expected-git-commit",
+            request["release"]["git_commit"],
+            "--source-repository",
+            "https://github.com/BaiKudan/DuckDock",
+            "--workflow-repository",
+            "BaiKudan/DuckDock",
+            "--workflow-run-id",
+            "1234567890",
+            "--workflow-run-url",
+            "https://github.com/BaiKudan/DuckDock/actions/runs/1234567890",
+            "--actor",
+            "release-authority",
+            "--draft-release-id",
+            "987654321",
+            "--draft-release-url",
+            "https://github.com/BaiKudan/DuckDock/releases/tag/v2.0.0",
+            "--output",
+            str(publication_receipt),
+            "--digest-output",
+            str(publication_digest),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    assert publication.returncode == 0, publication.stdout.decode()
+    publication_result = json.loads(publication_receipt.read_text(encoding="utf-8"))
+    assert publication_result["status"] == "GA_PUBLICATION_AUTHORIZED"
+    assert publication_result["does_not_prove_external_publication"] is True
+    assert publication_result["release"]["git_commit"] == request["release"]["git_commit"]
+    assert publication_result["authorized_archive"]["archive_sha256"] == json.loads(
+        verified_archive.stdout
+    )["archive_sha256"]
+    assert publication_digest.read_text(encoding="utf-8") == (
+        f"{hashlib.sha256(publication_receipt.read_bytes()).hexdigest()}  "
+        f"{publication_receipt.name}\n"
+    )
+
     original_closure = persisted_closure_path.read_bytes()
     assert (
         execution_campaign_closer.main(
@@ -4442,6 +4493,81 @@ def test_execution_campaign_closure_reverifies_all_64_external_artifacts(
         == 3
     )
     assert persisted_closure_path.read_bytes() == original_closure
+
+
+def test_ga_publication_gate_rejects_stale_or_mismatched_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    archive = tmp_path / "ga.tar.gz"
+    manifest = tmp_path / "ga.manifest.json"
+    archive.write_bytes(b"verified archive")
+    manifest.write_bytes(b"verified manifest")
+    archive_digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    manifest_digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    checked_at = datetime.now(timezone.utc) - timedelta(hours=25)
+
+    def verified(_args: argparse.Namespace) -> tuple[dict, dict]:
+        return (
+            {
+                "status": "GA_AUTHORIZED_ARCHIVE_VERIFIED",
+                "archive_sha256": archive_digest,
+                "manifest_sha256": manifest_digest,
+                "release_digest": "d" * 64,
+                "checked_at": checked_at.isoformat(),
+                "file_count": 100,
+                "reference_count": 200,
+            },
+            {
+                "release": {
+                    "version": "2.0.0",
+                    "git_commit": "a" * 40,
+                    "backend_image": f"ghcr.io/baikudan/duckdock-backend@sha256:{'b' * 64}",
+                    "frontend_image": f"ghcr.io/baikudan/duckdock-frontend@sha256:{'c' * 64}",
+                    "contract_digest": "e" * 64,
+                },
+                "target": {
+                    "target_id": "duckdock-production",
+                    "environment": "production",
+                    "deployment_mode": "kubernetes-ha",
+                    "public_base_url": "https://duckdock.example.com",
+                },
+                "release_build": {
+                    "source_repository": "https://github.com/BaiKudan/DuckDock",
+                    "workflow_ref": "BaiKudan/DuckDock/.github/workflows/ci.yml@refs/tags/v2.0.0",
+                    "workflow_run_id": "999",
+                    "workflow_run_url": "https://github.com/BaiKudan/DuckDock/actions/runs/999",
+                },
+            },
+        )
+
+    monkeypatch.setattr(ga_publication_authorizer, "verify_with_context", verified)
+    args = argparse.Namespace(
+        archive=archive,
+        manifest=manifest,
+        digest=None,
+        expected_sha256=archive_digest,
+        expected_git_commit="a" * 40,
+        source_repository="https://github.com/BaiKudan/DuckDock",
+        workflow_repository="BaiKudan/DuckDock",
+        workflow_run_id="123",
+        workflow_run_url="https://github.com/BaiKudan/DuckDock/actions/runs/123",
+        actor="release-authority",
+        draft_release_id="456",
+        draft_release_url="https://github.com/BaiKudan/DuckDock/releases/tag/v2.0.0",
+        maximum_authorization_age_hours=24,
+        max_archive_bytes=1024,
+        max_manifest_bytes=1024,
+        max_total_bytes=1024,
+    )
+
+    with pytest.raises(ValueError, match="too old"):
+        ga_publication_authorizer.authorize(args)
+
+    checked_at = datetime.now(timezone.utc)
+    args.expected_git_commit = "f" * 40
+    with pytest.raises(ValueError, match="release coordinates"):
+        ga_publication_authorizer.authorize(args)
 
 
 def _preapproval_assembly_command(

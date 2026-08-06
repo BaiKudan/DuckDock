@@ -206,6 +206,7 @@ def test_production_image_context_excludes_test_and_local_validation_artifacts()
         "scripts/finalize_ga_authorization.py",
         "scripts/archive_ga_authorized_bundle.py",
         "scripts/verify_ga_authorized_archive.py",
+        "scripts/authorize_ga_publication.py",
         "scripts/ga_path_resolution.py",
         "scripts/probe_ga_target_tls.py",
         "scripts/verify_ga_production_authorization.py",
@@ -269,6 +270,7 @@ def test_ga_approval_tools_reverify_before_signing_and_before_final_output():
     finalizer = _read("backend/scripts/finalize_ga_authorization.py")
     archiver = _read("backend/scripts/archive_ga_authorized_bundle.py")
     archive_verifier = _read("backend/scripts/verify_ga_authorized_archive.py")
+    publication_authorizer = _read("backend/scripts/authorize_ga_publication.py")
     path_resolution = _read("backend/scripts/ga_path_resolution.py")
     wrapper = _read("scripts/sign-ga-approval.sh")
 
@@ -317,6 +319,11 @@ def test_ga_approval_tools_reverify_before_signing_and_before_final_output():
     assert "manifest reference index does not exactly match" in archive_verifier
     assert "archived authorization did not independently re-evaluate" in archive_verifier
     assert "ga_file_resolution_overrides(overrides, strict=True)" in archive_verifier
+    assert "verify_with_context" in publication_authorizer
+    assert "allow_legacy_unbound=False" in publication_authorizer
+    assert "GA_PUBLICATION_AUTHORIZED" in publication_authorizer
+    assert "rerun the complete gate" in publication_authorizer
+    assert "--maximum-authorization-age-hours" not in publication_authorizer
     assert "return (True, None) if strict" in path_resolution
     workflow = _read(".github/workflows/ci.yml")
     assert "python3 backend/scripts/verify_ga_trust_topology.py --help" in workflow
@@ -328,6 +335,37 @@ def test_ga_approval_tools_reverify_before_signing_and_before_final_output():
     assert "python3 backend/scripts/finalize_ga_authorization.py --help" in workflow
     assert "python3 backend/scripts/archive_ga_authorized_bundle.py --help" in workflow
     assert "python3 backend/scripts/verify_ga_authorized_archive.py --help" in workflow
+    assert "python3 backend/scripts/authorize_ga_publication.py --help" in workflow
+
+
+def test_ga_publication_workflow_is_protected_and_consumes_verified_archive():
+    workflow = _read(".github/workflows/publish-ga.yml")
+
+    assert "if: github.repository == 'BaiKudan/DuckDock'" in workflow
+    assert "environment: ga-production-publication" in workflow
+    assert "contents: write" in workflow
+    assert "cancel-in-progress: false" in workflow
+    assert "expected_archive_sha256" in workflow
+    assert "Checkout the immutable final tag" in workflow
+    assert "ref: v2.0.0" in workflow
+    assert 'test "$(git cat-file -t "$tag_object")" = tag' in workflow
+    assert ".verification.verified == true" in workflow
+    assert '.draft == true and .tag_name == "v2.0.0"' in workflow
+    assert "backend/scripts/authorize_ga_publication.py" in workflow
+    assert "--expected-sha256" in workflow
+    assert "--expected-git-commit" in workflow
+    assert "--allow-legacy-unbound" not in workflow
+    assert "Reconfirm the archived final-tag CI run succeeded" in workflow
+    assert '.conclusion == "success"' in workflow
+    assert '.path == ".github/workflows/ci.yml"' in workflow
+    assert "gh release upload v2.0.0" in workflow
+    assert "gh release edit v2.0.0 --draft=false" in workflow
+    assert workflow.index("authorize_ga_publication.py") < workflow.index(
+        "gh release upload v2.0.0"
+    )
+    assert workflow.index("gh release upload v2.0.0") < workflow.index(
+        "gh release edit v2.0.0 --draft=false"
+    )
 
 
 def test_production_frontend_runtime_image_contains_only_built_assets():

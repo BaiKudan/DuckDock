@@ -408,7 +408,16 @@ def _assert_authorized(result: dict[str, Any], manifest: dict[str, Any]) -> None
         )
 
 
-def verify(args: argparse.Namespace) -> dict[str, Any]:
+def verify_with_context(
+    args: argparse.Namespace,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Verify an archive and return non-public context from the verified payload.
+
+    The CLI intentionally keeps its v1 output stable.  Publication tooling needs
+    a few release and target coordinates, so it consumes them from the same
+    materialized authorization that passed the isolated evaluator instead of
+    reopening an unverified archive member.
+    """
     archive_payload = _read_bounded(
         args.archive,
         maximum=args.max_archive_bytes,
@@ -470,7 +479,49 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
                 )
         _assert_authorized(result, manifest)
 
-    return {
+        release = authorization.get("release")
+        target = authorization.get("target")
+        if not isinstance(release, dict) or not isinstance(target, dict):
+            raise ValueError("archived authorization has no release or target context")
+        provenance_reference = release.get("provenance")
+        provenance_raw_path = (
+            provenance_reference.get("path")
+            if isinstance(provenance_reference, dict)
+            else None
+        )
+        provenance_path = overrides.get(provenance_raw_path)
+        if provenance_path is None:
+            raise ValueError("archived authorization has no verified release provenance member")
+        try:
+            provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"archived release provenance is not valid JSON: {exc}") from exc
+        builder = provenance.get("builder") if isinstance(provenance, dict) else None
+        if not isinstance(builder, dict):
+            raise ValueError("archived release provenance has no verified builder context")
+        verified_context = {
+            "release": {
+                "version": release.get("version"),
+                "git_commit": release.get("git_commit"),
+                "backend_image": release.get("backend_image"),
+                "frontend_image": release.get("frontend_image"),
+                "contract_digest": release.get("contract_digest"),
+            },
+            "target": {
+                "target_id": target.get("target_id"),
+                "environment": target.get("environment"),
+                "deployment_mode": target.get("deployment_mode"),
+                "public_base_url": target.get("public_base_url"),
+            },
+            "release_build": {
+                "source_repository": provenance.get("source_repository"),
+                "workflow_ref": builder.get("workflow_ref"),
+                "workflow_run_id": builder.get("workflow_run_id"),
+                "workflow_run_url": builder.get("workflow_run_url"),
+            },
+        }
+
+    verification = {
         "schema_version": VERIFICATION_SCHEMA_VERSION,
         "status": "GA_AUTHORIZED_ARCHIVE_VERIFIED",
         "archive_sha256": archive_digest,
@@ -480,6 +531,12 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
         "file_count": manifest["file_count"],
         "reference_count": len(references),
     }
+    return verification, verified_context
+
+
+def verify(args: argparse.Namespace) -> dict[str, Any]:
+    verification, _ = verify_with_context(args)
+    return verification
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:

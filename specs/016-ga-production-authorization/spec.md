@@ -1,7 +1,7 @@
 # DuckDock 2.0 Production GA Authorization
 
 **Status**: Technical implementation complete; target authorization pending
-**Date**: 2026-08-06
+**Date**: 2026-08-07
 **Depends on**: `015-ga-candidate`
 
 ## Goal
@@ -27,6 +27,7 @@ deployment authorization.
 | PGA-10 | Before any costly or destructive target exercise, the release authority content-addresses all nine GA trust policies and their OpenSSH trust stores, then proves global organizational separation: every approval, assessment, build, probe, provider, operator, observer, on-call and verifier identity belongs to exactly one duty, and every public key is accepted for exactly one duty across the entire policy set. The standalone preflight emits an immutable receipt, while the final production evaluator independently recomputes the same invariant from retained evidence and treats reuse as a `FOUNDATION` failure. | `duckdock-ga-trust-topology-manifest-v1`, `duckdock-ga-trust-topology-verification-v1`, and the `organizational_trust_separation` foundation check. |
 | PGA-11 | Before external execution, one immutable campaign binds the final release, production target, fresh evidence root, bounded execution window and independently reverified nine-policy topology. Its validated dependency graph assigns every raw report, signature, wrapper and final evidence path exactly once; enforces a distinct recovery/staging target for destructive restore; and leaves every phase `PENDING_EXTERNAL_EVIDENCE`. The campaign automatically emits the later preapproval-assembly request but explicitly cannot authorize target mutation or claim evidence PASS. | `duckdock-ga-execution-campaign-request-v2`, `duckdock-ga-execution-campaign-v2`, generated `duckdock-ga-preapproval-assembly-request-v1`. |
 | PGA-12 | External execution can close only inside its campaign window and only when all 64 externally produced artifacts exist at their 64 unique planned paths. An exact explicit-reference closure admits only those paths plus the independently content-addressed campaign/request/topology/policy/trust inputs, including backup allowed-signers; missing files, symlinks, digest conflicts or any unplanned substitution fail closed. The same transaction invokes the authoritative preapproval assembler, persists the empty-approval authorization and assembly receipt, and emits an immutable non-authorizing closure receipt; partial outputs are removed on failure and reruns cannot overwrite them. | `duckdock-ga-execution-campaign-closure-v1`, persisted `duckdock-ga-preapproval-assembly-v1`, and approval-empty authorization at `APPROVAL_COLLECTION`. |
+| PGA-13 | Public GA publication is a separate protected transition after authorization archival. It accepts only the signed `v2.0.0` tag, an exact draft Release, an independently supplied archive digest and a closure-bound v2 archive that re-evaluates as `GA_AUTHORIZED`. The gate binds release/target/commit/images, rejects publication more than 24 hours after canonical authorization, reconfirms the archived final-tag CI run succeeded for the same commit, emits an immutable content-addressed publication receipt before making the draft public, and supports a fail-safe retry without overwriting an existing receipt. Repository execution cannot substitute for the required GitHub Environment reviewers or claim that an unexecuted workflow published the release. | `.github/workflows/publish-ga.yml`, `duckdock-ga-publication-authorization-v1`, publication receipt SHA-256 and the post-transition GitHub Release API result. |
 
 ## Truthful current boundary
 
@@ -73,6 +74,11 @@ the formal v2 freeze independently re-verifies and content-addresses it before f
 role-separated signatures, finalization and portable archive verification can proceed.
 Legacy unbound v1 freezes remain readable only through explicit historical-compatibility
 flags and are rejected by every formal release exit by default.
+PGA-13 closes the repository-side publication boundary: the protected workflow consumes the
+independently published archive digest, reruns portable authorization verification, binds an immutable
+publication receipt to the exact release and target, reconfirms the archived final-tag CI run, and only
+then publishes the pre-existing draft. The required GitHub Environment reviewers, real draft assets,
+independent digest channel and actual workflow execution remain release-authority responsibilities.
 The final authorization evaluator now exposes one authoritative campaign state machine:
 `FOUNDATION`, `EVIDENCE_COLLECTION`, `APPROVAL_COLLECTION`, then `AUTHORIZED`. Its
 `--require-evidence-ready` mode succeeds only when every non-approval check passes, so an invalid

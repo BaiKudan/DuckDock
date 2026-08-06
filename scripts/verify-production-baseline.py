@@ -181,6 +181,8 @@ def verify(env_file: Path) -> dict[str, Any]:
     authorization_verifier = REPO_ROOT / "backend/scripts/verify_ga_production_authorization.py"
     authorized_archiver = REPO_ROOT / "backend/scripts/archive_ga_authorized_bundle.py"
     authorized_archive_verifier = REPO_ROOT / "backend/scripts/verify_ga_authorized_archive.py"
+    publication_authorizer = REPO_ROOT / "backend/scripts/authorize_ga_publication.py"
+    publication_workflow = REPO_ROOT / ".github/workflows/publish-ga.yml"
     ga_path_resolution = REPO_ROOT / "backend/scripts/ga_path_resolution.py"
     assembler_text = (
         preapproval_assembler.read_text(encoding="utf-8")
@@ -224,6 +226,16 @@ def verify(env_file: Path) -> dict[str, Any]:
     archive_verifier_text = (
         authorized_archive_verifier.read_text(encoding="utf-8")
         if authorized_archive_verifier.is_file()
+        else ""
+    )
+    publication_authorizer_text = (
+        publication_authorizer.read_text(encoding="utf-8")
+        if publication_authorizer.is_file()
+        else ""
+    )
+    publication_workflow_text = (
+        publication_workflow.read_text(encoding="utf-8")
+        if publication_workflow.is_file()
         else ""
     )
     path_resolution_text = (
@@ -320,6 +332,23 @@ def verify(env_file: Path) -> dict[str, Any]:
         and "return (True, None) if strict" in path_resolution_text,
         "independent digest/member/reference verification plus strict offline GA re-evaluation",
         "transported archive verifies without reading original host evidence paths",
+    )
+    add(
+        "ga_protected_publication",
+        "GA_PUBLICATION_AUTHORIZED" in publication_authorizer_text
+        and "allow_legacy_unbound=False" in publication_authorizer_text
+        and "rerun the complete gate" in publication_authorizer_text
+        and "environment: ga-production-publication" in publication_workflow_text
+        and "if: github.repository == 'BaiKudan/DuckDock'" in publication_workflow_text
+        and "Reconfirm the archived final-tag CI run succeeded"
+        in publication_workflow_text
+        and "gh release upload v2.0.0" in publication_workflow_text
+        and "gh release edit v2.0.0 --draft=false" in publication_workflow_text
+        and publication_workflow_text.index("authorize_ga_publication.py")
+        < publication_workflow_text.index("gh release upload v2.0.0")
+        < publication_workflow_text.index("gh release edit v2.0.0 --draft=false"),
+        "protected draft plus independent archive digest/full re-evaluation/CI-run confirmation/immutable receipt",
+        "only a recently authorized closure-bound archive can publish the final GitHub Release",
     )
 
     if shutil.which("kubectl"):

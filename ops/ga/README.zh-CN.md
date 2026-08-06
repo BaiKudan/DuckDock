@@ -125,6 +125,16 @@ manifest，以及从独立渠道取得的 `--digest` 或 `--expected-sha256`。m
 `GA_AUTHORIZED_ARCHIVE_VERIFIED`。恢复 evidence 的 backup trust store 现在也必须以
 `allowed_signers_sha256` 内容寻址。
 
+正式公开 2.0.0 还必须经过独立 publication gate。发布机构把真实授权 archive 与 detached
+manifest 作为 `v2.0.0` draft Release 的初始两份资产，从独立渠道取得 archive digest，
+然后运行受 `ga-production-publication` Environment required reviewers 保护的
+`.github/workflows/publish-ga.yml`。工作流会调用
+`backend/scripts/authorize_ga_publication.py` 重验完整 archive、closure-bound v2、目标、
+commit/镜像和 24 小时发布窗口，并通过 GitHub API 再确认归档绑定的最终 tag CI run
+成功；只有回执与 sidecar 已上传并回读一致才公开 draft。`GA_PUBLICATION_AUTHORIZED`
+本身不声称 GitHub Release 已公开。完整步骤和失败恢复语义见
+`docs/ga-production-authorization.zh-CN.md`。
+
 请求和最终授权结构检查：
 
 ```bash

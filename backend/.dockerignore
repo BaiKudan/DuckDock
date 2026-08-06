@@ -44,6 +44,7 @@ scripts/sign_ga_approval.py
 scripts/finalize_ga_authorization.py
 scripts/archive_ga_authorized_bundle.py
 scripts/verify_ga_authorized_archive.py
+scripts/authorize_ga_publication.py
 scripts/ga_path_resolution.py
 scripts/probe_ga_target_tls.py
 scripts/verify_ga_production_authorization.py
