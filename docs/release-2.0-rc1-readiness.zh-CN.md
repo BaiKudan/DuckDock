@@ -37,7 +37,7 @@ Runtime/Reporter
 | SLO | PASS | `HEALTHY`；142 个发布窗口请求、0 错误；ingest p95 7.729 ms、timeline p95 12.636 ms、policy p95 54.426 ms |
 | Readiness | PASS | `READY`；14 PASS / 0 WARN / 0 BLOCK |
 | 浏览器 | PASS | Playwright 3/3：未登录守卫、登录表单、审批→执行→回执→验证→完成；应用内浏览器复核 Operations/Release Control，console 0 warning/error |
-| 后端回归 | PASS | 1208 passed、19 skipped；核心覆盖率历史门禁 81.04%（门槛 65%） |
+| 后端回归 | PASS | 1211 passed、19 skipped；核心覆盖率历史门禁 81.04%（门槛 65%） |
 | Python 3.12 锁定环境 | PASS | hashed dev lock；runtime lock `pip-audit` 0 已知漏洞；Ruff/compile 通过 |
 | 真实 MySQL 测试 lane | PASS | 独立临时数据库 17/17；验证后数据库与用户均已删除 |
 | 前端 | PASS | npm audit 0；lint 0 warning；11 files / 56 tests；生产 build 最大入口块 569.69 kB（门槛 600 kB） |
@@ -45,13 +45,14 @@ Runtime/Reporter
 | 自有生产镜像 | PASS | backend/frontend/TLS gateway/Alertmanager 非 root；Docker Scout 均为 0 Critical / 0 High |
 | 最终发布供应链协议 | PASS（协议）/ PENDING（真实执行） | `v2.0.0` tag 将重跑 backend/frontend/E2E/Compose，四镜像 commit 候选均通过扫描、原始 SARIF 留存且最终 tag 不存在后才晋升；builder 签名报告绑定 tag/source/SLSA v1/SPDX/SARIF/scan，最终授权器独立复验并作为 FOUNDATION；真实 tag、registry digest 和签名 bundle 尚未产生 |
 | 目标证据组装协议 | PASS（协议）/ PENDING（真实输入） | 组装器从 release provenance 和九份目标 wrapper 自动投影审批空底稿，approval policy 仅能从独立 CLI 参数选择，落盘前后均要求 `APPROVAL_COLLECTION` 且 foundation/evidence 无失败；真实目标证据仍未产生 |
+| 全局组织信任拓扑 | PASS（协议）/ PENDING（真实配置） | 九策略 manifest 和独立预检要求每个组织职责的 identity/公钥全局唯一；最终授权器从证据引用策略再次重算，跨策略复用停在 `FOUNDATION`；发布机构尚未提供真实策略、人员身份和公钥 |
 | 四方签字活动协议 | PASS（协议）/ PENDING（真人执行） | 发布机构先以不可覆盖、限时 freeze 绑定空 approvals base、policy 与 release digest；每位审批人重跑完整 preflight 并签署同一 campaign/freeze，finalizer 拒绝跨轮混签、过期与窗口外签字，四份 entry 只有让持久化文件达到 `GA_AUTHORIZED` 才能输出；真实 Product/Architecture/Security/Operations 决策仍未发生 |
 | 授权归档与独立复验协议 | PASS（协议）/ PENDING（真实 bundle） | manifest v2 记录原始路径到内容寻址成员的完整索引；只在当前时间和 bounded canonical time 均为 `GA_AUTHORIZED` 时生成确定性不可覆盖 tar.gz/manifest/SHA-256；接收方以外部摘要、严格无主机回退路径重映射复验全部成员/签名/授权；真实 bundle/digest 尚未产生和外部发布 |
 | 本地生产基础设施 | PASS | 隔离 Compose 10/10 healthy；TLS 1.2/1.3，拒绝 1.0/1.1；hostname/HSTS/告警 firing+resolved 通过，随后零残留清理 |
 | 容量工程基线 | PASS | 60 rps×900s + 120 rps×60s，61,200 Run/Audit/Outbox；持续 p95 8.023 ms，增长后 timeline p95 5.187 ms |
 | 本地 Kubernetes HA 演练 | PASS (local reference) | kind 1 control-plane + 3 zone workers；三类 3 副本、Beat 1；整区 taint/drain 后 30 秒恢复，7 个连续 health/API 样本 0 失败，故障域回归后各 ReplicaSet 恢复三域覆盖；状态服务/RWX/CNI 未授权 |
 | GA 生产授权 | BLOCKED | 真实目标 HTTPS 容量/HA/异地恢复/告警回执、独立安全评估与四方签名尚未提供，授权器必须拒绝 |
-| Compose/CI | PASS | dev/prod Compose config clean；CI action 固定 commit SHA；最终 tag 等完整四类 job 后才推镜像；生产静态基线 25/25 PASS |
+| Compose/CI | PASS | dev/prod Compose config clean；CI action 固定 commit SHA；最终 tag 等完整四类 job 后才推镜像；生产静态基线 26/26 PASS |
 
 ## 3. 14 项实时门禁
 
@@ -90,10 +91,12 @@ Langfuse 保持可替换的 provider adapter：关闭或不可用时，依赖它
 6. **随 Compose 打包的第三方数据镜像不属于 GA 路径。** 本地扫描发现 MySQL/MinIO 官方镜像仍含 Critical/High；单机 Compose 仅作加固参考，GA 强制使用经独立评估的外部 HA MySQL/Redis/S3。Prometheus 的 1 个 High 需要独立评估/VEX 确认，项目不得自行豁免。
 7. **类型债务仍有 81 项。** ratchet 阻止恶化，但后续版本应持续清零。
 8. **外部 Provider 兼容性是持续门禁。** Langfuse、Hermes、OTel Collector 或其他 Harness 升级后必须重跑对应 compatibility gate。
-9. **RC 不是 GA。** 仓库已新增最终供应链 FOUNDATION：只有受控 `ci.yml@refs/tags/v2.0.0` 在 backend/frontend/E2E/Compose 全通过后才推送 commit 候选，四镜像均通过 Critical/High 扫描且最终 tag 从未存在后才晋升；独立 builder 策略和 OpenSSH 签名报告绑定 tag object/验证输出、source archive/tree、SLSA v1、SPDX 2.3、漏洞扫描和两个 `@sha256` 镜像，门禁会重读全部内容并拒绝跨镜像、predicate 修改、伪造统计或 builder/审批人公钥复用。但真实签名 tag、最终 registry digest 和 bundle 尚未产生。权威授权器仍严格分为 FOUNDATION、EVIDENCE_COLLECTION、APPROVAL_COLLECTION 和 AUTHORIZED；只有 `--require-evidence-ready` 证明全部非审批检查通过后才能收集四方签名，最终仍必须取得 `GA_AUTHORIZED`。
+9. **真实组织信任拓扑尚未建立。** 仓库预检和最终门禁已能拒绝九份策略之间复用 identity 或 OpenSSH 公钥，但真实发布机构仍需确定审批人、评估方、builder、probe、provider、on-call、执行人与 verifier，建立九份内容寻址 policy/trust store 并生成不可覆盖的 topology PASS 回执；本地测试身份不能代替该职责分配。
+10. **RC 不是 GA。** 仓库已新增最终供应链 FOUNDATION：只有受控 `ci.yml@refs/tags/v2.0.0` 在 backend/frontend/E2E/Compose 全通过后才推送 commit 候选，四镜像均通过 Critical/High 扫描且最终 tag 从未存在后才晋升；独立 builder 策略和 OpenSSH 签名报告绑定 tag object/验证输出、source archive/tree、SLSA v1、SPDX 2.3、漏洞扫描和两个 `@sha256` 镜像，门禁会重读全部内容并拒绝跨镜像、predicate 修改、伪造统计或 builder/审批人公钥复用。但真实签名 tag、最终 registry digest 和 bundle 尚未产生。权威授权器仍严格分为 FOUNDATION、EVIDENCE_COLLECTION、APPROVAL_COLLECTION 和 AUTHORIZED；只有 `--require-evidence-ready` 证明全部非审批检查通过后才能收集四方签名，最终仍必须取得 `GA_AUTHORIZED`。
 
 ## 6. GA 前必须完成
 
+- 在任何真实目标压测、恢复或故障注入前，发布机构先定稿九份 trust policy/allowed-signers，填写 `trust-topology-manifest.example.json` 的精确路径与摘要并运行 `verify_ga_trust_topology.py`，只有不可覆盖的 PASS 回执才允许继续；
 - 用真实生产密钥、域名和 TLS 部署 `ops/kubernetes/ha` 目标 overlay，替换所有占位镜像/域名/egress；
 - 从发布机构批准的公网 probe/vantage 运行 `probe_ga_target_tls.py`，由批准身份签署 v3 原始报告，再用 `collect_ga_target_tls.py` 生成最终 TLS evidence v3；
 - 从目标集群外运行 `collect_ga_target_network.py`，证明仅 443 公网开放、数据服务直连端口不可达，并实际执行受信/非受信 ingress 和批准/拒绝 egress；

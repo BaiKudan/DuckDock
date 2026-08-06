@@ -1,0 +1,41 @@
+{
+  "policies": {
+    "alerting": {
+      "path": "alerting-trust-policy.json",
+      "sha256": "__CHANGE_ME_SHA256__"
+    },
+    "approval": {
+      "path": "approval-policy.json",
+      "sha256": "__CHANGE_ME_SHA256__"
+    },
+    "capacity": {
+      "path": "capacity-trust-policy.json",
+      "sha256": "__CHANGE_ME_SHA256__"
+    },
+    "network": {
+      "path": "network-trust-policy.json",
+      "sha256": "__CHANGE_ME_SHA256__"
+    },
+    "recovery": {
+      "path": "recovery-trust-policy.json",
+      "sha256": "__CHANGE_ME_SHA256__"
+    },
+    "release-provenance": {
+      "path": "release-provenance-trust-policy.json",
+      "sha256": "__CHANGE_ME_SHA256__"
+    },
+    "secrets": {
+      "path": "secrets-trust-policy.json",
+      "sha256": "__CHANGE_ME_SHA256__"
+    },
+    "state-services": {
+      "path": "state-services-trust-policy.json",
+      "sha256": "__CHANGE_ME_SHA256__"
+    },
+    "tls": {
+      "path": "tls-trust-policy.json",
+      "sha256": "__CHANGE_ME_SHA256__"
+    }
+  },
+  "schema_version": "duckdock-ga-trust-topology-manifest-v1"
+}

@@ -170,6 +170,8 @@ def verify(env_file: Path) -> dict[str, Any]:
         "final tag reruns all CI gates and emits independently re-verifiable release evidence",
     )
     preapproval_assembler = REPO_ROOT / "backend/scripts/assemble_ga_preapproval_authorization.py"
+    trust_topology_verifier = REPO_ROOT / "backend/scripts/verify_ga_trust_topology.py"
+    trust_topology_manifest = REPO_ROOT / "ops/ga/trust-topology-manifest.example.json"
     approval_freezer = REPO_ROOT / "backend/scripts/freeze_ga_approval_campaign.py"
     approval_signer = REPO_ROOT / "backend/scripts/sign_ga_approval.py"
     approval_finalizer = REPO_ROOT / "backend/scripts/finalize_ga_authorization.py"
@@ -180,6 +182,11 @@ def verify(env_file: Path) -> dict[str, Any]:
     assembler_text = (
         preapproval_assembler.read_text(encoding="utf-8")
         if preapproval_assembler.is_file()
+        else ""
+    )
+    trust_topology_text = (
+        trust_topology_verifier.read_text(encoding="utf-8")
+        if trust_topology_verifier.is_file()
         else ""
     )
     freezer_text = (
@@ -210,6 +217,15 @@ def verify(env_file: Path) -> dict[str, Any]:
         ga_path_resolution.read_text(encoding="utf-8")
         if ga_path_resolution.is_file()
         else ""
+    )
+    add(
+        "ga_trust_topology",
+        trust_topology_manifest.is_file()
+        and "duckdock-ga-trust-topology-manifest-v1" in trust_topology_text
+        and "global GA trust separation failed" in trust_topology_text
+        and '"organizational_trust_separation"' in authorization_verifier_text,
+        "immutable nine-policy preflight plus independently recomputed final authorization gate",
+        "every GA identity and public key is globally exclusive across organizational duties",
     )
     add(
         "ga_preapproval_assembly",

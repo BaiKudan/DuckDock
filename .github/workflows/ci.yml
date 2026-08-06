@@ -310,6 +310,7 @@ jobs:
           bash -n scripts/verify-ga-infrastructure-dev.sh
           bash -n scripts/rehearse-kubernetes-ha.sh
           sh -n ops/tls-gateway/entrypoint.sh
+          python3 backend/scripts/verify_ga_trust_topology.py --help >/dev/null
           python3 backend/scripts/assemble_ga_preapproval_authorization.py --help >/dev/null
           python3 backend/scripts/freeze_ga_approval_campaign.py --help >/dev/null
           python3 backend/scripts/sign_ga_approval.py --help >/dev/null

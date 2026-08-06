@@ -197,6 +197,7 @@ def test_production_image_context_excludes_test_and_local_validation_artifacts()
         "scripts/collect_ga_release_provenance.py",
         "scripts/ga_release_provenance.py",
         "scripts/assemble_ga_preapproval_authorization.py",
+        "scripts/verify_ga_trust_topology.py",
         "scripts/ga_approval_campaign.py",
         "scripts/freeze_ga_approval_campaign.py",
         "scripts/sign_ga_approval.py",
@@ -257,6 +258,7 @@ def test_final_tag_reruns_full_gate_and_publishes_attested_images():
 
 
 def test_ga_approval_tools_reverify_before_signing_and_before_final_output():
+    trust_topology = _read("backend/scripts/verify_ga_trust_topology.py")
     assembler = _read("backend/scripts/assemble_ga_preapproval_authorization.py")
     freezer = _read("backend/scripts/freeze_ga_approval_campaign.py")
     signer = _read("backend/scripts/sign_ga_approval.py")
@@ -267,6 +269,8 @@ def test_ga_approval_tools_reverify_before_signing_and_before_final_output():
     wrapper = _read("scripts/sign-ga-approval.sh")
 
     assert "--digest" not in wrapper
+    assert "global GA trust separation failed" in trust_topology
+    assert "manifest, policy, or trust store changed during verification" in trust_topology
     assert "exactly the nine required controls" in assembler
     assert 'result.get("campaign_stage") == "APPROVAL_COLLECTION"' in assembler
     assert "persisted preapproval authorization did not re-verify" in assembler
@@ -297,6 +301,7 @@ def test_ga_approval_tools_reverify_before_signing_and_before_final_output():
     assert "ga_file_resolution_overrides(overrides, strict=True)" in archive_verifier
     assert "return (True, None) if strict" in path_resolution
     workflow = _read(".github/workflows/ci.yml")
+    assert "python3 backend/scripts/verify_ga_trust_topology.py --help" in workflow
     assert "python3 backend/scripts/assemble_ga_preapproval_authorization.py --help" in workflow
     assert "python3 backend/scripts/freeze_ga_approval_campaign.py --help" in workflow
     assert "python3 backend/scripts/sign_ga_approval.py --help" in workflow

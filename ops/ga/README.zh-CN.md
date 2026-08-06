@@ -25,6 +25,23 @@ BuildKit 的 SLSA 可省略空 `resolvedDependencies`/`byproducts`，SPDX 默认
 也可能是 `sbom`；二者都必须保留 registry predicate 原文，再由唯一 image subject
 组成 Statement v1，禁止为了迎合模板手改 predicate。
 
+在启动任何真实目标演练前，发布机构必须先把九份信任策略全部定稿，并从
+`trust-topology-manifest.example.json` 建立内容寻址 manifest。运行下列预检，确认审批、
+外部评估、构建、TLS、密钥轮换、网络、告警、恢复、容量和状态服务的每个组织职责都
+使用全局唯一 identity，且每把 OpenSSH 公钥只属于一个职责：
+
+```bash
+python backend/scripts/verify_ga_trust_topology.py \
+  --manifest /release-authority/duckdock-ga-trust-topology.json \
+  --output /secure/duckdock-2.0.0-trust-topology-verification.json
+```
+
+manifest 必须固定九份 policy SHA-256；每份 policy 又固定自己的 allowed-signers
+SHA-256。输出是不可覆盖的 `duckdock-ga-trust-topology-verification-v1` 回执，应与最终
+归档一起保留。预检不是对最终门禁的替代：权威授权器会从最终证据重新打开九份策略和
+信任库，独立执行同一全局职责分离检查，发现跨策略身份或公钥复用时停在
+`FOUNDATION`。缺任一策略时不得开始昂贵或有破坏性的目标演练。
+
 `preapproval-assembly-request.example.json` 是证据接线输入，只包含 release/target 身份和
 九份最终 evidence 路径。真实采集完成后，应先使用独立 CLI 参数提供 approval policy，
 由组装器投影完整授权底稿；禁止继续手工复制 wrapper 字段和 SHA-256：

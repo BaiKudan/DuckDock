@@ -101,6 +101,23 @@ python backend/scripts/collect_ga_release_provenance.py \
    全部内容寻址 artifact，重读原始 SARIF、重算扫描统计并核对 wrapper 投影；tag/SLSA/SBOM/scan/镜像
    交叉拼接、签名后修改、未批准 builder 或角色/公钥复用都会停在 `FOUNDATION`。
 
+   在开始第 4 步以及后续真实目标采集、压测和故障注入前，发布机构还必须预先定稿
+   全部九份信任策略。复制 `ops/ga/trust-topology-manifest.example.json`，填入审批、
+   release provenance、TLS、secrets、network、alerting、recovery、capacity 和
+   state-services policy 的绝对路径及 SHA-256，然后执行：
+
+```bash
+python backend/scripts/verify_ga_trust_topology.py \
+  --manifest /release-authority/duckdock-ga-trust-topology.json \
+  --output /secure/evidence/duckdock-2.0.0-trust-topology-verification.json
+```
+
+   预检要求九份 policy 各自内容寻址其 allowed-signers，并要求所有组织职责的 identity
+   和公钥全局唯一；不能让同一人员、服务 identity 或公钥在不同策略中换一个角色名继续
+   使用。命令只创建不可覆盖的 PASS 回执，失败不留输出。该回执用于在昂贵演练前暴露
+   组织配置错误并随最终 bundle 归档；最终生产授权器仍会直接从证据引用的九份 policy/
+   trust store 重算 `organizational_trust_separation`，所以不能通过省略预检回执绕过。
+
 4. 运行 `python3 scripts/verify-production-baseline.py`，保留 JSON；在目标
    Kubernetes overlay 中替换镜像、域名以及宽泛 egress，并做 server dry-run。
    然后用独立、短期、专用管理员 token 通过真实目标 HTTPS 仅调用只读 readiness

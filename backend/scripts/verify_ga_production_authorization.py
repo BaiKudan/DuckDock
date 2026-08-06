@@ -181,6 +181,7 @@ FOUNDATION_CHECK_KEYS = {
     "target_identity",
     "approval_policy",
     "approval_trust_store",
+    "organizational_trust_separation",
 }
 APPROVAL_CHECK_KEYS = {
     "approval_roles",
@@ -788,6 +789,88 @@ def _allowed_signer_bindings(path: Path) -> tuple[dict[str, set[str]] | None, st
     if shared_keys:
         return None, f"public keys reused across identities={list(shared_keys.values())}"
     return bindings, f"principals={sorted(bindings)}, unique_keys={len(key_owners)}"
+
+
+def _validate_global_trust_separation(
+    assignments: dict[str, dict[str, set[str]]],
+    trust_stores: dict[str, Path | None],
+) -> tuple[bool, dict[str, Any]]:
+    """Require every GA organizational role and public key to have one owner.
+
+    Individual trust-policy validators already enforce exact principals within a
+    policy. This closes the cross-policy gap: an identity or public key accepted
+    for one organizational duty cannot silently be reused by another policy.
+    """
+
+    expected_policies = set(assignments)
+    structure_ok = bool(expected_policies) and set(trust_stores) == expected_policies
+    identity_roles: dict[str, set[str]] = {}
+    key_owners: dict[str, set[str]] = {}
+    policy_errors: dict[str, str] = {}
+
+    for policy_name, roles in assignments.items():
+        if not isinstance(roles, dict) or not roles:
+            policy_errors[policy_name] = "no organizational roles configured"
+            continue
+        configured_identities: set[str] = set()
+        roles_valid = True
+        for role_name, identities in roles.items():
+            if not _meaningful_string(role_name) or not identities or not all(
+                _meaningful_string(identity) for identity in identities
+            ):
+                roles_valid = False
+                continue
+            role = f"{policy_name}:{role_name}"
+            for identity in identities:
+                configured_identities.add(identity)
+                identity_roles.setdefault(identity, set()).add(role)
+        if not roles_valid:
+            policy_errors[policy_name] = "empty or invalid organizational role"
+            continue
+
+        trust_store = trust_stores.get(policy_name)
+        bindings: dict[str, set[str]] | None = None
+        binding_detail = "missing trust store"
+        if trust_store is not None and trust_store.is_file():
+            bindings, binding_detail = _allowed_signer_bindings(trust_store)
+        if bindings is None or set(bindings) != configured_identities:
+            policy_errors[policy_name] = (
+                f"trust principals do not exactly match configured identities; {binding_detail}"
+            )
+            continue
+        for identity, keys in bindings.items():
+            role_names = identity_roles.get(identity, set())
+            owner = next(iter(role_names)) if len(role_names) == 1 else f"identity:{identity}"
+            for key in keys:
+                key_fingerprint = hashlib.sha256(key.encode("utf-8")).hexdigest()
+                key_owners.setdefault(key_fingerprint, set()).add(owner)
+
+    identity_conflicts = {
+        identity: sorted(roles)
+        for identity, roles in sorted(identity_roles.items())
+        if len(roles) > 1
+    }
+    key_conflicts = {
+        fingerprint: sorted(owners)
+        for fingerprint, owners in sorted(key_owners.items())
+        if len(owners) > 1
+    }
+    valid = (
+        structure_ok
+        and not policy_errors
+        and bool(identity_roles)
+        and not identity_conflicts
+        and not key_conflicts
+    )
+    return valid, {
+        "policy_count": len(assignments),
+        "role_count": sum(len(roles) for roles in assignments.values()),
+        "identity_count": len(identity_roles),
+        "public_key_count": len(key_owners),
+        "policy_errors": policy_errors,
+        "identity_conflicts": identity_conflicts,
+        "public_key_conflicts": key_conflicts,
+    }
 
 
 def _verify_ssh_payload(
@@ -4068,7 +4151,7 @@ def evaluate(
         and isinstance(alerting_report.get("alert_exercise"), dict)
         else {}
     )
-    alerting_policy_ok, _, alerting_trust_store, delivery_identities, oncall_identities, alerting_policy_detail = (
+    alerting_policy_ok, alerting_policy, alerting_trust_store, delivery_identities, oncall_identities, alerting_policy_detail = (
         _alerting_policy_context(
             alerting_report.get("alerting_policy") if isinstance(alerting_report, dict) else None,
             authorization_path=authorization_path,
@@ -4382,9 +4465,9 @@ def evaluate(
     (
         recovery_policy_ok,
         recovery_trust_store,
-        storage_identities,
+        recovery_storage_identities,
         restore_identities,
-        verification_identities,
+        recovery_verification_identities,
         recovery_policy_detail,
     ) = _recovery_policy_context(
         recovery_report.get("recovery_policy") if isinstance(recovery_report, dict) else None,
@@ -4406,7 +4489,7 @@ def evaluate(
         media_embedded,
         authorization_path=authorization_path,
         allowed_signers=recovery_trust_store,
-        allowed_identities=storage_identities,
+        allowed_identities=recovery_storage_identities,
         namespace=BACKUP_MEDIA_SIGNATURE_NAMESPACE,
     )
     restore_signature_ok, restore_receipt, restore_signature_detail = (
@@ -4423,7 +4506,7 @@ def evaluate(
             verification_embedded,
             authorization_path=authorization_path,
             allowed_signers=recovery_trust_store,
-            allowed_identities=verification_identities,
+            allowed_identities=recovery_verification_identities,
             namespace=RECOVERY_VERIFICATION_SIGNATURE_NAMESPACE,
         )
     )
@@ -4690,7 +4773,7 @@ def evaluate(
         capacity_policy,
         capacity_trust_store,
         load_identities,
-        storage_identities,
+        capacity_storage_identities,
         cleanup_identities,
         capacity_policy_detail,
     ) = _capacity_policy_context(
@@ -4717,7 +4800,7 @@ def evaluate(
             growth_embedded,
             authorization_path=authorization_path,
             allowed_signers=capacity_trust_store if capacity_policy_ok else None,
-            allowed_identities=storage_identities,
+            allowed_identities=capacity_storage_identities,
             namespace=CAPACITY_GROWTH_SIGNATURE_NAMESPACE,
         )
     )
@@ -5489,6 +5572,93 @@ def evaluate(
         ),
         expected="3x stateless replicas; 2+ zones; HA state stores/RWX; node+zone+beat failover passed",
         detail="The content-addressed report must bind the exact target, commit and images; prove target HTTPS continuity, node/zone/Beat failover, restored spread, enforced policy and state-service integrity. Local kind evidence cannot authorize production.",
+    )
+
+    alerting_all_oncall_identities = {
+        str(identity)
+        for identities in (
+            alerting_policy.get("oncall_schedules", {}).values()
+            if isinstance(alerting_policy.get("oncall_schedules"), dict)
+            else []
+        )
+        if isinstance(identities, list)
+        for identity in identities
+        if _meaningful_string(identity)
+    }
+    trust_assignments = {
+        "approval": {
+            **{
+                f"approver/{role}": identities
+                for role, identities in role_identities.items()
+            },
+            **{
+                f"security-assessor/{provider}": identities
+                for provider, identities in assessor_provider_identities.items()
+            },
+        },
+        "release-provenance": {"builder": build_identities},
+        "tls": {"probe-operator": tls_probe_identities},
+        "secrets": {
+            "provider": provider_identities,
+            "verifier": verifier_identities,
+        },
+        "network": {"probe-operator": network_probe_identities},
+        "alerting": {
+            "delivery": delivery_identities,
+            "oncall": alerting_all_oncall_identities,
+        },
+        "recovery": {
+            "storage": recovery_storage_identities,
+            "restore-executor": restore_identities,
+            "verifier": recovery_verification_identities,
+        },
+        "capacity": {
+            "load-executor": load_identities,
+            "storage-observer": capacity_storage_identities,
+            "cleanup-verifier": cleanup_identities,
+        },
+        "state-services": {
+            "provider": state_provider_identities,
+            "verifier": state_verifier_identities,
+        },
+    }
+    trust_stores = {
+        "approval": allowed_signers,
+        "release-provenance": provenance_trust_store,
+        "tls": tls_trust_store,
+        "secrets": secrets_trust_store,
+        "network": network_trust_store,
+        "alerting": alerting_trust_store,
+        "recovery": recovery_trust_store,
+        "capacity": capacity_trust_store,
+        "state-services": state_trust_store,
+    }
+    trust_topology_evaluable = all(
+        roles
+        and all(identities for identities in roles.values())
+        and (trust_store := trust_stores.get(policy_name)) is not None
+        and trust_store.is_file()
+        for policy_name, roles in trust_assignments.items()
+    )
+    trust_separation_ok, trust_separation_detail = _validate_global_trust_separation(
+        trust_assignments,
+        trust_stores,
+    )
+    trust_separation_detail["evaluable"] = trust_topology_evaluable
+    gate.add(
+        "organizational_trust_separation",
+        owner="Security",
+        passed=not trust_topology_evaluable or trust_separation_ok,
+        observed=json.dumps(trust_separation_detail, sort_keys=True, separators=(",", ":")),
+        expected=(
+            "all nine GA trust policies use globally exclusive organizational identities and "
+            "public keys with exact policy-to-trust-store bindings"
+        ),
+        detail=(
+            "This foundation gate is recomputed from the retained policies and OpenSSH trust "
+            "stores. A person, service identity or public key accepted for one GA duty cannot "
+            "be accepted for any other duty, even when each individual policy is internally valid."
+        ),
     )
 
     security = controls["security_assessment"]

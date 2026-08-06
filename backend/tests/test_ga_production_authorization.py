@@ -15,6 +15,7 @@ import pytest
 
 import scripts.archive_ga_authorized_bundle as authorized_bundle_archiver
 import scripts.collect_ga_release_provenance as release_provenance_collector
+import scripts.verify_ga_trust_topology as trust_topology_verifier
 from scripts.ga_approval_campaign import derive_campaign_id
 
 from scripts.verify_ga_production_authorization import (
@@ -3577,6 +3578,166 @@ def _write_preapproval_assembly_request(
     request_path = tmp_path / name
     request_path.write_text(json.dumps(request, sort_keys=True) + "\n", encoding="utf-8")
     return request_path
+
+
+def _write_trust_topology_manifest(
+    tmp_path: Path,
+    document: dict,
+    *,
+    name: str = "trust-topology-manifest.json",
+) -> Path:
+    provenance_report = json.loads(
+        Path(document["release"]["provenance"]["path"]).read_text(encoding="utf-8")
+    )
+    evidence_reports = {
+        control: json.loads(
+            Path(document["controls"][control]["evidence"]["path"]).read_text(
+                encoding="utf-8"
+            )
+        )
+        for control in ("tls", "secrets", "network", "alerting", "recovery", "capacity")
+    }
+    ha_report = json.loads(
+        Path(document["controls"]["high_availability"]["evidence"]["path"]).read_text(
+            encoding="utf-8"
+        )
+    )
+    state_report = json.loads(
+        Path(ha_report["state_services"]["evidence"]["path"]).read_text(
+            encoding="utf-8"
+        )
+    )
+    policy_paths = {
+        "approval": tmp_path / "approval-policy.json",
+        "release-provenance": Path(provenance_report["provenance_policy"]["path"]),
+        "tls": Path(evidence_reports["tls"]["tls_policy"]["path"]),
+        "secrets": Path(evidence_reports["secrets"]["secrets_policy"]["path"]),
+        "network": Path(evidence_reports["network"]["network_policy"]["path"]),
+        "alerting": Path(evidence_reports["alerting"]["alerting_policy"]["path"]),
+        "recovery": Path(evidence_reports["recovery"]["recovery_policy"]["path"]),
+        "capacity": Path(evidence_reports["capacity"]["capacity_policy"]["path"]),
+        "state-services": Path(state_report["state_services_policy"]["path"]),
+    }
+    manifest = {
+        "schema_version": trust_topology_verifier.MANIFEST_SCHEMA_VERSION,
+        "policies": {
+            policy: {
+                "path": str(path),
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            }
+            for policy, path in policy_paths.items()
+        },
+    }
+    manifest_path = tmp_path / name
+    manifest_path.write_text(
+        json.dumps(manifest, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    return manifest_path
+
+
+def test_trust_topology_preflight_accepts_nine_globally_separated_policies(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _add_signed_approvals(document, tmp_path, now)
+    manifest_path = _write_trust_topology_manifest(tmp_path, document)
+
+    receipt = trust_topology_verifier.verify(manifest_path, now=now)
+
+    assert receipt["status"] == "PASS"
+    assert receipt["separation"]["policy_count"] == 9
+    assert receipt["separation"]["identity_conflicts"] == {}
+    assert receipt["separation"]["public_key_conflicts"] == {}
+    assert set(receipt["policies"]) == set(trust_topology_verifier.POLICY_SCHEMAS)
+    output = tmp_path / "trust-topology-verification.json"
+    assert (
+        trust_topology_verifier.main(
+            ["--manifest", str(manifest_path), "--output", str(output)]
+        )
+        == 0
+    )
+    assert json.loads(output.read_text(encoding="utf-8"))["status"] == "PASS"
+
+
+def test_trust_topology_preflight_rejects_public_key_reused_by_another_policy(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _add_signed_approvals(document, tmp_path, now)
+    tls_report_path = Path(document["controls"]["tls"]["evidence"]["path"])
+    tls_report = json.loads(tls_report_path.read_text(encoding="utf-8"))
+    tls_policy_path = Path(tls_report["tls_policy"]["path"])
+    tls_policy = json.loads(tls_policy_path.read_text(encoding="utf-8"))
+    tls_trust_path = Path(tls_policy["allowed_signers_path"])
+    tls_identity = tls_policy["probe_operator_identities"][0]
+    product_public_key = (tmp_path / "product_key.pub").read_text(
+        encoding="utf-8"
+    ).strip()
+    tls_trust_path.write_text(
+        f"{tls_identity} {product_public_key}\n", encoding="utf-8"
+    )
+    tls_policy["allowed_signers_sha256"] = hashlib.sha256(
+        tls_trust_path.read_bytes()
+    ).hexdigest()
+    tls_policy_path.write_text(
+        json.dumps(tls_policy, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    manifest_path = _write_trust_topology_manifest(tmp_path, document)
+
+    with pytest.raises(ValueError, match="public_key_conflicts"):
+        trust_topology_verifier.verify(manifest_path, now=now)
+
+
+def test_authorization_foundation_rejects_identity_reused_across_policies(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _add_signed_approvals(document, tmp_path, now)
+    tls_evidence = document["controls"]["tls"]["evidence"]
+    tls_report_path = Path(tls_evidence["path"])
+    tls_report = json.loads(tls_report_path.read_text(encoding="utf-8"))
+    tls_policy_path = Path(tls_report["tls_policy"]["path"])
+    tls_policy = json.loads(tls_policy_path.read_text(encoding="utf-8"))
+    tls_trust_path = Path(tls_policy["allowed_signers_path"])
+    product_identity = "product@example.com"
+    product_public_key = (tmp_path / "product_key.pub").read_text(
+        encoding="utf-8"
+    ).strip()
+    with tls_trust_path.open("a", encoding="utf-8") as handle:
+        handle.write(f"{product_identity} {product_public_key}\n")
+    tls_policy["probe_operator_identities"].append(product_identity)
+    tls_policy["allowed_signers_sha256"] = hashlib.sha256(
+        tls_trust_path.read_bytes()
+    ).hexdigest()
+    tls_policy_path.write_text(
+        json.dumps(tls_policy, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    tls_report["tls_policy"]["sha256"] = hashlib.sha256(
+        tls_policy_path.read_bytes()
+    ).hexdigest()
+    tls_report["tls_policy"]["allowed_signers_sha256"] = tls_policy[
+        "allowed_signers_sha256"
+    ]
+    tls_report_path.write_text(
+        json.dumps(tls_report, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    tls_evidence["sha256"] = hashlib.sha256(tls_report_path.read_bytes()).hexdigest()
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    checks = {check["key"]: check for check in result["checks"]}
+    assert checks["tls_probe_signature"]["status"] == "PASS"
+    assert checks["organizational_trust_separation"]["status"] == "BLOCK"
+    assert result["campaign_stage"] == "FOUNDATION"
+    assert result["failed_foundation_checks"] == ["organizational_trust_separation"]
 
 
 def _preapproval_assembly_command(
