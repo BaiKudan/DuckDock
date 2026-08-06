@@ -25,6 +25,11 @@ from typing import Any, Sequence
 from urllib.parse import urlparse
 
 try:
+    from scripts.ga_path_resolution import ga_file_resolution_override
+except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
+    from ga_path_resolution import ga_file_resolution_override
+
+try:
     from scripts.ga_capacity_evidence import (
         CAPACITY_EVIDENCE_SCHEMA_VERSION as CAPACITY_SCHEMA_VERSION,
         CAPACITY_POLICY_SCHEMA_VERSION,
@@ -301,6 +306,9 @@ def _parse_time(value: Any) -> datetime | None:
 def _resolve_file(raw: Any, authorization_path: Path) -> Path | None:
     if not isinstance(raw, str) or not raw or any(marker in raw for marker in PLACEHOLDER_MARKERS):
         return None
+    handled, overridden = ga_file_resolution_override(raw)
+    if handled:
+        return overridden
     path = Path(raw).expanduser()
     if path.is_absolute():
         return path
@@ -1340,13 +1348,24 @@ def _verify_signed_evidence_file(
     signature = _resolve_file(signed_file.get("signature_path"), authorization_path)
     identity = signed_file.get("signer_identity")
     expected_digest = str(signed_file.get("sha256") or signed_file.get("manifest_sha256") or "")
+    expected_trust_digest = str(signed_file.get("allowed_signers_sha256") or "")
     exists = path is not None and path.is_file()
     actual_digest = _sha256(path) if exists else "missing"
+    actual_trust_digest = (
+        _sha256(allowed_signers)
+        if allowed_signers is not None and allowed_signers.is_file()
+        else "missing"
+    )
     digest_ok = bool(DIGEST_RE.fullmatch(expected_digest)) and actual_digest == expected_digest
+    trust_digest_ok = (
+        bool(DIGEST_RE.fullmatch(expected_trust_digest))
+        and actual_trust_digest == expected_trust_digest
+    )
     artifacts_ok = (
         _meaningful_string(identity)
         and allowed_signers is not None
         and allowed_signers.is_file()
+        and trust_digest_ok
         and signature is not None
         and signature.is_file()
     )
@@ -1362,7 +1381,8 @@ def _verify_signed_evidence_file(
         )
     return (
         exists and digest_ok and artifacts_ok and signature_ok,
-        f"path={path or 'missing'}, digest={actual_digest}, signer={identity or 'missing'}, signature={signature_detail}",
+        f"path={path or 'missing'}, digest={actual_digest}, trust_digest={actual_trust_digest}, "
+        f"signer={identity or 'missing'}, signature={signature_detail}",
     )
 
 

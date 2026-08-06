@@ -777,13 +777,20 @@ python backend/scripts/archive_ga_authorized_bundle.py \
 
 归档器在收集前后各运行一次同一权威门禁，只有两次均为无阻断
 `GA_AUTHORIZED` 才写出结果；三个输出均不可覆盖，持久化后会重新读取并验证。
-它不会扫描目录，只沿 JSON 中显式的 `path+sha256`、
+它不会扫描目录，只沿 JSON 中显式的 `path+sha256`、`path+manifest_sha256`、
 `allowed_signers_path+allowed_signers_sha256`、`signature_path` 引用闭包，并加入明确
 传入的 supplemental receipt/result。因此同目录审批私钥、builder 私钥和未引用文件
 不会进入归档；即使显式引用，常见 OpenSSH/PEM/age 私钥材料也会被拒绝。授权文件
 目录和策略目录自动成为允许根；引用位于其他受控目录时，
 必须显式追加 `--include-root evidence=/absolute/evidence/root`，越界引用、符号链接、
 摘要不符、证据中途变化或大于默认上限的输入都会 fail closed。
+
+归档 manifest v2 会为每个 JSON 原始路径建立 source member → target member 引用索引，
+并把 canonical evaluation time 固定为 `created_at`。显式 `--created-at` 只能位于实际归档
+开始前 300 秒内；归档器仍会在真实当前时间前后重验，所以该参数不能绕过证据过期。
+相对路径与权威授权器一致，以 authorization 所在目录为基准；正式 collector 默认输出
+绝对路径以避免跨工具歧义。备份 manifest 的 `allowed_signers_path` 也必须同时提供
+`allowed_signers_sha256`，无内容摘要的旧恢复证据不再具有 GA 授权资格。
 
 外部 manifest 逐文件记录允许根标签、相对路径、内容寻址 archive path、size 和
 SHA-256；tar/gzip 元数据固定，因此相同输入和相同 `--created-at` 生成字节级一致的
@@ -792,6 +799,31 @@ bundle。`--created-at` 只固定 manifest 时间，不会回拨权威门禁的�
 签名、四份 approval/preflight/signature、finalization receipt、审批策略和共享
 allowed-signers 均应在 manifest 中可追溯。生产验证时仍必须从发布机构控制的独立
 只读路径选择策略，不能从待验证授权包自动发现信任根。
+
+归档传输或长期保存后必须运行独立复验器。digest sidecar 必须从发布机构的独立、
+不可变渠道获得，不能只信任与 bundle 同渠道传来的文件：
+
+```bash
+python backend/scripts/verify_ga_authorized_archive.py \
+  --archive /received/duckdock-2.0.0-ga-bundle.tar.gz \
+  --manifest /received/duckdock-2.0.0-ga-bundle.manifest.json \
+  --digest /trusted-channel/duckdock-2.0.0-ga-bundle.sha256
+```
+
+也可以用独立渠道记录的裸摘要替代 sidecar：
+
+```bash
+python backend/scripts/verify_ga_authorized_archive.py \
+  --archive /received/duckdock-2.0.0-ga-bundle.tar.gz \
+  --manifest /received/duckdock-2.0.0-ga-bundle.manifest.json \
+  --expected-sha256 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+```
+
+复验器先检查外部摘要、embedded/external manifest、成员集合/metadata/size/SHA-256、
+引用索引和私钥排除，再把成员物化到临时隔离目录。随后以严格路径重映射重跑同一
+权威 evaluator：任何未进入 manifest 的原主机路径都会返回 missing，绝不回退读取
+接收机或原发布机文件系统。只有历史 canonical 时点仍得到完全一致的
+`GA_AUTHORIZED` 和 release digest，才输出 `GA_AUTHORIZED_ARCHIVE_VERIFIED`。
 
 授权结果还会固定输出 `failed_foundation_checks`、`failed_evidence_checks`、
 `failed_approval_checks` 和 `next_action`。发布活动只能按 `next_action` 前进，不能因

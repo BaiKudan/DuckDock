@@ -773,6 +773,7 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
             "manifest_sha256": manifest_digest,
             "signer_identity": args.backup_signer_identity,
             "allowed_signers_path": str(args.backup_allowed_signers.resolve()),
+            "allowed_signers_sha256": _sha256(args.backup_allowed_signers),
             "signature_path": str(args.backup_signature.resolve()),
             "decryption_key_external": True,
         },

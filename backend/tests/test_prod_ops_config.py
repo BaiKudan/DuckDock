@@ -199,6 +199,8 @@ def test_production_image_context_excludes_test_and_local_validation_artifacts()
         "scripts/sign_ga_approval.py",
         "scripts/finalize_ga_authorization.py",
         "scripts/archive_ga_authorized_bundle.py",
+        "scripts/verify_ga_authorized_archive.py",
+        "scripts/ga_path_resolution.py",
         "scripts/probe_ga_target_tls.py",
         "scripts/verify_ga_production_authorization.py",
         "scripts/verify_*_dev.py",
@@ -255,6 +257,8 @@ def test_ga_approval_tools_reverify_before_signing_and_before_final_output():
     signer = _read("backend/scripts/sign_ga_approval.py")
     finalizer = _read("backend/scripts/finalize_ga_authorization.py")
     archiver = _read("backend/scripts/archive_ga_authorized_bundle.py")
+    archive_verifier = _read("backend/scripts/verify_ga_authorized_archive.py")
+    path_resolution = _read("backend/scripts/ga_path_resolution.py")
     wrapper = _read("scripts/sign-ga-approval.sh")
 
     assert "--digest" not in wrapper
@@ -274,10 +278,16 @@ def test_ga_approval_tools_reverify_before_signing_and_before_final_output():
     assert "authorization evaluation changed during archive creation" in archiver
     assert "GzipFile" in archiver
     assert "mtime=0" in archiver
+    assert "GA_AUTHORIZED_ARCHIVE_VERIFIED" in archive_verifier
+    assert "manifest reference index does not exactly match" in archive_verifier
+    assert "archived authorization did not independently re-evaluate" in archive_verifier
+    assert "ga_file_resolution_overrides(overrides, strict=True)" in archive_verifier
+    assert "return (True, None) if strict" in path_resolution
     workflow = _read(".github/workflows/ci.yml")
     assert "python3 backend/scripts/sign_ga_approval.py --help" in workflow
     assert "python3 backend/scripts/finalize_ga_authorization.py --help" in workflow
     assert "python3 backend/scripts/archive_ga_authorized_bundle.py --help" in workflow
+    assert "python3 backend/scripts/verify_ga_authorized_archive.py --help" in workflow
 
 
 def test_production_frontend_runtime_image_contains_only_built_assets():

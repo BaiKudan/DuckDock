@@ -313,6 +313,7 @@ jobs:
           python3 backend/scripts/sign_ga_approval.py --help >/dev/null
           python3 backend/scripts/finalize_ga_authorization.py --help >/dev/null
           python3 backend/scripts/archive_ga_authorized_bundle.py --help >/dev/null
+          python3 backend/scripts/verify_ga_authorized_archive.py --help >/dev/null
 
       - name: Validate Prometheus and Alertmanager configuration
         shell: bash

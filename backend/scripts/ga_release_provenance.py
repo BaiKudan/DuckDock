@@ -9,6 +9,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+try:
+    from scripts.ga_path_resolution import ga_file_resolution_override
+except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
+    from ga_path_resolution import ga_file_resolution_override
+
 
 BUILD_REPORT_SCHEMA_VERSION = "duckdock-ga-build-provenance-report-v1"
 PROVENANCE_EVIDENCE_SCHEMA_VERSION = "duckdock-ga-release-provenance-evidence-v1"
@@ -96,6 +101,9 @@ def _load_object(path: Path, label: str) -> dict[str, Any]:
 def _resolve_artifact(raw: Any, report_path: Path) -> Path | None:
     if not meaningful(raw):
         return None
+    handled, overridden = ga_file_resolution_override(raw)
+    if handled:
+        return overridden
     path = Path(str(raw)).expanduser()
     if not path.is_absolute():
         path = (report_path.parent / path).resolve()

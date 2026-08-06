@@ -34,6 +34,7 @@
     "manifest_sha256": "__CHANGE_ME_64_HEX__",
     "signer_identity": "__CHANGE_ME_BACKUP_SIGNER_IDENTITY__",
     "allowed_signers_path": "__CHANGE_ME_BACKUP_ALLOWED_SIGNERS_PATH__",
+    "allowed_signers_sha256": "__CHANGE_ME_64_HEX__",
     "signature_path": "__CHANGE_ME_BACKUP_MANIFEST_SIGNATURE_PATH__",
     "decryption_key_external": true
   },

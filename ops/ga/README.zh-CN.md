@@ -54,6 +54,14 @@ store 当场反向验签。四份 entry 由 `backend/scripts/finalize_ga_authori
 发布前应在 supplemental 列表中加入 finalization receipt、四份 signer preflight 和
 最终授权结果，并把 bundle SHA-256 发布到独立不可变渠道。
 
+接收方使用 `backend/scripts/verify_ga_authorized_archive.py`，同时传入 archive、外部
+manifest，以及从独立渠道取得的 `--digest` 或 `--expected-sha256`。manifest v2 的
+逐引用索引会把原始绝对/相对路径严格映射到内容寻址成员；复验器不会回退读取原主机
+路径，并在临时目录以归档时的 canonical evaluation time 重跑完整授权器。只有摘要、
+成员、索引、全部 OpenSSH 签名和 release digest 均一致才返回
+`GA_AUTHORIZED_ARCHIVE_VERIFIED`。恢复 evidence 的 backup trust store 现在也必须以
+`allowed_signers_sha256` 内容寻址。
+
 结构检查：
 
 ```bash

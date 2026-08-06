@@ -331,6 +331,9 @@ def test_collects_signed_offsite_destructive_recovery_evidence(tmp_path: Path) -
     assert report["objects_verified"] == 7
     assert report["git_repositories_verified"] is True
     assert report["backup"]["decryption_key_external"] is True
+    assert report["backup"]["allowed_signers_sha256"] == hashlib.sha256(
+        args.backup_allowed_signers.read_bytes()
+    ).hexdigest()
     assert not target_recovery._contains_secret_material_key(report)
 
 

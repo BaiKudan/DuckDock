@@ -8,6 +8,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+try:
+    from scripts.ga_path_resolution import ga_file_resolution_override
+except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
+    from ga_path_resolution import ga_file_resolution_override
+
 
 ASSESSMENT_REPORT_SCHEMA_VERSION = "duckdock-ga-security-assessment-report-v1"
 ASSESSMENT_EVIDENCE_SCHEMA_VERSION = "duckdock-ga-independent-security-evidence-v2"
@@ -267,9 +272,15 @@ def validate_assessment_report(
     raw_artifact_path = artifact.get("path")
     if not meaningful(raw_artifact_path) or artifact.get("format") != "pdf":
         raise ValueError("signed security assessment report artifact must be a PDF")
-    artifact_path = Path(str(raw_artifact_path)).expanduser()
-    if not artifact_path.is_absolute():
-        artifact_path = (assessment_path.parent / artifact_path).resolve()
+    handled, overridden = ga_file_resolution_override(raw_artifact_path)
+    if handled:
+        artifact_path = overridden
+    else:
+        artifact_path = Path(str(raw_artifact_path)).expanduser()
+        if not artifact_path.is_absolute():
+            artifact_path = (assessment_path.parent / artifact_path).resolve()
+    if artifact_path is None:
+        raise ValueError("signed security assessment report artifact is missing")
     artifact_digest = sha256(artifact_path) if artifact_path.is_file() else "missing"
     if (
         artifact_path.resolve() == assessment_path.resolve()

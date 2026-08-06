@@ -14,21 +14,24 @@ import sys
 import tarfile
 import tempfile
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 try:
+    from scripts.ga_path_resolution import ga_file_resolution_overrides
     from scripts.verify_ga_production_authorization import evaluate
 except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
+    from ga_path_resolution import ga_file_resolution_overrides
     from verify_ga_production_authorization import evaluate
 
 
-ARCHIVE_MANIFEST_SCHEMA_VERSION = "duckdock-ga-authorized-archive-manifest-v1"
+ARCHIVE_MANIFEST_SCHEMA_VERSION = "duckdock-ga-authorized-archive-manifest-v2"
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 ROOT_LABEL_PATTERN = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 DEFAULT_MAX_FILE_BYTES = 100 * 1024 * 1024
 DEFAULT_MAX_TOTAL_BYTES = 1024 * 1024 * 1024
+MAX_CREATED_AT_SKEW_SECONDS = 300
 PRIVATE_KEY_MARKERS = (
     b"-----BEGIN OPENSSH PRIVATE KEY-----",
     b"-----BEGIN PRIVATE KEY-----",
@@ -54,6 +57,15 @@ class CapturedFile:
     archive_path: str
     payload: bytes
     sha256: str
+
+
+@dataclass(frozen=True)
+class CapturedReference:
+    source: Path
+    target: Path
+    reference_type: str
+    raw_path: str
+    declared_sha256: str | None
 
 
 def _load_object(path: Path, label: str) -> dict[str, Any]:
@@ -117,11 +129,15 @@ def _root_for(path: Path, roots: Sequence[AllowedRoot]) -> AllowedRoot:
 
 
 def _resolve_file(
-    raw_path: str | Path, *, relative_to: Path, roots: Sequence[AllowedRoot]
+    raw_path: str,
+    *,
+    authorization_path: Path,
+    roots: Sequence[AllowedRoot],
 ) -> Path:
     candidate = Path(raw_path).expanduser()
     if not candidate.is_absolute():
-        candidate = relative_to / candidate
+        adjacent = authorization_path.parent / candidate
+        candidate = adjacent if adjacent.exists() else Path.cwd() / candidate
     if candidate.is_symlink():
         raise ValueError(f"symbolic-link evidence is forbidden: {candidate}")
     resolved = candidate.resolve()
@@ -131,12 +147,25 @@ def _resolve_file(
     return resolved
 
 
+def _resolve_input_file(path: Path, *, roots: Sequence[AllowedRoot]) -> Path:
+    candidate = path.expanduser()
+    if not candidate.is_absolute():
+        candidate = Path.cwd() / candidate
+    if candidate.is_symlink():
+        raise ValueError(f"symbolic-link evidence is forbidden: {candidate}")
+    resolved = candidate.resolve()
+    _root_for(resolved, roots)
+    if not resolved.is_file():
+        raise ValueError(f"supplemental file does not exist: {resolved}")
+    return resolved
+
+
 def _safe_basename(path: Path) -> str:
     safe = re.sub(r"[^A-Za-z0-9._-]+", "_", path.name).strip("._")
     return (safe or "artifact")[:80]
 
 
-def _iter_references(value: Any) -> Iterable[tuple[str, str | None]]:
+def _iter_references(value: Any) -> Iterable[tuple[str, str, str | None]]:
     if isinstance(value, dict):
         raw_path = value.get("path")
         declared_digest = value.get("sha256")
@@ -146,7 +175,17 @@ def _iter_references(value: Any) -> Iterable[tuple[str, str | None]]:
             and isinstance(declared_digest, str)
             and SHA256_PATTERN.fullmatch(declared_digest)
         ):
-            yield raw_path, declared_digest
+            yield "content_sha256", raw_path, declared_digest
+
+        manifest_digest = value.get("manifest_sha256")
+        if (
+            isinstance(raw_path, str)
+            and raw_path.strip()
+            and not isinstance(declared_digest, str)
+            and isinstance(manifest_digest, str)
+            and SHA256_PATTERN.fullmatch(manifest_digest)
+        ):
+            yield "content_manifest_sha256", raw_path, manifest_digest
 
         allowed_signers_path = value.get("allowed_signers_path")
         allowed_signers_digest = value.get("allowed_signers_sha256")
@@ -156,11 +195,15 @@ def _iter_references(value: Any) -> Iterable[tuple[str, str | None]]:
             and isinstance(allowed_signers_digest, str)
             and SHA256_PATTERN.fullmatch(allowed_signers_digest)
         ):
-            yield allowed_signers_path, allowed_signers_digest
+            yield (
+                "allowed_signers_sha256",
+                allowed_signers_path,
+                allowed_signers_digest,
+            )
 
         signature_path = value.get("signature_path")
         if isinstance(signature_path, str) and signature_path.strip():
-            yield signature_path, None
+            yield "signature", signature_path, None
 
         for nested in value.values():
             yield from _iter_references(nested)
@@ -212,14 +255,16 @@ def _evaluate(
 def _capture_reference_closure(
     seeds: Sequence[Path],
     *,
+    authorization_path: Path,
     roots: Sequence[AllowedRoot],
     max_file_bytes: int,
     max_total_bytes: int,
-) -> list[CapturedFile]:
+) -> tuple[list[CapturedFile], list[CapturedReference]]:
     queue = list(seeds)
     queued = set(seeds)
     captured: dict[Path, CapturedFile] = {}
     declared_digests: dict[Path, str] = {}
+    captured_references: list[CapturedReference] = []
     total_bytes = 0
 
     while queue:
@@ -260,10 +305,12 @@ def _capture_reference_closure(
         if parsed is None:
             continue
         references: list[Path] = []
-        for raw_reference, expected_digest in _iter_references(parsed):
+        for reference_type, raw_reference, expected_digest in _iter_references(
+            parsed
+        ):
             reference = _resolve_file(
                 raw_reference,
-                relative_to=path.parent,
+                authorization_path=authorization_path,
                 roots=roots,
             )
             existing_digest = declared_digests.get(reference)
@@ -282,21 +329,38 @@ def _capture_reference_closure(
                     and captured[reference].sha256 != expected_digest
                 ):
                     raise ValueError(f"referenced file digest mismatch: {reference}")
+            captured_references.append(
+                CapturedReference(
+                    source=path,
+                    target=reference,
+                    reference_type=reference_type,
+                    raw_path=raw_reference,
+                    declared_sha256=expected_digest,
+                )
+            )
             references.append(reference)
         for reference in sorted(set(references), key=str):
             if reference not in captured and reference not in queued:
                 queue.append(reference)
                 queued.add(reference)
 
-    return sorted(
-        captured.values(),
-        key=lambda item: (item.source_root, item.source_relative_path, item.sha256),
+    return (
+        sorted(
+            captured.values(),
+            key=lambda item: (
+                item.source_root,
+                item.source_relative_path,
+                item.sha256,
+            ),
+        ),
+        captured_references,
     )
 
 
 def _manifest(
     *,
     captured: Sequence[CapturedFile],
+    captured_references: Sequence[CapturedReference],
     authorization: Path,
     approval_policy: Path,
     supplemental_files: Sequence[Path],
@@ -317,6 +381,37 @@ def _manifest(
     by_path = {
         item.path: record for item, record in zip(captured, records, strict=True)
     }
+    reference_records_by_key: dict[tuple[str, str, str, str | None], dict[str, Any]] = {}
+    raw_targets: dict[str, str] = {}
+    for reference in captured_references:
+        source_archive_path = by_path[reference.source]["archive_path"]
+        target_archive_path = by_path[reference.target]["archive_path"]
+        prior_target = raw_targets.get(reference.raw_path)
+        if prior_target is not None and prior_target != target_archive_path:
+            raise ValueError(
+                f"one raw evidence path resolves to multiple archive members: {reference.raw_path}"
+            )
+        raw_targets[reference.raw_path] = target_archive_path
+        key = (
+            source_archive_path,
+            reference.reference_type,
+            reference.raw_path,
+            reference.declared_sha256,
+        )
+        reference_records_by_key[key] = {
+            "source_archive_path": source_archive_path,
+            "target_archive_path": target_archive_path,
+            "reference_type": reference.reference_type,
+            "raw_path": reference.raw_path,
+            "declared_sha256": reference.declared_sha256,
+        }
+    reference_records = [
+        reference_records_by_key[key]
+        for key in sorted(
+            reference_records_by_key,
+            key=lambda item: (item[0], item[1], item[2], item[3] or ""),
+        )
+    ]
     return {
         "schema_version": ARCHIVE_MANIFEST_SCHEMA_VERSION,
         "created_at": created_at.isoformat(),
@@ -325,6 +420,7 @@ def _manifest(
         "approval_policy": by_path[approval_policy],
         "supplemental_files": [by_path[path] for path in supplemental_files],
         "allowed_roots": [root.label for root in roots],
+        "references": reference_records,
         "evaluation": {
             "status": result["status"],
             "campaign_stage": result["campaign_stage"],
@@ -332,6 +428,7 @@ def _manifest(
             "evidence_ready_for_approval": result["evidence_ready_for_approval"],
             "approvals_complete": result["approvals_complete"],
             "block_count": result["block_count"],
+            "checked_at": result["checked_at"],
         },
         "file_count": len(records),
         "total_size_bytes": sum(record["size_bytes"] for record in records),
@@ -379,8 +476,14 @@ def _verify_archive_payload(archive_payload: bytes, manifest_payload: bytes) -> 
     except (UnicodeError, json.JSONDecodeError) as exc:
         raise ValueError(f"generated manifest is invalid: {exc}") from exc
     expected = {"manifest.json": manifest_payload}
+    expected_sizes = {"manifest.json": len(manifest_payload)}
     for record in manifest["files"]:
         expected.setdefault(record["archive_path"], None)
+        prior_size = expected_sizes.setdefault(
+            record["archive_path"], record["size_bytes"]
+        )
+        if prior_size != record["size_bytes"]:
+            raise ValueError("generated manifest has conflicting member sizes")
 
     with tarfile.open(fileobj=io.BytesIO(archive_payload), mode="r:gz") as archive:
         members = archive.getmembers()
@@ -394,6 +497,10 @@ def _verify_archive_payload(archive_payload: bytes, manifest_payload: bytes) -> 
             if not member.isfile() or member.mode != 0o644 or member.mtime != 0:
                 raise ValueError(
                     f"generated archive member metadata is invalid: {member.name}"
+                )
+            if member.size != expected_sizes[member.name]:
+                raise ValueError(
+                    f"generated archive member header size is invalid: {member.name}"
                 )
             extracted = archive.extractfile(member)
             if extracted is None:
@@ -456,20 +563,27 @@ def create_archive(
     created_at = _parse_time(args.created_at) if args.created_at else operation_time
     if created_at > operation_time:
         raise ValueError("created-at cannot be in the future")
+    if operation_time - created_at > timedelta(seconds=MAX_CREATED_AT_SKEW_SECONDS):
+        raise ValueError("created-at cannot be more than 300 seconds before archiving")
     authorization = args.authorization.resolve()
     approval_policy = args.approval_policy.resolve()
     roots = _allowed_roots(args)
     supplemental_files = [
-        _resolve_file(path, relative_to=Path.cwd(), roots=roots)
-        for path in args.supplemental_file
+        _resolve_input_file(path, roots=roots) for path in args.supplemental_file
     ]
     first_result = _evaluate(
         authorization,
         approval_policy,
         now=operation_time,
     )
-    captured = _capture_reference_closure(
+    canonical_result = _evaluate(
+        authorization,
+        approval_policy,
+        now=created_at,
+    )
+    captured, captured_references = _capture_reference_closure(
         [authorization, approval_policy, *supplemental_files],
+        authorization_path=authorization,
         roots=roots,
         max_file_bytes=args.max_file_bytes,
         max_total_bytes=args.max_total_bytes,
@@ -487,13 +601,29 @@ def create_archive(
             raise ValueError(
                 f"referenced file changed during archive creation: {item.path}"
             )
+    portable_paths: dict[str, Path] = {}
+    for reference in captured_references:
+        previous = portable_paths.setdefault(reference.raw_path, reference.target)
+        if previous != reference.target:
+            raise ValueError(
+                f"one raw evidence path resolves to multiple files: {reference.raw_path}"
+            )
+    with ga_file_resolution_overrides(portable_paths, strict=True):
+        portable_result = _evaluate(
+            authorization,
+            approval_policy,
+            now=created_at,
+        )
+    if portable_result != canonical_result:
+        raise ValueError("captured reference closure is not independently GA_AUTHORIZED")
 
     manifest = _manifest(
         captured=captured,
+        captured_references=captured_references,
         authorization=authorization,
         approval_policy=approval_policy,
         supplemental_files=supplemental_files,
-        result=second_result,
+        result=portable_result,
         roots=roots,
         created_at=created_at,
     )
@@ -507,7 +637,7 @@ def create_archive(
     summary = {
         "schema_version": ARCHIVE_MANIFEST_SCHEMA_VERSION,
         "status": "GA_AUTHORIZED_ARCHIVED",
-        "release_digest": second_result["release_digest"],
+        "release_digest": portable_result["release_digest"],
         "archive_sha256": archive_digest,
         "manifest_sha256": _sha256_bytes(manifest_payload),
         "file_count": len(captured),

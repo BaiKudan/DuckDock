@@ -172,6 +172,8 @@ def verify(env_file: Path) -> dict[str, Any]:
     approval_signer = REPO_ROOT / "backend/scripts/sign_ga_approval.py"
     approval_finalizer = REPO_ROOT / "backend/scripts/finalize_ga_authorization.py"
     authorized_archiver = REPO_ROOT / "backend/scripts/archive_ga_authorized_bundle.py"
+    authorized_archive_verifier = REPO_ROOT / "backend/scripts/verify_ga_authorized_archive.py"
+    ga_path_resolution = REPO_ROOT / "backend/scripts/ga_path_resolution.py"
     signer_text = approval_signer.read_text(encoding="utf-8") if approval_signer.is_file() else ""
     finalizer_text = (
         approval_finalizer.read_text(encoding="utf-8")
@@ -181,6 +183,16 @@ def verify(env_file: Path) -> dict[str, Any]:
     archiver_text = (
         authorized_archiver.read_text(encoding="utf-8")
         if authorized_archiver.is_file()
+        else ""
+    )
+    archive_verifier_text = (
+        authorized_archive_verifier.read_text(encoding="utf-8")
+        if authorized_archive_verifier.is_file()
+        else ""
+    )
+    path_resolution_text = (
+        ga_path_resolution.read_text(encoding="utf-8")
+        if ga_path_resolution.is_file()
         else ""
     )
     add(
@@ -205,6 +217,17 @@ def verify(env_file: Path) -> dict[str, Any]:
         and "mtime=0" in archiver_text,
         "explicit reference closure; allowed-root isolation; double GA evaluation; deterministic immutable archive",
         "authorized bundle is archived without directory scans or adjacent private keys",
+    )
+    add(
+        "ga_authorized_archive_verification",
+        "GA_AUTHORIZED_ARCHIVE_VERIFIED" in archive_verifier_text
+        and "manifest reference index does not exactly match" in archive_verifier_text
+        and "archived authorization did not independently re-evaluate"
+        in archive_verifier_text
+        and "ga_file_resolution_overrides(overrides, strict=True)" in archive_verifier_text
+        and "return (True, None) if strict" in path_resolution_text,
+        "independent digest/member/reference verification plus strict offline GA re-evaluation",
+        "transported archive verifies without reading original host evidence paths",
     )
 
     if shutil.which("kubectl"):

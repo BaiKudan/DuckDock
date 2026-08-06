@@ -2322,6 +2322,9 @@ def _document(tmp_path: Path, now: datetime) -> dict:
                 "manifest_sha256": hashlib.sha256(backup_manifest_path.read_bytes()).hexdigest(),
                 "signer_identity": backup_signer_identity,
                 "allowed_signers_path": str(backup_allowed_signers),
+                "allowed_signers_sha256": hashlib.sha256(
+                    backup_allowed_signers.read_bytes()
+                ).hexdigest(),
                 "signature_path": str(backup_signature_path),
                 "decryption_key_external": True,
             },
@@ -3723,6 +3726,23 @@ def _authorized_archive_command(
     return command, outputs
 
 
+def _authorized_archive_verifier_command(outputs: list[Path]) -> list[str]:
+    return [
+        sys.executable,
+        str(
+            Path(__file__).parents[1]
+            / "scripts"
+            / "verify_ga_authorized_archive.py"
+        ),
+        "--archive",
+        str(outputs[0]),
+        "--manifest",
+        str(outputs[1]),
+        "--digest",
+        str(outputs[2]),
+    ]
+
+
 def test_authorized_archive_is_deterministic_complete_and_excludes_private_keys(
     tmp_path: Path,
 ) -> None:
@@ -3757,9 +3777,12 @@ def test_authorized_archive_is_deterministic_complete_and_excludes_private_keys(
     manifest_payload = manifest_path.read_bytes()
     manifest = json.loads(manifest_payload)
     assert manifest["schema_version"] == (
-        "duckdock-ga-authorized-archive-manifest-v1"
+        "duckdock-ga-authorized-archive-manifest-v2"
     )
-    assert manifest["evaluation"] == {
+    evaluation = dict(manifest["evaluation"])
+    checked_at = datetime.fromisoformat(evaluation.pop("checked_at"))
+    assert checked_at >= now
+    assert evaluation == {
         "approvals_complete": True,
         "block_count": 0,
         "campaign_stage": "AUTHORIZED",
@@ -3767,6 +3790,7 @@ def test_authorized_archive_is_deterministic_complete_and_excludes_private_keys(
         "foundation_ready": True,
         "status": "GA_AUTHORIZED",
     }
+    assert manifest["references"]
     assert manifest["file_count"] == len(manifest["files"])
     assert manifest["file_count"] > 20
     assert manifest["supplemental_files"][0]["source_relative_path"] == (
@@ -3820,6 +3844,37 @@ def test_authorized_archive_is_deterministic_complete_and_excludes_private_keys(
     )
     assert immutable_retry.returncode == 2
 
+    for record in manifest["files"]:
+        source = tmp_path / record["source_relative_path"]
+        if source.is_file():
+            source.unlink()
+    verified = subprocess.run(
+        _authorized_archive_verifier_command(outputs),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    assert verified.returncode == 0, verified.stdout.decode()
+    verification = json.loads(verified.stdout)
+    assert verification["status"] == "GA_AUTHORIZED_ARCHIVE_VERIFIED"
+    assert verification["archive_sha256"] == expected_archive_digest
+    assert verification["release_digest"] == manifest["release_digest"]
+    assert verification["file_count"] == manifest["file_count"]
+    assert verification["reference_count"] == len(manifest["references"])
+    expected_digest_command = _authorized_archive_verifier_command(outputs)[:-2]
+    expected_digest_command.extend(
+        ["--expected-sha256", expected_archive_digest]
+    )
+    expected_digest_verified = subprocess.run(
+        expected_digest_command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    assert expected_digest_verified.returncode == 0, (
+        expected_digest_verified.stdout.decode()
+    )
+
 
 def test_authorized_archive_refuses_tampered_referenced_evidence(
     tmp_path: Path,
@@ -3854,6 +3909,145 @@ def test_authorized_archive_refuses_tampered_referenced_evidence(
     assert not any(path.exists() for path in outputs)
 
 
+def test_authorized_archive_refuses_backdated_canonical_evaluation(
+    tmp_path: Path,
+) -> None:
+    if shutil.which("ssh-keygen") is None:
+        pytest.skip("ssh-keygen is required for signed GA archive verification")
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _add_signed_approvals(document, tmp_path, now)
+    authorization = tmp_path / "authorized.json"
+    authorization.write_text(
+        json.dumps(document, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    command, outputs = _authorized_archive_command(tmp_path, authorization)
+    command[-1] = (now - timedelta(seconds=301)).isoformat()
+
+    completed = subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+
+    assert completed.returncode == 3
+    assert not any(path.exists() for path in outputs)
+
+
+def _rebuild_authorized_archive(
+    outputs: list[Path],
+    manifest: dict,
+    *,
+    mutate_member: bool = False,
+) -> None:
+    archive_path, manifest_path, digest_path = outputs
+    with tarfile.open(archive_path, "r:gz") as archive:
+        payloads = {
+            member.name: archive.extractfile(member).read()
+            for member in archive.getmembers()
+            if member.name != "manifest.json"
+        }
+    if mutate_member:
+        target = manifest["files"][0]["archive_path"]
+        payloads[target] += b"tampered"
+    captured = [
+        authorized_bundle_archiver.CapturedFile(
+            path=Path("/virtual") / str(index),
+            source_root=record["source_root"],
+            source_relative_path=record["source_relative_path"],
+            archive_path=record["archive_path"],
+            payload=payloads[record["archive_path"]],
+            sha256=record["sha256"],
+        )
+        for index, record in enumerate(manifest["files"])
+    ]
+    manifest_payload = (
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    archive_payload = authorized_bundle_archiver._archive_payload(
+        captured,
+        manifest_payload,
+    )
+    archive_path.write_bytes(archive_payload)
+    manifest_path.write_bytes(manifest_payload)
+    digest_path.write_text(
+        f"{hashlib.sha256(archive_payload).hexdigest()}  {archive_path.name}\n",
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["digest", "detached_manifest", "reference_substitution", "member"],
+)
+def test_authorized_archive_verifier_rejects_transport_and_index_tampering(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    if shutil.which("ssh-keygen") is None:
+        pytest.skip("ssh-keygen is required for signed GA archive verification")
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _add_signed_approvals(document, tmp_path, now)
+    authorization = tmp_path / "authorized.json"
+    authorization.write_text(
+        json.dumps(document, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    command, outputs = _authorized_archive_command(tmp_path, authorization)
+    command[-1] = now.isoformat()
+    archived = subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    assert archived.returncode == 0, archived.stdout.decode()
+    archive_path, manifest_path, digest_path = outputs
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    if mutation == "digest":
+        digest_path.write_text(
+            f"{'0' * 64}  {archive_path.name}\n",
+            encoding="utf-8",
+        )
+    elif mutation == "detached_manifest":
+        manifest["release_digest"] = "f" * 64
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    elif mutation == "reference_substitution":
+        signatures = [
+            reference
+            for reference in manifest["references"]
+            if reference["reference_type"] == "signature"
+        ]
+        replacement = next(
+            reference
+            for reference in signatures[1:]
+            if reference["target_archive_path"]
+            != signatures[0]["target_archive_path"]
+        )
+        signatures[0]["target_archive_path"] = replacement[
+            "target_archive_path"
+        ]
+        _rebuild_authorized_archive(outputs, manifest)
+    else:
+        _rebuild_authorized_archive(outputs, manifest, mutate_member=True)
+
+    verified = subprocess.run(
+        _authorized_archive_verifier_command(outputs),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+
+    assert verified.returncode == 3
+
+
 def test_authorized_archive_reference_closure_rejects_files_outside_allowed_roots(
     tmp_path: Path,
 ) -> None:
@@ -3878,6 +4072,7 @@ def test_authorized_archive_reference_closure_rejects_files_outside_allowed_root
     with pytest.raises(ValueError, match="outside every allowed root"):
         authorized_bundle_archiver._capture_reference_closure(
             [seed.resolve()],
+            authorization_path=seed.resolve(),
             roots=[
                 authorized_bundle_archiver.AllowedRoot(
                     label="campaign",
@@ -3906,6 +4101,7 @@ def test_authorized_archive_reference_closure_rejects_explicit_private_key(
     with pytest.raises(ValueError, match="private-key material is forbidden"):
         authorized_bundle_archiver._capture_reference_closure(
             [seed.resolve()],
+            authorization_path=seed.resolve(),
             roots=[
                 authorized_bundle_archiver.AllowedRoot(
                     label="campaign",
@@ -3915,6 +4111,62 @@ def test_authorized_archive_reference_closure_rejects_explicit_private_key(
             max_file_bytes=1024,
             max_total_bytes=4096,
         )
+
+
+def test_authorized_archive_uses_authorization_relative_path_semantics(
+    tmp_path: Path,
+) -> None:
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    authoritative = tmp_path / "shared.json"
+    authoritative.write_text('{"source":"authorization"}\n', encoding="utf-8")
+    misleading = nested / "shared.json"
+    misleading.write_text('{"source":"nested"}\n', encoding="utf-8")
+    report = nested / "report.json"
+    report.write_text(
+        json.dumps(
+            {
+                "artifact": {
+                    "path": "shared.json",
+                    "sha256": hashlib.sha256(
+                        authoritative.read_bytes()
+                    ).hexdigest(),
+                }
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    authorization = tmp_path / "authorization.json"
+    authorization.write_text(
+        json.dumps(
+            {
+                "evidence": {
+                    "path": "nested/report.json",
+                    "sha256": hashlib.sha256(report.read_bytes()).hexdigest(),
+                }
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    captured, _ = authorized_bundle_archiver._capture_reference_closure(
+        [authorization.resolve()],
+        authorization_path=authorization.resolve(),
+        roots=[
+            authorized_bundle_archiver.AllowedRoot(
+                label="campaign",
+                path=tmp_path.resolve(),
+            )
+        ],
+        max_file_bytes=4096,
+        max_total_bytes=16_384,
+    )
+
+    paths = {record.path for record in captured}
+    assert authoritative.resolve() in paths
+    assert misleading.resolve() not in paths
 
 
 def test_approval_policy_must_be_supplied_out_of_band(tmp_path: Path) -> None:
@@ -4652,6 +4904,38 @@ def test_tampered_backup_manifest_fails_even_when_digest_claim_is_updated(
 
     assert result["status"] == "BLOCKED"
     signature_check = next(item for item in result["checks"] if item["key"] == "recovery_backup_signature")
+    assert signature_check["status"] == "BLOCK"
+
+
+def test_backup_signature_trust_store_must_be_content_addressed(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    evidence = document["controls"]["recovery"]["evidence"]
+    evidence_path = Path(evidence["path"])
+    report = json.loads(evidence_path.read_text(encoding="utf-8"))
+    report["backup"].pop("allowed_signers_sha256")
+    evidence_path.write_text(
+        json.dumps(report, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    evidence["sha256"] = hashlib.sha256(evidence_path.read_bytes()).hexdigest()
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    assert result["status"] == "BLOCKED"
+    signature_check = next(
+        item
+        for item in result["checks"]
+        if item["key"] == "recovery_backup_signature"
+    )
     assert signature_check["status"] == "BLOCK"
 
 
