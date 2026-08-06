@@ -42,6 +42,25 @@ SHA-256。输出是不可覆盖的 `duckdock-ga-trust-topology-verification-v1` 
 信任库，独立执行同一全局职责分离检查，发现跨策略身份或公钥复用时停在
 `FOUNDATION`。缺任一策略时不得开始昂贵或有破坏性的目标演练。
 
+信任拓扑通过后，复制 `execution-campaign-request.example.json`，一次性填写最终
+release、production target、Kubernetes context、独立 recovery target、最长 14 天执行
+窗口和一个尚不存在的专用 evidence root。由发布机构在 evidence root 之外生成不可覆盖
+的执行计划和后续组装请求：
+
+```bash
+python backend/scripts/prepare_ga_execution_campaign.py \
+  --request /release-authority/duckdock-2.0.0-execution-request.json \
+  --trust-topology-receipt /secure/duckdock-2.0.0-trust-topology-verification.json \
+  --output /release-authority/duckdock-2.0.0-execution-campaign.json \
+  --assembly-request-output /release-authority/duckdock-2.0.0-preapproval-request.json
+```
+
+计划固定全部预期 raw/signature/wrapper 路径和 phase 依赖，容量必须在 readiness/network/
+secrets 后执行，HA 必须依赖 network/state-services，破坏性恢复目标必须与 production
+target 不同。所有 phase 初始状态只能是 `PENDING_EXTERNAL_EVIDENCE`；
+`PLANNED_EXTERNAL_EXECUTION` 不批准目标变更，也不代表任何证据 PASS。发布机构审阅计划
+和逐步授权后，外部执行人才可按 phase 中的精确 acknowledgement 启动相应工具。
+
 `preapproval-assembly-request.example.json` 是证据接线输入，只包含 release/target 身份和
 九份最终 evidence 路径。真实采集完成后，应先使用独立 CLI 参数提供 approval policy，
 由组装器投影完整授权底稿；禁止继续手工复制 wrapper 字段和 SHA-256：

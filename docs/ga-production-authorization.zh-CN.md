@@ -118,6 +118,27 @@ python backend/scripts/verify_ga_trust_topology.py \
    组织配置错误并随最终 bundle 归档；最终生产授权器仍会直接从证据引用的九份 policy/
    trust store 重算 `organizational_trust_separation`，所以不能通过省略预检回执绕过。
 
+   随后复制 `ops/ga/execution-campaign-request.example.json`，只填写最终 release/target、
+   精确 Kubernetes context/Namespace、与 production 不同的 recovery/staging target、
+   最长 14 天窗口，以及一个尚不存在的专用 evidence root。发布机构使用刚才的独立
+   topology PASS 回执生成计划：
+
+```bash
+python backend/scripts/prepare_ga_execution_campaign.py \
+  --request /release-authority/duckdock-2.0.0-execution-request.json \
+  --trust-topology-receipt /secure/evidence/duckdock-2.0.0-trust-topology-verification.json \
+  --output /release-authority/duckdock-2.0.0-execution-campaign.json \
+  --assembly-request-output /release-authority/duckdock-2.0.0-preapproval-request.json
+```
+
+   工具会重新验证 topology receipt、manifest、九份 policy/trust store，内容寻址绑定
+   release/target/window，分配全部 raw/signature/wrapper 的唯一预期路径并验证 phase DAG。
+   容量在 readiness/network/secrets 后，HA 在 network/state-services 后，破坏性恢复仅能
+   指向独立 recovery/staging target。生成的每个 phase 都是
+   `PENDING_EXTERNAL_EVIDENCE`；`PLANNED_EXTERNAL_EXECUTION` 明确不授权任何目标变更，
+   外部负责人仍须逐步审阅并执行 acknowledgement。工具同时生成后续 assembler 可直接
+   使用的预审批 request，避免采集结束后再次手抄 release/target 和九份 evidence 路径。
+
 4. 运行 `python3 scripts/verify-production-baseline.py`，保留 JSON；在目标
    Kubernetes overlay 中替换镜像、域名以及宽泛 egress，并做 server dry-run。
    然后用独立、短期、专用管理员 token 通过真实目标 HTTPS 仅调用只读 readiness

@@ -198,6 +198,7 @@ def test_production_image_context_excludes_test_and_local_validation_artifacts()
         "scripts/ga_release_provenance.py",
         "scripts/assemble_ga_preapproval_authorization.py",
         "scripts/verify_ga_trust_topology.py",
+        "scripts/prepare_ga_execution_campaign.py",
         "scripts/ga_approval_campaign.py",
         "scripts/freeze_ga_approval_campaign.py",
         "scripts/sign_ga_approval.py",
@@ -259,6 +260,7 @@ def test_final_tag_reruns_full_gate_and_publishes_attested_images():
 
 def test_ga_approval_tools_reverify_before_signing_and_before_final_output():
     trust_topology = _read("backend/scripts/verify_ga_trust_topology.py")
+    execution_campaign = _read("backend/scripts/prepare_ga_execution_campaign.py")
     assembler = _read("backend/scripts/assemble_ga_preapproval_authorization.py")
     freezer = _read("backend/scripts/freeze_ga_approval_campaign.py")
     signer = _read("backend/scripts/sign_ga_approval.py")
@@ -271,6 +273,9 @@ def test_ga_approval_tools_reverify_before_signing_and_before_final_output():
     assert "--digest" not in wrapper
     assert "global GA trust separation failed" in trust_topology
     assert "manifest, policy, or trust store changed during verification" in trust_topology
+    assert "PLANNED_EXTERNAL_EXECUTION" in execution_campaign
+    assert "does_not_authorize_GA_or_target_mutation" in execution_campaign
+    assert "persisted execution campaign did not independently re-verify" in execution_campaign
     assert "exactly the nine required controls" in assembler
     assert 'result.get("campaign_stage") == "APPROVAL_COLLECTION"' in assembler
     assert "persisted preapproval authorization did not re-verify" in assembler
@@ -302,6 +307,7 @@ def test_ga_approval_tools_reverify_before_signing_and_before_final_output():
     assert "return (True, None) if strict" in path_resolution
     workflow = _read(".github/workflows/ci.yml")
     assert "python3 backend/scripts/verify_ga_trust_topology.py --help" in workflow
+    assert "python3 backend/scripts/prepare_ga_execution_campaign.py --help" in workflow
     assert "python3 backend/scripts/assemble_ga_preapproval_authorization.py --help" in workflow
     assert "python3 backend/scripts/freeze_ga_approval_campaign.py --help" in workflow
     assert "python3 backend/scripts/sign_ga_approval.py --help" in workflow

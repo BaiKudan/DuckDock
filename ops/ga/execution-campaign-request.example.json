@@ -1,0 +1,33 @@
+{
+  "execution": {
+    "evidence_root": "/secure/duckdock-2.0.0/ga-execution-__CHANGE_ME_CAMPAIGN__",
+    "kubernetes_context": "__CHANGE_ME_PRODUCTION_KUBE_CONTEXT__",
+    "namespace": "duckdock",
+    "recovery_target_class": "staging",
+    "recovery_target_environment": "__CHANGE_ME_RECOVERY_TARGET__",
+    "window_expires_at": "__CHANGE_ME_RFC3339_EXPIRY__",
+    "window_starts_at": "__CHANGE_ME_RFC3339_START__"
+  },
+  "release": {
+    "backend_image": "__CHANGE_ME_REGISTRY__/duckdock/backend@sha256:__CHANGE_ME_64_HEX__",
+    "contract_digest": "__CHANGE_ME_64_HEX__",
+    "frontend_image": "__CHANGE_ME_REGISTRY__/duckdock/frontend@sha256:__CHANGE_ME_64_HEX__",
+    "git_commit": "__CHANGE_ME_40_HEX_COMMIT__",
+    "version": "2.0.0"
+  },
+  "schema_version": "duckdock-ga-execution-campaign-request-v1",
+  "target": {
+    "deployment_mode": "kubernetes-ha",
+    "environment": "production",
+    "fault_domains": [
+      "__CHANGE_ME_ZONE_A__",
+      "__CHANGE_ME_ZONE_B__"
+    ],
+    "maximum_rpo_seconds": 900,
+    "maximum_rto_seconds": 14400,
+    "minimum_sustained_rps": 50,
+    "object_store_url": "https://__CHANGE_ME_OBJECT_HOST__",
+    "public_base_url": "https://__CHANGE_ME_APP_HOST__",
+    "target_id": "__CHANGE_ME_PRODUCTION_TARGET__"
+  }
+}

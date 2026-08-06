@@ -15,6 +15,7 @@ import pytest
 
 import scripts.archive_ga_authorized_bundle as authorized_bundle_archiver
 import scripts.collect_ga_release_provenance as release_provenance_collector
+import scripts.prepare_ga_execution_campaign as execution_campaign_preparer
 import scripts.verify_ga_trust_topology as trust_topology_verifier
 from scripts.ga_approval_campaign import derive_campaign_id
 
@@ -3635,6 +3636,48 @@ def _write_trust_topology_manifest(
     return manifest_path
 
 
+def _execution_campaign_fixture(
+    tmp_path: Path,
+    now: datetime,
+) -> tuple[dict, Path, Path, Path]:
+    document = _document(tmp_path, now)
+    _add_signed_approvals(document, tmp_path, now)
+    manifest_path = _write_trust_topology_manifest(tmp_path, document)
+    topology_receipt_path = tmp_path / "trust-topology-verification.json"
+    assert (
+        trust_topology_verifier.main(
+            [
+                "--manifest",
+                str(manifest_path),
+                "--output",
+                str(topology_receipt_path),
+            ]
+        )
+        == 0
+    )
+    evidence_root = tmp_path / "future-ga-evidence"
+    request = {
+        "schema_version": execution_campaign_preparer.REQUEST_SCHEMA_VERSION,
+        "release": {
+            key: document["release"][key]
+            for key in execution_campaign_preparer.RELEASE_KEYS
+        },
+        "target": document["target"],
+        "execution": {
+            "evidence_root": str(evidence_root),
+            "kubernetes_context": "customer-production-context",
+            "namespace": "duckdock",
+            "recovery_target_environment": "customer-recovery",
+            "recovery_target_class": "recovery",
+            "window_starts_at": (now + timedelta(hours=1)).isoformat(),
+            "window_expires_at": (now + timedelta(days=2)).isoformat(),
+        },
+    }
+    request_path = tmp_path / "execution-campaign-request.json"
+    request_path.write_text(json.dumps(request, sort_keys=True) + "\n", encoding="utf-8")
+    return document, request_path, topology_receipt_path, evidence_root
+
+
 def test_trust_topology_preflight_accepts_nine_globally_separated_policies(
     tmp_path: Path,
 ) -> None:
@@ -3738,6 +3781,148 @@ def test_authorization_foundation_rejects_identity_reused_across_policies(
     assert checks["organizational_trust_separation"]["status"] == "BLOCK"
     assert result["campaign_stage"] == "FOUNDATION"
     assert result["failed_foundation_checks"] == ["organizational_trust_separation"]
+
+
+def test_execution_campaign_generates_pending_dependency_plan_and_assembly_request(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document, request_path, topology_receipt_path, evidence_root = (
+        _execution_campaign_fixture(tmp_path, now)
+    )
+    plan_output = tmp_path / "execution-campaign.json"
+    assembly_request_output = tmp_path / "generated-preapproval-request.json"
+
+    assert (
+        execution_campaign_preparer.main(
+            [
+                "--request",
+                str(request_path),
+                "--trust-topology-receipt",
+                str(topology_receipt_path),
+                "--output",
+                str(plan_output),
+                "--assembly-request-output",
+                str(assembly_request_output),
+            ]
+        )
+        == 0
+    )
+
+    plan = json.loads(plan_output.read_text(encoding="utf-8"))
+    assembly_request = json.loads(assembly_request_output.read_text(encoding="utf-8"))
+    phases = {phase["phase_id"]: phase for phase in plan["phases"]}
+    assert plan["status"] == "PLANNED_EXTERNAL_EXECUTION"
+    assert plan["authorization_boundary"] == "does_not_authorize_GA_or_target_mutation"
+    assert execution_campaign_preparer.CAMPAIGN_ID_RE.fullmatch(plan["campaign_id"])
+    assert all(phase["status"] == "PENDING_EXTERNAL_EVIDENCE" for phase in plan["phases"])
+    assert phases["capacity"]["depends_on"] == [
+        "application_readiness",
+        "network",
+        "secrets",
+    ]
+    assert phases["high_availability"]["depends_on"] == [
+        "application_readiness",
+        "network",
+        "state_services",
+    ]
+    assert phases["recovery"]["risk_class"] == "DESTRUCTIVE_NON_PRODUCTION"
+    assert phases["recovery"]["required_acknowledgement"] == "customer-recovery"
+    assert set(phases["preapproval_assembly"]["depends_on"]) == {
+        "release_provenance",
+        "application_readiness",
+        "tls",
+        "secrets",
+        "network",
+        "alerting",
+        "recovery",
+        "capacity",
+        "high_availability",
+        "security_assessment",
+    }
+    assert assembly_request["schema_version"] == "duckdock-ga-preapproval-assembly-request-v1"
+    assert assembly_request["release"]["git_commit"] == document["release"]["git_commit"]
+    assert assembly_request["target"] == document["target"]
+    assert set(assembly_request["evidence"]) == {
+        "application_readiness",
+        "tls",
+        "secrets",
+        "network",
+        "alerting",
+        "recovery",
+        "capacity",
+        "high_availability",
+        "security_assessment",
+    }
+    assert plan["preapproval_assembly_request"]["sha256"] == hashlib.sha256(
+        assembly_request_output.read_bytes()
+    ).hexdigest()
+    assert len(plan["artifacts"]) == 66
+    assert not evidence_root.exists()
+    assert all(
+        Path(path).is_relative_to(evidence_root) for path in plan["artifacts"].values()
+    )
+    with pytest.raises(SystemExit):
+        execution_campaign_preparer.main(
+            [
+                "--request",
+                str(request_path),
+                "--trust-topology-receipt",
+                str(topology_receipt_path),
+                "--output",
+                str(plan_output),
+                "--assembly-request-output",
+                str(assembly_request_output),
+            ]
+        )
+
+
+def test_execution_campaign_rejects_forged_topology_receipt(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    _, request_path, topology_receipt_path, _ = _execution_campaign_fixture(tmp_path, now)
+    receipt = json.loads(topology_receipt_path.read_text(encoding="utf-8"))
+    receipt["separation"]["identity_count"] += 1
+    topology_receipt_path.write_text(
+        json.dumps(receipt, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="does not independently re-verify"):
+        execution_campaign_preparer.prepare(
+            request_path,
+            topology_receipt_path,
+            tmp_path / "preapproval-request.json",
+            now=now,
+        )
+
+
+@pytest.mark.parametrize("unsafe_configuration", ["production_restore", "existing_root"])
+def test_execution_campaign_rejects_unsafe_execution_boundaries(
+    tmp_path: Path,
+    unsafe_configuration: str,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document, request_path, topology_receipt_path, evidence_root = (
+        _execution_campaign_fixture(tmp_path, now)
+    )
+    request = json.loads(request_path.read_text(encoding="utf-8"))
+    expected_error = ""
+    if unsafe_configuration == "production_restore":
+        request["execution"]["recovery_target_environment"] = document["target"][
+            "target_id"
+        ]
+        expected_error = "destructive recovery target must differ"
+    else:
+        evidence_root.mkdir()
+        expected_error = "evidence_root already exists"
+    request_path.write_text(json.dumps(request, sort_keys=True) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=expected_error):
+        execution_campaign_preparer.prepare(
+            request_path,
+            topology_receipt_path,
+            tmp_path / "preapproval-request.json",
+            now=now,
+        )
 
 
 def _preapproval_assembly_command(

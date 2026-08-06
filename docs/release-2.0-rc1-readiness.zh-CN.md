@@ -37,7 +37,7 @@ Runtime/Reporter
 | SLO | PASS | `HEALTHY`；142 个发布窗口请求、0 错误；ingest p95 7.729 ms、timeline p95 12.636 ms、policy p95 54.426 ms |
 | Readiness | PASS | `READY`；14 PASS / 0 WARN / 0 BLOCK |
 | 浏览器 | PASS | Playwright 3/3：未登录守卫、登录表单、审批→执行→回执→验证→完成；应用内浏览器复核 Operations/Release Control，console 0 warning/error |
-| 后端回归 | PASS | 1211 passed、19 skipped；核心覆盖率历史门禁 81.04%（门槛 65%） |
+| 后端回归 | PASS | 1215 passed、19 skipped；核心覆盖率历史门禁 81.04%（门槛 65%） |
 | Python 3.12 锁定环境 | PASS | hashed dev lock；runtime lock `pip-audit` 0 已知漏洞；Ruff/compile 通过 |
 | 真实 MySQL 测试 lane | PASS | 独立临时数据库 17/17；验证后数据库与用户均已删除 |
 | 前端 | PASS | npm audit 0；lint 0 warning；11 files / 56 tests；生产 build 最大入口块 569.69 kB（门槛 600 kB） |
@@ -46,13 +46,14 @@ Runtime/Reporter
 | 最终发布供应链协议 | PASS（协议）/ PENDING（真实执行） | `v2.0.0` tag 将重跑 backend/frontend/E2E/Compose，四镜像 commit 候选均通过扫描、原始 SARIF 留存且最终 tag 不存在后才晋升；builder 签名报告绑定 tag/source/SLSA v1/SPDX/SARIF/scan，最终授权器独立复验并作为 FOUNDATION；真实 tag、registry digest 和签名 bundle 尚未产生 |
 | 目标证据组装协议 | PASS（协议）/ PENDING（真实输入） | 组装器从 release provenance 和九份目标 wrapper 自动投影审批空底稿，approval policy 仅能从独立 CLI 参数选择，落盘前后均要求 `APPROVAL_COLLECTION` 且 foundation/evidence 无失败；真实目标证据仍未产生 |
 | 全局组织信任拓扑 | PASS（协议）/ PENDING（真实配置） | 九策略 manifest 和独立预检要求每个组织职责的 identity/公钥全局唯一；最终授权器从证据引用策略再次重算，跨策略复用停在 `FOUNDATION`；发布机构尚未提供真实策略、人员身份和公钥 |
+| 真实验收执行编排 | PASS（协议）/ PENDING（外部执行） | 不可覆盖 campaign 绑定最终 release/target、九策略 topology、最长 14 天窗口和新 evidence root；全部 phase 初始为 `PENDING_EXTERNAL_EVIDENCE`，自动生成后续 assembly request，明确不授权目标变更或声称 PASS |
 | 四方签字活动协议 | PASS（协议）/ PENDING（真人执行） | 发布机构先以不可覆盖、限时 freeze 绑定空 approvals base、policy 与 release digest；每位审批人重跑完整 preflight 并签署同一 campaign/freeze，finalizer 拒绝跨轮混签、过期与窗口外签字，四份 entry 只有让持久化文件达到 `GA_AUTHORIZED` 才能输出；真实 Product/Architecture/Security/Operations 决策仍未发生 |
 | 授权归档与独立复验协议 | PASS（协议）/ PENDING（真实 bundle） | manifest v2 记录原始路径到内容寻址成员的完整索引；只在当前时间和 bounded canonical time 均为 `GA_AUTHORIZED` 时生成确定性不可覆盖 tar.gz/manifest/SHA-256；接收方以外部摘要、严格无主机回退路径重映射复验全部成员/签名/授权；真实 bundle/digest 尚未产生和外部发布 |
 | 本地生产基础设施 | PASS | 隔离 Compose 10/10 healthy；TLS 1.2/1.3，拒绝 1.0/1.1；hostname/HSTS/告警 firing+resolved 通过，随后零残留清理 |
 | 容量工程基线 | PASS | 60 rps×900s + 120 rps×60s，61,200 Run/Audit/Outbox；持续 p95 8.023 ms，增长后 timeline p95 5.187 ms |
 | 本地 Kubernetes HA 演练 | PASS (local reference) | kind 1 control-plane + 3 zone workers；三类 3 副本、Beat 1；整区 taint/drain 后 30 秒恢复，7 个连续 health/API 样本 0 失败，故障域回归后各 ReplicaSet 恢复三域覆盖；状态服务/RWX/CNI 未授权 |
 | GA 生产授权 | BLOCKED | 真实目标 HTTPS 容量/HA/异地恢复/告警回执、独立安全评估与四方签名尚未提供，授权器必须拒绝 |
-| Compose/CI | PASS | dev/prod Compose config clean；CI action 固定 commit SHA；最终 tag 等完整四类 job 后才推镜像；生产静态基线 26/26 PASS |
+| Compose/CI | PASS | dev/prod Compose config clean；CI action 固定 commit SHA；最终 tag 等完整四类 job 后才推镜像；生产静态基线 27/27 PASS |
 
 ## 3. 14 项实时门禁
 
@@ -97,6 +98,7 @@ Langfuse 保持可替换的 provider adapter：关闭或不可用时，依赖它
 ## 6. GA 前必须完成
 
 - 在任何真实目标压测、恢复或故障注入前，发布机构先定稿九份 trust policy/allowed-signers，填写 `trust-topology-manifest.example.json` 的精确路径与摘要并运行 `verify_ga_trust_topology.py`，只有不可覆盖的 PASS 回执才允许继续；
+- 使用真实 topology PASS 回执和 `execution-campaign-request.example.json` 运行 `prepare_ga_execution_campaign.py`，由发布机构审阅绑定 release/target/window、新 evidence root、独立恢复目标和 phase DAG 的不可覆盖计划，再逐阶段授权外部执行；
 - 用真实生产密钥、域名和 TLS 部署 `ops/kubernetes/ha` 目标 overlay，替换所有占位镜像/域名/egress；
 - 从发布机构批准的公网 probe/vantage 运行 `probe_ga_target_tls.py`，由批准身份签署 v3 原始报告，再用 `collect_ga_target_tls.py` 生成最终 TLS evidence v3；
 - 从目标集群外运行 `collect_ga_target_network.py`，证明仅 443 公网开放、数据服务直连端口不可达，并实际执行受信/非受信 ingress 和批准/拒绝 egress；

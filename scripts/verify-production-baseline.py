@@ -172,6 +172,8 @@ def verify(env_file: Path) -> dict[str, Any]:
     preapproval_assembler = REPO_ROOT / "backend/scripts/assemble_ga_preapproval_authorization.py"
     trust_topology_verifier = REPO_ROOT / "backend/scripts/verify_ga_trust_topology.py"
     trust_topology_manifest = REPO_ROOT / "ops/ga/trust-topology-manifest.example.json"
+    execution_campaign_preparer = REPO_ROOT / "backend/scripts/prepare_ga_execution_campaign.py"
+    execution_campaign_request = REPO_ROOT / "ops/ga/execution-campaign-request.example.json"
     approval_freezer = REPO_ROOT / "backend/scripts/freeze_ga_approval_campaign.py"
     approval_signer = REPO_ROOT / "backend/scripts/sign_ga_approval.py"
     approval_finalizer = REPO_ROOT / "backend/scripts/finalize_ga_authorization.py"
@@ -187,6 +189,11 @@ def verify(env_file: Path) -> dict[str, Any]:
     trust_topology_text = (
         trust_topology_verifier.read_text(encoding="utf-8")
         if trust_topology_verifier.is_file()
+        else ""
+    )
+    execution_campaign_text = (
+        execution_campaign_preparer.read_text(encoding="utf-8")
+        if execution_campaign_preparer.is_file()
         else ""
     )
     freezer_text = (
@@ -226,6 +233,20 @@ def verify(env_file: Path) -> dict[str, Any]:
         and '"organizational_trust_separation"' in authorization_verifier_text,
         "immutable nine-policy preflight plus independently recomputed final authorization gate",
         "every GA identity and public key is globally exclusive across organizational duties",
+    )
+    add(
+        "ga_execution_campaign",
+        execution_campaign_request.is_file()
+        and "PLANNED_EXTERNAL_EXECUTION" in execution_campaign_text
+        and "PENDING_EXTERNAL_EVIDENCE" in execution_campaign_text
+        and "does_not_authorize_GA_or_target_mutation" in execution_campaign_text
+        and "destructive recovery target must differ" in execution_campaign_text
+        and "execution phases must produce every planned artifact exactly once"
+        in execution_campaign_text
+        and '"release_source_archive"' in execution_campaign_text
+        and "persisted execution campaign did not independently re-verify" in execution_campaign_text,
+        "content-addressed release/target/topology plan with fresh evidence root and pending external phases",
+        "operators share one dependency graph and generated preapproval request without claiming evidence PASS",
     )
     add(
         "ga_preapproval_assembly",
