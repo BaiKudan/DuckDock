@@ -65,6 +65,14 @@ bash scripts/prod.sh up
 
 `scripts/prod.sh preflight` is the safe first command on a new host: it fails hard if `.env.prod.enc`, `sops`, or an age key is missing, then validates strong production values without starting containers. All production commands decrypt to a temporary `.env.prod` only for the command and remove it on exit.
 
+For the Kubernetes HA GA path, `duckdock-runtime-secrets` must be reconciled by
+External Secrets, Vault, SOPS or an equivalent approved manager. A rotation is
+not accepted merely because the Secret object changed: run
+`backend/scripts/collect_ga_target_secrets.py` during the target exercise. It
+reads metadata only, requires separate provider and independent-verifier
+OpenSSH signatures, and proves backend/worker/beat rolled to entirely new Pod
+UIDs. See `docs/ga-production-authorization.zh-CN.md` for the exact protocol.
+
 ## Network
 
 `docker-compose.prod.yml` binds frontend, MinIO, Prometheus and Alertmanager to
@@ -229,3 +237,7 @@ To rotate a secret:
 4. Run `bash scripts/prod.sh up` to recreate containers with the new environment.
 
 To rotate the age identity, add the new recipient to `.sops.yaml`, re-encrypt `.env.prod.enc`, distribute the new private key to the deployment host, then remove the old recipient in a second re-encryption.
+
+The Compose steps above are operational guidance, not DuckDock 2.0 GA evidence.
+The GA Kubernetes path additionally requires the signed, metadata-only v2 target
+rotation exercise described in the Secrets section.

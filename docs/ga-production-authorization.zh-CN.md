@@ -136,9 +136,64 @@ python backend/scripts/collect_ga_target_ha.py \
    rebalance Pod→node→zone 原始快照、全部 drained node、每次 HTTPS 状态码、cleanup
    结果，并内容寻址地绑定网络证据和 Operations 签名的状态服务回执。旧 v1、仅有
    YAML 的声明、手填 Pod 名称或清理不完整的报告都会被门禁拒绝。
-7. 按 `ops/ga/secrets-evidence.example.json` 在目标环境实际轮换每类生产
-   credential。验证旧 credential 被拒绝、工作负载重新加载、审计事件落盘，且
-   证据只记录 secret 类别，绝不能包含 secret/token/password 值。
+7. 使用 `collect_ga_target_secrets.py` 在目标 Kubernetes 环境采集
+   `duckdock-ga-secrets-evidence-v2`，不能手填 PASS 模板。先由发布机构从
+   `ops/ga/secrets-trust-policy.example.json` 建立只读、内容寻址的信任策略；策略
+   固定批准的 Secret Manager、`application-signing`/`database`/`object-store`
+   三类 secret、`backend`/`worker`/`beat` 三个消费者，以及互不重叠的 provider
+   和独立 verifier 精确身份。allowed-signers 禁止通配 principal 和公钥复用。
+
+   采集器启动前四个 receipt/signature 路径必须不存在。它先通过 Kubernetes
+   JSONPath 读取 `duckdock-runtime-secrets`、Deployment 和 Pod 的元数据；不会读取
+   Secret `data`，也没有任何接收 credential 值的参数。外部 Secret Manager 完成
+   每类版本轮换、停用旧版本和审计落盘后，写入
+   `duckdock-ga-secret-rotation-receipt-v1`，再由 provider 服务身份签名。独立验证
+   系统实际以旧版本和新版本做正反向认证探测，写入
+   `duckdock-ga-secret-verification-receipt-v1`，证明旧版本拒绝、新版本可用，并由
+   不同身份/密钥签名：
+
+```bash
+ssh-keygen -Y sign \
+  -f /release-authority/secret-provider-key \
+  -n duckdock-secret-rotation-receipt \
+  /secure/evidence/secret-rotation.json
+
+ssh-keygen -Y sign \
+  -f /release-authority/secret-verifier-key \
+  -n duckdock-secret-verification-receipt \
+  /secure/evidence/secret-verification.json
+```
+
+   两份签名出现后，采集器等待 Secret `resourceVersion` 变化、三个 Deployment
+   generation 前进且恢复全量 ready/updated/available，并证明 before/after Pod UID
+   完全不重叠：
+
+```bash
+python backend/scripts/collect_ga_target_secrets.py \
+  --context customer-production-admin \
+  --namespace duckdock \
+  --target-environment customer-production \
+  --acknowledge-target-rotation customer-production \
+  --source-commit "$DUCKDOCK_GA_SOURCE_COMMIT" \
+  --backend-image "$DUCKDOCK_GA_BACKEND_IMAGE" \
+  --frontend-image "$DUCKDOCK_GA_FRONTEND_IMAGE" \
+  --provider "External Secrets" \
+  --secret-name duckdock-runtime-secrets \
+  --exercise-id ga-secrets-20260806 \
+  --secrets-policy /release-authority/duckdock-secrets-policy.json \
+  --provider-signer-identity secret-provider@example.com \
+  --verifier-signer-identity secret-verifier@example.com \
+  --rotation-receipt /secure/evidence/secret-rotation.json \
+  --rotation-signature /secure/evidence/secret-rotation.json.sig \
+  --verification-receipt /secure/evidence/secret-verification.json \
+  --verification-signature /secure/evidence/secret-verification.json.sig \
+  --output /secure/evidence/target-secrets.json
+```
+
+   生产授权器会重新读取策略、信任库、两份原始 JSON 和签名，重算 Kubernetes
+   before/after 差异及时间线；旧 v1、自报布尔值、预先存在的 receipt、provider
+   代替 verifier 签名、未滚动 Pod 或包含 secret/token/password 值都不能通过。
+   opaque version/receipt/audit ID 只用于关联外部系统，不得放入任何 credential 值。
 8. 使用 `collect_ga_target_network.py` 采集 `duckdock-ga-network-evidence-v2`，不能
    手填 PASS 模板。执行机必须位于目标网络之外，同时具备目标集群只读
    NetworkPolicy/CNI DaemonSet 与三类 probe Pod `exec` 权限，并已安装 `nmap`。

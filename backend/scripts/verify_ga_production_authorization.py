@@ -33,6 +33,14 @@ ALERT_DELIVERY_SCHEMA_VERSION = "duckdock-ga-alert-delivery-receipt-v1"
 ONCALL_ACK_SCHEMA_VERSION = "duckdock-ga-oncall-acknowledgement-v1"
 ALERT_DELIVERY_SIGNATURE_NAMESPACE = "duckdock-alert-delivery-receipt"
 ONCALL_ACK_SIGNATURE_NAMESPACE = "duckdock-oncall-acknowledgement"
+SECRETS_SCHEMA_VERSION = "duckdock-ga-secrets-evidence-v2"
+SECRETS_POLICY_SCHEMA_VERSION = "duckdock-ga-secrets-trust-policy-v1"
+SECRET_ROTATION_SCHEMA_VERSION = "duckdock-ga-secret-rotation-receipt-v1"
+SECRET_VERIFICATION_SCHEMA_VERSION = "duckdock-ga-secret-verification-receipt-v1"
+SECRET_ROTATION_SIGNATURE_NAMESPACE = "duckdock-secret-rotation-receipt"
+SECRET_VERIFICATION_SIGNATURE_NAMESPACE = "duckdock-secret-verification-receipt"
+SECRET_WORKLOAD_COMPONENTS = ("backend", "worker", "beat")
+REQUIRED_SECRET_CLASSES = ("application-signing", "database", "object-store")
 REQUIRED_CONTROLS = {
     "application_readiness",
     "tls",
@@ -262,6 +270,9 @@ def _report_release_target_binding(
 
 def _contains_secret_material_key(value: Any) -> bool:
     forbidden = {
+        "access_key",
+        "api_key",
+        "client_secret",
         "credential",
         "credential_value",
         "password",
@@ -920,7 +931,7 @@ def _alerting_policy_context(
     return valid, policy, policy_trust_path, delivery_identities, selected_oncall, detail
 
 
-def _verified_alerting_receipt(
+def _verified_embedded_receipt(
     embedded: Any,
     *,
     authorization_path: Path,
@@ -981,6 +992,449 @@ def _verified_alerting_receipt(
             f"path={path or 'missing'}, digest={actual_digest}, signer={identity or 'missing'}, "
             f"projection={projection_ok}, signature={signature_detail}"
         ),
+    )
+
+
+def _secrets_policy_context(
+    reference: Any,
+    *,
+    authorization_path: Path,
+    provider: Any,
+) -> tuple[bool, Path | None, set[str], set[str], str]:
+    if not isinstance(reference, dict):
+        return False, None, set(), set(), "missing secrets trust policy reference"
+    policy_path = _resolve_file(reference.get("path"), authorization_path)
+    trust_path_from_reference = _resolve_file(
+        reference.get("allowed_signers_path"), authorization_path
+    )
+    policy: dict[str, Any] = {}
+    if policy_path is not None and policy_path.is_file():
+        try:
+            loaded = json.loads(policy_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            loaded = None
+        if isinstance(loaded, dict):
+            policy = loaded
+    expected_policy_keys = {
+        "schema_version",
+        "policy_id",
+        "organization",
+        "allowed_signers_path",
+        "allowed_signers_sha256",
+        "approved_providers",
+        "provider_identities",
+        "verifier_identities",
+        "required_secret_classes",
+        "workload_components",
+    }
+    expected_reference_keys = {
+        "path",
+        "sha256",
+        "policy_id",
+        "allowed_signers_path",
+        "allowed_signers_sha256",
+    }
+
+    def exact_identity_set(value: Any) -> set[str]:
+        if not (
+            isinstance(value, list)
+            and bool(value)
+            and all(_meaningful_string(item) for item in value)
+            and len(value) == len(set(value))
+        ):
+            return set()
+        return {str(item) for item in value}
+
+    provider_identities = exact_identity_set(policy.get("provider_identities"))
+    verifier_identities = exact_identity_set(policy.get("verifier_identities"))
+    providers = policy.get("approved_providers")
+    providers_valid = (
+        isinstance(providers, list)
+        and bool(providers)
+        and all(_meaningful_string(item) for item in providers)
+        and len(providers) == len(set(providers))
+        and provider in providers
+    )
+    policy_digest = (
+        _sha256(policy_path) if policy_path is not None and policy_path.is_file() else "missing"
+    )
+    policy_trust_path = (
+        _resolve_file(policy.get("allowed_signers_path"), policy_path)
+        if policy_path is not None
+        else None
+    )
+    trust_digest = (
+        _sha256(policy_trust_path)
+        if policy_trust_path is not None and policy_trust_path.is_file()
+        else "missing"
+    )
+    signer_bindings: dict[str, set[str]] | None = None
+    signer_detail = "missing trust store"
+    if policy_trust_path is not None and policy_trust_path.is_file():
+        signer_bindings, signer_detail = _allowed_signer_bindings(policy_trust_path)
+    configured_identities = provider_identities.union(verifier_identities)
+    valid = (
+        set(reference) == expected_reference_keys
+        and bool(DIGEST_RE.fullmatch(str(reference.get("sha256", ""))))
+        and policy_digest == reference.get("sha256")
+        and set(policy) == expected_policy_keys
+        and policy.get("schema_version") == SECRETS_POLICY_SCHEMA_VERSION
+        and _meaningful_string(policy.get("policy_id"))
+        and policy.get("policy_id") == reference.get("policy_id")
+        and _meaningful_string(policy.get("organization"))
+        and providers_valid
+        and bool(provider_identities)
+        and bool(verifier_identities)
+        and not provider_identities.intersection(verifier_identities)
+        and policy.get("required_secret_classes") == list(REQUIRED_SECRET_CLASSES)
+        and policy.get("workload_components") == list(SECRET_WORKLOAD_COMPONENTS)
+        and policy_trust_path is not None
+        and trust_path_from_reference == policy_trust_path
+        and bool(DIGEST_RE.fullmatch(str(reference.get("allowed_signers_sha256", ""))))
+        and trust_digest == reference.get("allowed_signers_sha256")
+        and trust_digest == policy.get("allowed_signers_sha256")
+        and signer_bindings is not None
+        and set(signer_bindings) == configured_identities
+    )
+    detail = (
+        f"policy={policy_path or 'missing'}, digest={policy_digest}, "
+        f"trust={policy_trust_path or 'missing'}, trust_digest={trust_digest}, {signer_detail}"
+    )
+    return (
+        valid,
+        policy_trust_path,
+        provider_identities,
+        verifier_identities,
+        detail,
+    )
+
+
+def _secret_class_rows_valid(value: Any, *, verification: bool) -> bool:
+    if not isinstance(value, list) or len(value) != len(REQUIRED_SECRET_CLASSES):
+        return False
+    if [item.get("name") for item in value if isinstance(item, dict)] != list(
+        REQUIRED_SECRET_CLASSES
+    ):
+        return False
+    receipt_ids: list[str] = []
+    audit_event_ids: list[str] = []
+    for item in value:
+        if not isinstance(item, dict) or _contains_secret_material_key(item):
+            return False
+        if verification:
+            if set(item) != {
+                "name",
+                "probe_receipt_id",
+                "tested_at",
+                "previous_version_rejected",
+                "new_version_accepted",
+                "audit_event_id",
+            }:
+                return False
+            receipt_id = item.get("probe_receipt_id")
+            audit_event_id = item.get("audit_event_id")
+            if not (
+                _meaningful_string(receipt_id)
+                and _meaningful_string(audit_event_id)
+                and _parse_time(item.get("tested_at")) is not None
+                and item.get("previous_version_rejected") is True
+                and item.get("new_version_accepted") is True
+            ):
+                return False
+        else:
+            if set(item) != {
+                "name",
+                "previous_version_id",
+                "new_version_id",
+                "provider_receipt_id",
+                "audit_event_id",
+                "rotated_at",
+                "old_version_disabled_at",
+            }:
+                return False
+            receipt_id = item.get("provider_receipt_id")
+            audit_event_id = item.get("audit_event_id")
+            previous = item.get("previous_version_id")
+            current = item.get("new_version_id")
+            rotated = _parse_time(item.get("rotated_at"))
+            disabled = _parse_time(item.get("old_version_disabled_at"))
+            if not (
+                _meaningful_string(receipt_id)
+                and _meaningful_string(previous)
+                and _meaningful_string(current)
+                and previous != current
+                and _meaningful_string(audit_event_id)
+                and rotated is not None
+                and disabled is not None
+                and rotated <= disabled
+            ):
+                return False
+        receipt_ids.append(str(receipt_id))
+        audit_event_ids.append(str(audit_event_id))
+    return len(receipt_ids) == len(set(receipt_ids)) and len(audit_event_ids) == len(
+        set(audit_event_ids)
+    )
+
+
+def _secret_rotation_receipt_valid(
+    value: Any,
+    *,
+    exercise_id: Any,
+    target_environment: Any,
+    provider: Any,
+    secret_name: Any,
+) -> bool:
+    expected_keys = {
+        "schema_version",
+        "exercise_id",
+        "target_environment",
+        "provider",
+        "secret_name",
+        "started_at",
+        "completed_at",
+        "encrypted_at_rest",
+        "access_audit_enabled",
+        "credentials_external_to_evidence",
+        "secret_classes",
+    }
+    if not isinstance(value, dict):
+        return False
+    started = _parse_time(value.get("started_at"))
+    completed = _parse_time(value.get("completed_at"))
+    rows = value.get("secret_classes")
+    row_times = [
+        parsed
+        for item in rows or []
+        if isinstance(item, dict)
+        for parsed in (
+            _parse_time(item.get("rotated_at")),
+            _parse_time(item.get("old_version_disabled_at")),
+        )
+    ]
+    return (
+        set(value) == expected_keys
+        and value.get("schema_version") == SECRET_ROTATION_SCHEMA_VERSION
+        and value.get("exercise_id") == exercise_id
+        and value.get("target_environment") == target_environment
+        and value.get("provider") == provider
+        and value.get("secret_name") == secret_name
+        and value.get("encrypted_at_rest") is True
+        and value.get("access_audit_enabled") is True
+        and value.get("credentials_external_to_evidence") is True
+        and started is not None
+        and completed is not None
+        and started <= completed
+        and _secret_class_rows_valid(rows, verification=False)
+        and len(row_times) == len(REQUIRED_SECRET_CLASSES) * 2
+        and all(parsed is not None and started <= parsed <= completed for parsed in row_times)
+        and not _contains_secret_material_key(value)
+    )
+
+
+def _secret_verification_receipt_valid(
+    value: Any,
+    *,
+    exercise_id: Any,
+    target_environment: Any,
+    secret_name: Any,
+) -> bool:
+    expected_keys = {
+        "schema_version",
+        "exercise_id",
+        "target_environment",
+        "secret_name",
+        "started_at",
+        "completed_at",
+        "secret_classes",
+        "all_passed",
+    }
+    if not isinstance(value, dict):
+        return False
+    started = _parse_time(value.get("started_at"))
+    completed = _parse_time(value.get("completed_at"))
+    rows = value.get("secret_classes")
+    tested = [
+        _parse_time(item.get("tested_at"))
+        for item in rows or []
+        if isinstance(item, dict)
+    ]
+    return (
+        set(value) == expected_keys
+        and value.get("schema_version") == SECRET_VERIFICATION_SCHEMA_VERSION
+        and value.get("exercise_id") == exercise_id
+        and value.get("target_environment") == target_environment
+        and value.get("secret_name") == secret_name
+        and value.get("all_passed") is True
+        and started is not None
+        and completed is not None
+        and started <= completed
+        and _secret_class_rows_valid(rows, verification=True)
+        and len(tested) == len(REQUIRED_SECRET_CLASSES)
+        and all(parsed is not None and started <= parsed <= completed for parsed in tested)
+        and not _contains_secret_material_key(value)
+    )
+
+
+def _secret_deployment_valid(value: Any, *, name: str) -> bool:
+    expected_keys = {
+        "name",
+        "uid",
+        "resource_version",
+        "generation",
+        "desired_replicas",
+        "observed_generation",
+        "updated_replicas",
+        "ready_replicas",
+        "available_replicas",
+    }
+    if not isinstance(value, dict) or set(value) != expected_keys:
+        return False
+    desired = value.get("desired_replicas")
+    generation = value.get("generation")
+    return (
+        value.get("name") == name
+        and _meaningful_string(value.get("uid"))
+        and _meaningful_string(value.get("resource_version"))
+        and isinstance(generation, int)
+        and not isinstance(generation, bool)
+        and generation >= 1
+        and isinstance(desired, int)
+        and not isinstance(desired, bool)
+        and desired >= 1
+        and value.get("observed_generation") == generation
+        and value.get("updated_replicas") == desired
+        and value.get("ready_replicas") == desired
+        and value.get("available_replicas") == desired
+    )
+
+
+def _secret_pods_valid(value: Any, *, desired: int) -> bool:
+    expected_keys = {
+        "name",
+        "uid",
+        "resource_version",
+        "creation_timestamp",
+        "deletion_timestamp",
+        "phase",
+        "ready",
+    }
+    return (
+        isinstance(value, list)
+        and len(value) == desired
+        and all(
+            isinstance(item, dict)
+            and set(item) == expected_keys
+            and _meaningful_string(item.get("name"))
+            and _meaningful_string(item.get("uid"))
+            and _meaningful_string(item.get("resource_version"))
+            and _parse_time(item.get("creation_timestamp")) is not None
+            and item.get("deletion_timestamp") is None
+            and item.get("phase") == "Running"
+            and item.get("ready") is True
+            for item in value
+        )
+        and len({item["name"] for item in value}) == len(value)
+        and len({item["uid"] for item in value}) == len(value)
+    )
+
+
+def _secret_kubernetes_snapshot_valid(value: Any) -> bool:
+    if not isinstance(value, dict) or set(value) != {"captured_at", "secret", "workloads"}:
+        return False
+    secret = value.get("secret")
+    workloads = value.get("workloads")
+    if not (
+        _parse_time(value.get("captured_at")) is not None
+        and isinstance(secret, dict)
+        and set(secret) == {"name", "uid", "resource_version", "creation_timestamp"}
+        and _meaningful_string(secret.get("name"))
+        and _meaningful_string(secret.get("uid"))
+        and _meaningful_string(secret.get("resource_version"))
+        and _parse_time(secret.get("creation_timestamp")) is not None
+        and isinstance(workloads, dict)
+        and set(workloads) == set(SECRET_WORKLOAD_COMPONENTS)
+    ):
+        return False
+    for component in SECRET_WORKLOAD_COMPONENTS:
+        workload = workloads[component]
+        if not isinstance(workload, dict) or set(workload) != {"deployment", "pods"}:
+            return False
+        deployment = workload.get("deployment")
+        if not _secret_deployment_valid(deployment, name=component):
+            return False
+        if not _secret_pods_valid(
+            workload.get("pods"), desired=deployment["desired_replicas"]
+        ):
+            return False
+    return True
+
+
+def _secret_kubernetes_rotation_valid(value: Any, *, secret_name: Any) -> bool:
+    if not isinstance(value, dict) or set(value) != {
+        "metadata_only",
+        "secret_data_read",
+        "before",
+        "after",
+        "verification",
+    }:
+        return False
+    before = value.get("before")
+    after = value.get("after")
+    verification = value.get("verification")
+    if not (
+        value.get("metadata_only") is True
+        and value.get("secret_data_read") is False
+        and _secret_kubernetes_snapshot_valid(before)
+        and _secret_kubernetes_snapshot_valid(after)
+        and isinstance(verification, dict)
+        and set(verification)
+        == {"secret_uid_unchanged", "secret_resource_version_changed", "components"}
+        and _parse_time(before["captured_at"]) <= _parse_time(after["captured_at"])
+    ):
+        return False
+    before_secret = before["secret"]
+    after_secret = after["secret"]
+    secret_uid_unchanged = (
+        before_secret["name"] == secret_name
+        and after_secret["name"] == secret_name
+        and before_secret["uid"] == after_secret["uid"]
+        and before_secret["creation_timestamp"] == after_secret["creation_timestamp"]
+    )
+    resource_version_changed = (
+        before_secret["resource_version"] != after_secret["resource_version"]
+    )
+    components = verification.get("components")
+    if not isinstance(components, dict) or set(components) != set(SECRET_WORKLOAD_COMPONENTS):
+        return False
+    for component in SECRET_WORKLOAD_COMPONENTS:
+        old_workload = before["workloads"][component]
+        new_workload = after["workloads"][component]
+        old_deployment = old_workload["deployment"]
+        new_deployment = new_workload["deployment"]
+        old_uids = {item["uid"] for item in old_workload["pods"]}
+        new_uids = {item["uid"] for item in new_workload["pods"]}
+        expected = {
+            "deployment_uid_unchanged": old_deployment["uid"] == new_deployment["uid"],
+            "deployment_generation_advanced": new_deployment["generation"]
+            > old_deployment["generation"],
+            "all_old_pods_replaced": bool(old_uids)
+            and bool(new_uids)
+            and old_uids.isdisjoint(new_uids),
+            "fully_ready": True,
+        }
+        if (
+            not isinstance(components[component], dict)
+            or components[component] != expected
+            or new_deployment["resource_version"] == old_deployment["resource_version"]
+            or not all(expected.values())
+        ):
+            return False
+    return (
+        verification.get("secret_uid_unchanged") is secret_uid_unchanged
+        and verification.get("secret_resource_version_changed")
+        is resource_version_changed
+        and secret_uid_unchanged
+        and resource_version_changed
     )
 
 
@@ -1557,10 +2011,130 @@ def evaluate(
         else {}
     )
     secret_classes = secret_rotation.get("secret_classes")
+    secrets_policy_ok, secrets_trust_store, provider_identities, verifier_identities, secrets_policy_detail = (
+        _secrets_policy_context(
+            secrets_report.get("secrets_policy") if isinstance(secrets_report, dict) else None,
+            authorization_path=authorization_path,
+            provider=secrets.get("provider"),
+        )
+    )
+    rotation_embedded = (
+        secrets_report.get("rotation_receipt") if isinstance(secrets_report, dict) else None
+    )
+    verification_embedded = (
+        secrets_report.get("verification_receipt") if isinstance(secrets_report, dict) else None
+    )
+    rotation_signature_ok, rotation_receipt, rotation_signature_detail = (
+        _verified_embedded_receipt(
+            rotation_embedded,
+            authorization_path=authorization_path,
+            allowed_signers=secrets_trust_store,
+            allowed_identities=provider_identities,
+            namespace=SECRET_ROTATION_SIGNATURE_NAMESPACE,
+        )
+    )
+    verification_signature_ok, verification_receipt, verification_signature_detail = (
+        _verified_embedded_receipt(
+            verification_embedded,
+            authorization_path=authorization_path,
+            allowed_signers=secrets_trust_store,
+            allowed_identities=verifier_identities,
+            namespace=SECRET_VERIFICATION_SIGNATURE_NAMESPACE,
+        )
+    )
+    exercise_id = secret_rotation.get("exercise_id")
+    secret_name = secret_rotation.get("secret_name")
+    rotation_receipt_valid = _secret_rotation_receipt_valid(
+        rotation_receipt,
+        exercise_id=exercise_id,
+        target_environment=target.get("target_id"),
+        provider=secrets.get("provider"),
+        secret_name=secret_name,
+    )
+    verification_receipt_valid = _secret_verification_receipt_valid(
+        verification_receipt,
+        exercise_id=exercise_id,
+        target_environment=target.get("target_id"),
+        secret_name=secret_name,
+    )
+    rotation_signer = (
+        rotation_embedded.get("signed_evidence", {}).get("signer_identity")
+        if isinstance(rotation_embedded, dict)
+        and isinstance(rotation_embedded.get("signed_evidence"), dict)
+        else None
+    )
+    verification_signer = (
+        verification_embedded.get("signed_evidence", {}).get("signer_identity")
+        if isinstance(verification_embedded, dict)
+        and isinstance(verification_embedded.get("signed_evidence"), dict)
+        else None
+    )
+    report_observed = (
+        _parse_time(secrets_report.get("observed_at")) if isinstance(secrets_report, dict) else None
+    )
+    exercise_started = _parse_time(secret_rotation.get("started_at"))
+    exercise_completed = _parse_time(secret_rotation.get("completed_at"))
+    provider_started = (
+        _parse_time(rotation_receipt.get("started_at"))
+        if isinstance(rotation_receipt, dict)
+        else None
+    )
+    provider_completed = (
+        _parse_time(rotation_receipt.get("completed_at"))
+        if isinstance(rotation_receipt, dict)
+        else None
+    )
+    verifier_started = (
+        _parse_time(verification_receipt.get("started_at"))
+        if isinstance(verification_receipt, dict)
+        else None
+    )
+    verifier_completed = (
+        _parse_time(verification_receipt.get("completed_at"))
+        if isinstance(verification_receipt, dict)
+        else None
+    )
+    kubernetes_observation = (
+        secrets_report.get("kubernetes_observation")
+        if isinstance(secrets_report, dict)
+        else None
+    )
+    before_captured = (
+        _parse_time(kubernetes_observation.get("before", {}).get("captured_at"))
+        if isinstance(kubernetes_observation, dict)
+        and isinstance(kubernetes_observation.get("before"), dict)
+        else None
+    )
+    after_captured = (
+        _parse_time(kubernetes_observation.get("after", {}).get("captured_at"))
+        if isinstance(kubernetes_observation, dict)
+        and isinstance(kubernetes_observation.get("after"), dict)
+        else None
+    )
+    secrets_timeline = (
+        all(
+            value is not None
+            for value in (
+                before_captured,
+                exercise_started,
+                provider_started,
+                provider_completed,
+                verifier_started,
+                verifier_completed,
+                after_captured,
+                exercise_completed,
+                report_observed,
+            )
+        )
+        and before_captured <= exercise_started
+        and exercise_started - timedelta(minutes=5) <= provider_started
+        and provider_started <= provider_completed <= verifier_started <= verifier_completed
+        and verifier_completed <= after_captured <= exercise_completed <= report_observed
+    )
     secrets_report_matches = (
         _report_release_target_binding(
             secrets_report,
-            schema_version="duckdock-ga-secrets-evidence-v1",
+            schema_version=SECRETS_SCHEMA_VERSION,
             status="PASS",
             control=secrets,
             target=target,
@@ -1572,19 +2146,46 @@ def evaluate(
         and secret_store.get("encrypted_at_rest") is True
         and secret_store.get("access_audit_enabled") is True
         and secret_store.get("credentials_external_to_evidence") is True
-        and secret_rotation.get("executed") is True
+        and set(secret_store)
+        == {"encrypted_at_rest", "access_audit_enabled", "credentials_external_to_evidence"}
+        and set(secret_rotation)
+        == {
+            "exercise_id",
+            "secret_name",
+            "secret_classes",
+            "started_at",
+            "completed_at",
+            "old_credentials_rejected",
+            "new_credentials_accepted",
+            "workloads_reloaded",
+            "audit_event_recorded",
+        }
+        and _meaningful_string(exercise_id)
+        and _meaningful_string(secret_name)
         and secret_rotation.get("old_credentials_rejected") is True
+        and secret_rotation.get("new_credentials_accepted") is True
         and secret_rotation.get("workloads_reloaded") is True
         and secret_rotation.get("audit_event_recorded") is True
         and not _contains_secret_material_key(secrets_report)
-        and isinstance(secret_classes, list)
-        and bool(secret_classes)
-        and all(_meaningful_string(item) for item in secret_classes)
-        and _ordered_report_times(
-            secret_rotation.get("started_at"),
-            secret_rotation.get("completed_at"),
-            no_later_than=_control_observed_at(secrets),
+        and secret_classes == list(REQUIRED_SECRET_CLASSES)
+        and secrets_policy_ok
+        and rotation_signature_ok
+        and verification_signature_ok
+        and rotation_signer != verification_signer
+        and rotation_receipt_valid
+        and verification_receipt_valid
+        and isinstance(rotation_receipt, dict)
+        and secret_store.get("encrypted_at_rest")
+        is rotation_receipt.get("encrypted_at_rest")
+        and secret_store.get("access_audit_enabled")
+        is rotation_receipt.get("access_audit_enabled")
+        and secret_store.get("credentials_external_to_evidence")
+        is rotation_receipt.get("credentials_external_to_evidence")
+        and _secret_kubernetes_rotation_valid(
+            kubernetes_observation,
+            secret_name=secret_name,
         )
+        and secrets_timeline
     )
     secrets_ok = (
         secrets.get("status") == "PASS"
@@ -1599,7 +2200,12 @@ def evaluate(
         passed=secrets_ok,
         observed=f"status={secrets.get('status')}, provider={secrets.get('provider')}, rotation={secrets.get('rotation_tested')}",
         expected="approved secret manager; no persisted plaintext env; rotation tested",
-        detail="The target report must bind the release and prove audited encrypted storage, credential rejection and workload reload without retaining secret values.",
+        detail=(
+            "The target collector must retain metadata-only Kubernetes before/after snapshots and "
+            "separately signed provider/verifier receipts without credential values. "
+            f"policy=({secrets_policy_detail}); rotation=({rotation_signature_detail}); "
+            f"verification=({verification_signature_detail})"
+        ),
     )
 
     network = controls["network"]
@@ -1850,21 +2456,21 @@ def evaluate(
     acknowledgement_embedded = (
         alerting_report.get("oncall_acknowledgement") if isinstance(alerting_report, dict) else None
     )
-    firing_signature_ok, firing_receipt, firing_signature_detail = _verified_alerting_receipt(
+    firing_signature_ok, firing_receipt, firing_signature_detail = _verified_embedded_receipt(
         firing_embedded,
         authorization_path=authorization_path,
         allowed_signers=alerting_trust_store,
         allowed_identities=delivery_identities,
         namespace=ALERT_DELIVERY_SIGNATURE_NAMESPACE,
     )
-    resolved_signature_ok, resolved_receipt, resolved_signature_detail = _verified_alerting_receipt(
+    resolved_signature_ok, resolved_receipt, resolved_signature_detail = _verified_embedded_receipt(
         resolved_embedded,
         authorization_path=authorization_path,
         allowed_signers=alerting_trust_store,
         allowed_identities=delivery_identities,
         namespace=ALERT_DELIVERY_SIGNATURE_NAMESPACE,
     )
-    acknowledgement_signature_ok, acknowledgement, acknowledgement_signature_detail = _verified_alerting_receipt(
+    acknowledgement_signature_ok, acknowledgement, acknowledgement_signature_detail = _verified_embedded_receipt(
         acknowledgement_embedded,
         authorization_path=authorization_path,
         allowed_signers=alerting_trust_store,

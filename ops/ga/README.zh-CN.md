@@ -21,7 +21,14 @@ python backend/scripts/verify_ga_production_authorization.py \
 `backend/scripts/collect_ga_target_readiness.py` 通过目标 HTTPS 采集；TLS、网络、容量
 和 HA 使用各自工具输出。以下模板定义了其余必须由目标执行结果填充的版本化协议：
 
-- `secrets-evidence.example.json`：secret store 与真实轮换结果；
+- `secrets-evidence.example.json`：`collect_ga_target_secrets.py` 输出的目标轮换 v2
+  结构；只采集 Secret/Deployment/Pod 元数据，绑定 provider 与独立 verifier 的两份
+  原始 OpenSSH 签名回执，禁止手填；
+- `secrets-trust-policy.example.json`：批准的 Secret Manager、provider/verifier 精确
+  身份、必测 secret 类别和工作负载；两类身份与公钥不得复用；
+- `secret-rotation-receipt.example.json`、`secret-verification-receipt.example.json`：
+  provider 证明版本轮换/停用/审计，独立 verifier 证明旧版本拒绝和新版本可用；
+  只能记录 opaque version/receipt/audit ID，绝不能记录凭证值；
 - `network-evidence.example.json`：`collect_ga_target_network.py` 输出的 v2 结构示例；
   执行器从已确认的集群外视角做 nmap 全端口/数据端口扫描，并保留 CNI、探针身份、
   完整 NetworkPolicy 与 ingress/egress 正反向连接原始结果；禁止手填；

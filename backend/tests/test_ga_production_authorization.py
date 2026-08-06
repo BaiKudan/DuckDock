@@ -18,7 +18,15 @@ from scripts.verify_ga_production_authorization import (
     ONCALL_ACK_SCHEMA_VERSION,
     ONCALL_ACK_SIGNATURE_NAMESPACE,
     REQUIRED_APPROVAL_ROLES,
+    REQUIRED_SECRET_CLASSES,
     SCHEMA_VERSION,
+    SECRETS_POLICY_SCHEMA_VERSION,
+    SECRETS_SCHEMA_VERSION,
+    SECRET_ROTATION_SCHEMA_VERSION,
+    SECRET_ROTATION_SIGNATURE_NAMESPACE,
+    SECRET_VERIFICATION_SCHEMA_VERSION,
+    SECRET_VERIFICATION_SIGNATURE_NAMESPACE,
+    SECRET_WORKLOAD_COMPONENTS,
     _approval_statement,
     _release_digest,
     _verify_ssh_signature,
@@ -381,7 +389,203 @@ def _document(tmp_path: Path, now: datetime) -> dict:
             },
         }
 
-    secrets_report = target_report("duckdock-ga-secrets-evidence-v1")
+    secret_provider_identity = "secret-provider@example.com"
+    secret_verifier_identity = "secret-verifier@example.com"
+    secret_provider_key = tmp_path / "secret_provider_key"
+    secret_verifier_key = tmp_path / "secret_verifier_key"
+    for key in (secret_provider_key, secret_verifier_key):
+        subprocess.run(
+            ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)],
+            check=True,
+        )
+    secrets_allowed_signers = tmp_path / "secrets_allowed_signers"
+    secrets_allowed_signers.write_text(
+        (
+            f"{secret_provider_identity} "
+            f"{secret_provider_key.with_suffix('.pub').read_text(encoding='utf-8').strip()}\n"
+            f"{secret_verifier_identity} "
+            f"{secret_verifier_key.with_suffix('.pub').read_text(encoding='utf-8').strip()}\n"
+        ),
+        encoding="utf-8",
+    )
+    secrets_policy_path = tmp_path / "secrets-policy.json"
+    secrets_policy = {
+        "schema_version": SECRETS_POLICY_SCHEMA_VERSION,
+        "policy_id": "duckdock-target-secrets-authority",
+        "organization": "DuckDock Test Security",
+        "allowed_signers_path": str(secrets_allowed_signers),
+        "allowed_signers_sha256": hashlib.sha256(
+            secrets_allowed_signers.read_bytes()
+        ).hexdigest(),
+        "approved_providers": ["External Secrets"],
+        "provider_identities": [secret_provider_identity],
+        "verifier_identities": [secret_verifier_identity],
+        "required_secret_classes": list(REQUIRED_SECRET_CLASSES),
+        "workload_components": list(SECRET_WORKLOAD_COMPONENTS),
+    }
+    secrets_policy_path.write_text(
+        json.dumps(secrets_policy, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    secret_exercise_id = "ga-secrets-20260806"
+    secret_name = "duckdock-runtime-secrets"
+    secret_before_at = now - timedelta(minutes=20)
+    secret_exercise_started = now - timedelta(minutes=19)
+    provider_started = now - timedelta(minutes=19)
+    provider_rotated = now - timedelta(minutes=18)
+    provider_completed = now - timedelta(minutes=17)
+    verifier_started = now - timedelta(minutes=16)
+    verifier_completed = now - timedelta(minutes=15)
+    secret_after_at = now - timedelta(minutes=14)
+    secret_exercise_completed = now - timedelta(minutes=13)
+
+    def signed_secret_receipt(
+        filename: str,
+        payload: dict,
+        key: Path,
+        namespace: str,
+        identity: str,
+    ) -> dict:
+        path = tmp_path / filename
+        path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+        subprocess.run(
+            [
+                "ssh-keygen",
+                "-q",
+                "-Y",
+                "sign",
+                "-f",
+                str(key),
+                "-n",
+                namespace,
+                str(path),
+            ],
+            check=True,
+        )
+        return {
+            **payload,
+            "signed_evidence": {
+                "path": str(path),
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "signature_path": f"{path}.sig",
+                "signer_identity": identity,
+            },
+        }
+
+    rotation_receipt = signed_secret_receipt(
+        "secret-rotation-receipt.json",
+        {
+            "schema_version": SECRET_ROTATION_SCHEMA_VERSION,
+            "exercise_id": secret_exercise_id,
+            "target_environment": "customer-production",
+            "provider": "External Secrets",
+            "secret_name": secret_name,
+            "started_at": provider_started.isoformat(),
+            "completed_at": provider_completed.isoformat(),
+            "encrypted_at_rest": True,
+            "access_audit_enabled": True,
+            "credentials_external_to_evidence": True,
+            "secret_classes": [
+                {
+                    "name": name,
+                    "previous_version_id": f"{name}-version-41",
+                    "new_version_id": f"{name}-version-42",
+                    "provider_receipt_id": f"provider-{name}-42",
+                    "audit_event_id": f"audit-rotate-{name}-42",
+                    "rotated_at": provider_rotated.isoformat(),
+                    "old_version_disabled_at": provider_completed.isoformat(),
+                }
+                for name in REQUIRED_SECRET_CLASSES
+            ],
+        },
+        secret_provider_key,
+        SECRET_ROTATION_SIGNATURE_NAMESPACE,
+        secret_provider_identity,
+    )
+    verification_receipt = signed_secret_receipt(
+        "secret-verification-receipt.json",
+        {
+            "schema_version": SECRET_VERIFICATION_SCHEMA_VERSION,
+            "exercise_id": secret_exercise_id,
+            "target_environment": "customer-production",
+            "secret_name": secret_name,
+            "started_at": verifier_started.isoformat(),
+            "completed_at": verifier_completed.isoformat(),
+            "all_passed": True,
+            "secret_classes": [
+                {
+                    "name": name,
+                    "probe_receipt_id": f"probe-{name}-42",
+                    "tested_at": verifier_completed.isoformat(),
+                    "previous_version_rejected": True,
+                    "new_version_accepted": True,
+                    "audit_event_id": f"audit-probe-{name}-42",
+                }
+                for name in REQUIRED_SECRET_CLASSES
+            ],
+        },
+        secret_verifier_key,
+        SECRET_VERIFICATION_SIGNATURE_NAMESPACE,
+        secret_verifier_identity,
+    )
+
+    def secret_snapshot(*, after: bool) -> dict:
+        captured_at = secret_after_at if after else secret_before_at
+        generation = 5 if after else 4
+        resource_version = "25" if after else "20"
+        revision = "new" if after else "old"
+        replicas = {"backend": 3, "worker": 3, "beat": 1}
+        return {
+            "captured_at": captured_at.isoformat(),
+            "secret": {
+                "name": secret_name,
+                "uid": "uid-runtime-secrets",
+                "resource_version": "11" if after else "10",
+                "creation_timestamp": "2026-08-01T00:00:00Z",
+            },
+            "workloads": {
+                component: {
+                    "deployment": {
+                        "name": component,
+                        "uid": f"uid-deployment-{component}",
+                        "resource_version": resource_version,
+                        "generation": generation,
+                        "desired_replicas": replicas[component],
+                        "observed_generation": generation,
+                        "updated_replicas": replicas[component],
+                        "ready_replicas": replicas[component],
+                        "available_replicas": replicas[component],
+                    },
+                    "pods": [
+                        {
+                            "name": f"{component}-{revision}-{index}",
+                            "uid": f"uid-{component}-{revision}-{index}",
+                            "resource_version": "30" if after else "21",
+                            "creation_timestamp": captured_at.isoformat(),
+                            "deletion_timestamp": None,
+                            "phase": "Running",
+                            "ready": True,
+                        }
+                        for index in range(1, replicas[component] + 1)
+                    ],
+                }
+                for component in SECRET_WORKLOAD_COMPONENTS
+            },
+        }
+
+    before_secret_snapshot = secret_snapshot(after=False)
+    after_secret_snapshot = secret_snapshot(after=True)
+    workload_verification = {
+        component: {
+            "deployment_uid_unchanged": True,
+            "deployment_generation_advanced": True,
+            "all_old_pods_replaced": True,
+            "fully_ready": True,
+        }
+        for component in SECRET_WORKLOAD_COMPONENTS
+    }
+    secrets_report = target_report(SECRETS_SCHEMA_VERSION)
     secrets_report.update(
         {
             "provider": "External Secrets",
@@ -392,15 +596,41 @@ def _document(tmp_path: Path, now: datetime) -> dict:
                 "access_audit_enabled": True,
                 "credentials_external_to_evidence": True,
             },
+            "cluster_context": "customer-production-context",
+            "namespace": "duckdock",
+            "secrets_policy": {
+                "path": str(secrets_policy_path),
+                "sha256": hashlib.sha256(secrets_policy_path.read_bytes()).hexdigest(),
+                "policy_id": secrets_policy["policy_id"],
+                "allowed_signers_path": str(secrets_allowed_signers),
+                "allowed_signers_sha256": hashlib.sha256(
+                    secrets_allowed_signers.read_bytes()
+                ).hexdigest(),
+            },
             "rotation": {
-                "executed": True,
-                "secret_classes": ["database", "object-store", "application-signing"],
-                "started_at": (now - timedelta(minutes=20)).isoformat(),
-                "completed_at": (now - timedelta(minutes=10)).isoformat(),
+                "exercise_id": secret_exercise_id,
+                "secret_name": secret_name,
+                "secret_classes": list(REQUIRED_SECRET_CLASSES),
+                "started_at": secret_exercise_started.isoformat(),
+                "completed_at": secret_exercise_completed.isoformat(),
                 "old_credentials_rejected": True,
+                "new_credentials_accepted": True,
                 "workloads_reloaded": True,
                 "audit_event_recorded": True,
             },
+            "kubernetes_observation": {
+                "metadata_only": True,
+                "secret_data_read": False,
+                "before": before_secret_snapshot,
+                "after": after_secret_snapshot,
+                "verification": {
+                    "secret_uid_unchanged": True,
+                    "secret_resource_version_changed": True,
+                    "components": workload_verification,
+                },
+            },
+            "rotation_receipt": rotation_receipt,
+            "verification_receipt": verification_receipt,
         }
     )
     write_target_report("secrets", secrets_report)
@@ -1716,6 +1946,99 @@ def test_secrets_evidence_rejects_embedded_secret_material(tmp_path: Path) -> No
     report["rotation"]["password"] = "must-not-be-retained"
     path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
     evidence["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    assert result["status"] == "BLOCKED"
+    check = next(item for item in result["checks"] if item["key"] == "secrets")
+    assert check["status"] == "BLOCK"
+
+
+def test_secrets_evidence_rejects_tampered_signed_rotation_receipt(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    evidence = document["controls"]["secrets"]["evidence"]
+    report_path = Path(evidence["path"])
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    embedded = report["rotation_receipt"]
+    receipt_path = Path(embedded["signed_evidence"]["path"])
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt["secret_classes"][0]["new_version_id"] = "application-signing-version-99"
+    receipt_path.write_text(json.dumps(receipt, sort_keys=True) + "\n", encoding="utf-8")
+    report["rotation_receipt"] = {
+        **receipt,
+        "signed_evidence": {
+            **embedded["signed_evidence"],
+            "sha256": hashlib.sha256(receipt_path.read_bytes()).hexdigest(),
+        },
+    }
+    report_path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+    evidence["sha256"] = hashlib.sha256(report_path.read_bytes()).hexdigest()
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    assert result["status"] == "BLOCKED"
+    check = next(item for item in result["checks"] if item["key"] == "secrets")
+    assert check["status"] == "BLOCK"
+
+
+def test_secrets_evidence_recomputes_old_pod_replacement(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    evidence = document["controls"]["secrets"]["evidence"]
+    report_path = Path(evidence["path"])
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    observation = report["kubernetes_observation"]
+    observation["after"]["workloads"]["backend"]["pods"][0]["uid"] = observation[
+        "before"
+    ]["workloads"]["backend"]["pods"][0]["uid"]
+    report_path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+    evidence["sha256"] = hashlib.sha256(report_path.read_bytes()).hexdigest()
+    _add_signed_approvals(document, tmp_path, now)
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    assert result["status"] == "BLOCKED"
+    check = next(item for item in result["checks"] if item["key"] == "secrets")
+    assert check["status"] == "BLOCK"
+
+
+def test_secrets_policy_rejects_provider_as_independent_verifier(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    evidence = document["controls"]["secrets"]["evidence"]
+    report_path = Path(evidence["path"])
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    policy_path = Path(report["secrets_policy"]["path"])
+    policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    policy["verifier_identities"] = list(policy["provider_identities"])
+    policy_path.write_text(json.dumps(policy, sort_keys=True) + "\n", encoding="utf-8")
+    report["secrets_policy"]["sha256"] = hashlib.sha256(
+        policy_path.read_bytes()
+    ).hexdigest()
+    report_path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+    evidence["sha256"] = hashlib.sha256(report_path.read_bytes()).hexdigest()
     _add_signed_approvals(document, tmp_path, now)
 
     result = evaluate(
