@@ -19,7 +19,7 @@ deployment authorization.
 | PGA-02 | Secrets are external/SOPS managed, no plaintext source of truth remains, and rotation is exercised. | Target secret-manager/rotation receipt. |
 | PGA-03 | Prometheus routes to Alertmanager, delivery failure alerts exist, and firing/resolved reach named on-call. | Repo config plus target receiver receipts. |
 | PGA-04 | DB, Git repo and object backups are age encrypted, signed, uploaded offsite and restored under RPO/RTO. The production gate independently verifies the original manifest OpenSSH signature and exact release commit. | Secure bundle manifest/signature, allowed-signers identity and destructive target restore receipt. |
-| PGA-05 | A portable HA reference runs three backend/frontend/worker replicas across fault domains with PDB/HPA/default-deny policy; state services and RWX storage are HA. | Kustomize baseline plus target node/zone/Beat failover report. |
+| PGA-05 | A portable HA reference runs three backend/frontend/worker replicas across fault domains with PDB/HPA/default-deny policy; a disruptive target collector verifies exact context/images, drains every worker in one Beat-hosting zone under continuous public HTTPS probes, restores/rebalances the zone, binds the target network evidence, and requires an Operations-policy signature over managed state-service/RWX failover receipts. | Kustomize baseline plus `duckdock-kubernetes-ha-failover-v2` and `duckdock-ga-state-services-failover-v1`. |
 | PGA-06 | A 900-second-or-longer capacity gate sustains the declared floor, materializes at least 50,000 runs, and proves post-growth timeline p95 through the real target HTTPS endpoint for the exact target, commit and immutable images. | `duckdock-target-capacity-gate-v2` JSON. |
 | PGA-07 | An assessor independent of implementation tests the exact commit/images; no Critical/High remains. | Independent report bound by SHA-256. |
 | PGA-08 | Product, Architecture, Security and Operations use four distinct OpenSSH identities and distinct public keys, each authorized for exactly that role by an out-of-band, content-addressed release-authority policy and one shared trust store, to approve the exact release/target/evidence/policy digest after evidence completion. Each signature also covers role, identity, decision and approval time. | `duckdock-ga-approval-policy-v1`, shared allowed-signers digest and four verified `duckdock-ga-approval-statement-v1` signatures. |
@@ -30,7 +30,9 @@ deployment authorization.
 PGA-01 through the repository portion of PGA-06 and the complete PGA-07/PGA-08
 protocol are implemented and automated. PGA-08 now requires an out-of-band
 release-authority policy, forbids per-approval trust-store overrides and binds
-the policy digest into every signature. PGA-05 includes a real disposable
+the policy digest into every signature. PGA-05 now also has a disruptive,
+fail-closed target collector and v2 evidence parser; it has not been executed
+against a customer target. The local reference includes a real disposable
 four-node kind rehearsal: restricted images are deployed across three simulated
 zones, the Beat-hosting node is tainted/drained, stateless replicas recover in
 the two surviving zones under continuous API probes, and a revision-aware

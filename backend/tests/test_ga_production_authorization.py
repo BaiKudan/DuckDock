@@ -240,7 +240,7 @@ def _document(tmp_path: Path, now: datetime) -> dict:
                 "pods": [
                     {
                         "pod": f"{component}-{index}",
-                        "node": f"node-{zone}",
+                        "node": f"node-{zone}-{index}",
                         "zone": zone,
                         "ready": True,
                     }
@@ -261,18 +261,36 @@ def _document(tmp_path: Path, now: datetime) -> dict:
     ha_path.write_text(
         json.dumps(
             {
-                "schema_version": "duckdock-kubernetes-ha-failover-v1",
+                "schema_version": "duckdock-kubernetes-ha-failover-v2",
                 "scope": "target-production",
                 "status": "PASS",
                 "passed": True,
                 "observed_at": observed_at.isoformat(),
                 "target_environment": "customer-production",
+                "cluster_context": "customer-production-admin",
+                "namespace": "duckdock",
                 "source_commit": commit,
                 "images": {
                     "backend": {"name": backend_image},
                     "frontend": {"name": frontend_image},
                 },
                 "fault_domains": ["zone-a", "zone-b"],
+                "cluster_nodes": [
+                    {
+                        "node": node,
+                        "zone": zone,
+                        "ready": True,
+                        "schedulable": True,
+                        "control_plane": False,
+                    }
+                    for node, zone in (
+                        ("node-zone-a-1", "zone-a"),
+                        ("node-zone-a-3", "zone-a"),
+                        ("node-zone-b-1", "zone-b"),
+                        ("node-zone-b-2", "zone-b"),
+                        ("node-zone-b-3", "zone-b"),
+                    )
+                ],
                 "fault_domains_exercised": 2,
                 "replica_counts": {
                     "backend": 3,
@@ -284,25 +302,35 @@ def _document(tmp_path: Path, now: datetime) -> dict:
                 "after_zone_drain": ha_snapshot(["zone-b"]),
                 "after_zone_return_and_rolling_rebalance": ha_snapshot(["zone-a", "zone-b"]),
                 "fault_injection": {
-                    "drained_node": "node-zone-a",
+                    "drained_nodes": ["node-zone-a-1", "node-zone-a-3"],
+                    "drained_node": "node-zone-a-1",
                     "drained_zone": "zone-a",
                     "recovery_seconds": 45,
                     "node_failover_passed": True,
                     "zone_failover_passed": True,
                     "beat_recovery_passed": True,
-                    "beat_original_node": "node-zone-a",
-                    "beat_recovery_node": "node-zone-b",
+                    "beat_original_node": "node-zone-a-1",
+                    "beat_recovery_node": "node-zone-b-1",
                 },
                 "availability_probe": {
                     "transport": "network HTTPS against target",
                     "base_url": "https://duckdock.example.com",
-                    "sample_count": 60,
+                    "sample_count": 5,
                     "failure_count": 0,
                     "passed": True,
+                    "samples": [
+                        {
+                            "observed_at": (observed_at - timedelta(seconds=5 - index)).isoformat(),
+                            "passed": True,
+                            "status_code": 200,
+                        }
+                        for index in range(5)
+                    ],
                 },
                 "network_policy": {
                     "enforcement_exercised": True,
                     "passed": True,
+                    "evidence": {},
                 },
                 "state_services": {
                     "managed_mysql_ha": True,
@@ -311,7 +339,14 @@ def _document(tmp_path: Path, now: datetime) -> dict:
                     "rwx_repository_storage_ha": True,
                     "failover_exercised": True,
                     "data_integrity_passed": True,
+                    "evidence": {},
                 },
+                "cleanup": {
+                    "restored_nodes": ["node-zone-a-1", "node-zone-a-3"],
+                    "errors": [],
+                    "passed": True,
+                },
+                "exercise_error": None,
             },
             sort_keys=True,
         )
@@ -653,6 +688,77 @@ def _add_signed_approvals(document: dict, tmp_path: Path, now: datetime) -> None
         "policy_id": policy["policy_id"],
         "sha256": hashlib.sha256(policy_path.read_bytes()).hexdigest(),
     }
+    state_observed_at = now - timedelta(minutes=5)
+    state_report_path = tmp_path / "state-services-failover.json"
+    state_report = {
+        "schema_version": "duckdock-ga-state-services-failover-v1",
+        "scope": "target-production",
+        "status": "PASS",
+        "passed": True,
+        "observed_at": state_observed_at.isoformat(),
+        "target_environment": document["target"]["target_id"],
+        "source_commit": document["release"]["git_commit"],
+        "images": {
+            "backend": {"name": document["release"]["backend_image"]},
+            "frontend": {"name": document["release"]["frontend_image"]},
+        },
+        "managed_mysql_ha": True,
+        "managed_redis_ha": True,
+        "object_store_ha": True,
+        "rwx_repository_storage_ha": True,
+        "failover_exercised": True,
+        "data_integrity_passed": True,
+        "services": {
+            name: {
+                "provider": provider,
+                "failover_receipt_id": f"receipt-{name}-123",
+                "ha_enabled": True,
+                "failover_exercised": True,
+                "data_integrity_passed": True,
+                "started_at": (now - timedelta(minutes=9)).isoformat(),
+                "recovered_at": (now - timedelta(minutes=6)).isoformat(),
+            }
+            for name, provider in (
+                ("mysql", "Managed MySQL"),
+                ("redis", "Managed Redis"),
+                ("object_store", "Managed S3"),
+                ("rwx_repository_storage", "Managed RWX CSI"),
+            )
+        },
+    }
+    state_report_path.write_text(json.dumps(state_report, sort_keys=True) + "\n", encoding="utf-8")
+    subprocess.run(
+        [
+            "ssh-keygen",
+            "-q",
+            "-Y",
+            "sign",
+            "-f",
+            str(signing_keys["Operations"]),
+            "-n",
+            "duckdock-ha-state-services",
+            str(state_report_path),
+        ],
+        check=True,
+    )
+    ha_evidence = document["controls"]["high_availability"]["evidence"]
+    ha_report_path = Path(ha_evidence["path"])
+    ha_report = json.loads(ha_report_path.read_text(encoding="utf-8"))
+    network_evidence = document["controls"]["network"]["evidence"]
+    ha_report["network_policy"]["evidence"] = {
+        "path": network_evidence["path"],
+        "sha256": network_evidence["sha256"],
+    }
+    ha_report["state_services"]["evidence"] = {
+        "path": str(state_report_path),
+        "sha256": hashlib.sha256(state_report_path.read_bytes()).hexdigest(),
+        "signer_identity": role_identities["Operations"][0],
+        "signature_path": str(Path(f"{state_report_path}.sig")),
+        "approval_policy_id": policy["policy_id"],
+        "approval_policy_sha256": document["approval_policy"]["sha256"],
+    }
+    ha_report_path.write_text(json.dumps(ha_report, sort_keys=True) + "\n", encoding="utf-8")
+    ha_evidence["sha256"] = hashlib.sha256(ha_report_path.read_bytes()).hexdigest()
     digest = _release_digest(
         document["release"],
         document["target"],
@@ -766,7 +872,7 @@ def test_approval_policy_must_be_supplied_out_of_band(tmp_path: Path) -> None:
         now=now,
     )
 
-    assert result["status"] == "AWAITING_EXTERNAL_APPROVALS"
+    assert result["status"] == "BLOCKED"
     statuses = {item["key"]: item["status"] for item in result["checks"]}
     assert statuses["approval_policy"] == "BLOCK"
     assert statuses["approval_trust_store"] == "BLOCK"
@@ -789,7 +895,7 @@ def test_tampered_shared_approval_trust_store_invalidates_all_approvals(tmp_path
         now=now,
     )
 
-    assert result["status"] == "AWAITING_EXTERNAL_APPROVALS"
+    assert result["status"] == "BLOCKED"
     statuses = {item["key"]: item["status"] for item in result["checks"]}
     assert statuses["approval_trust_store"] == "BLOCK"
     assert all(statuses[f"approval_{role}"] == "BLOCK" for role in REQUIRED_APPROVAL_ROLES)
@@ -1292,3 +1398,108 @@ def test_ha_ready_count_must_match_retained_pod_snapshot(tmp_path: Path) -> None
     assert result["status"] == "BLOCKED"
     high_availability = next(item for item in result["checks"] if item["key"] == "high_availability")
     assert high_availability["status"] == "BLOCK"
+
+
+def test_ha_state_service_receipt_tamper_fails_operations_signature(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _add_signed_approvals(document, tmp_path, now)
+    ha_evidence = document["controls"]["high_availability"]["evidence"]
+    ha_path = Path(ha_evidence["path"])
+    ha_report = json.loads(ha_path.read_text(encoding="utf-8"))
+    state_reference = ha_report["state_services"]["evidence"]
+    state_path = Path(state_reference["path"])
+    state_report = json.loads(state_path.read_text(encoding="utf-8"))
+    state_report["services"]["mysql"]["failover_receipt_id"] = "tampered-receipt"
+    state_path.write_text(json.dumps(state_report, sort_keys=True) + "\n", encoding="utf-8")
+    state_reference["sha256"] = hashlib.sha256(state_path.read_bytes()).hexdigest()
+    ha_path.write_text(json.dumps(ha_report, sort_keys=True) + "\n", encoding="utf-8")
+    ha_evidence["sha256"] = hashlib.sha256(ha_path.read_bytes()).hexdigest()
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    signature = next(
+        item for item in result["checks"] if item["key"] == "high_availability_state_services_signature"
+    )
+    high_availability = next(item for item in result["checks"] if item["key"] == "high_availability")
+    assert signature["status"] == "BLOCK"
+    assert high_availability["status"] == "BLOCK"
+
+
+def test_ha_network_claim_must_bind_the_network_control_evidence(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _add_signed_approvals(document, tmp_path, now)
+    ha_evidence = document["controls"]["high_availability"]["evidence"]
+    ha_path = Path(ha_evidence["path"])
+    ha_report = json.loads(ha_path.read_text(encoding="utf-8"))
+    ha_report["network_policy"]["evidence"]["sha256"] = "f" * 64
+    ha_path.write_text(json.dumps(ha_report, sort_keys=True) + "\n", encoding="utf-8")
+    ha_evidence["sha256"] = hashlib.sha256(ha_path.read_bytes()).hexdigest()
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    high_availability = next(item for item in result["checks"] if item["key"] == "high_availability")
+    assert high_availability["status"] == "BLOCK"
+    assert "network=False" in high_availability["observed"]
+
+
+def test_ha_summary_cannot_hide_a_failed_https_probe_sample(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _add_signed_approvals(document, tmp_path, now)
+    ha_evidence = document["controls"]["high_availability"]["evidence"]
+    ha_path = Path(ha_evidence["path"])
+    ha_report = json.loads(ha_path.read_text(encoding="utf-8"))
+    ha_report["availability_probe"]["samples"][2]["passed"] = False
+    ha_report["availability_probe"]["samples"][2]["status_code"] = 503
+    ha_path.write_text(json.dumps(ha_report, sort_keys=True) + "\n", encoding="utf-8")
+    ha_evidence["sha256"] = hashlib.sha256(ha_path.read_bytes()).hexdigest()
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    high_availability = next(item for item in result["checks"] if item["key"] == "high_availability")
+    assert high_availability["status"] == "BLOCK"
+    assert "probe=False" in high_availability["observed"]
+
+
+def test_ha_report_requires_successful_zone_cleanup(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    document = _document(tmp_path, now)
+    _add_signed_approvals(document, tmp_path, now)
+    ha_evidence = document["controls"]["high_availability"]["evidence"]
+    ha_path = Path(ha_evidence["path"])
+    ha_report = json.loads(ha_path.read_text(encoding="utf-8"))
+    ha_report["cleanup"] = {
+        "restored_nodes": [],
+        "errors": ["uncordon failed"],
+        "passed": False,
+    }
+    ha_path.write_text(json.dumps(ha_report, sort_keys=True) + "\n", encoding="utf-8")
+    ha_evidence["sha256"] = hashlib.sha256(ha_path.read_bytes()).hexdigest()
+
+    result = evaluate(
+        document,
+        authorization_path=tmp_path / "authorization.json",
+        approval_policy_path=tmp_path / "approval-policy.json",
+        now=now,
+    )
+
+    high_availability = next(item for item in result["checks"] if item["key"] == "high_availability")
+    assert high_availability["status"] == "BLOCK"
+    assert "cleanup=False" in high_availability["observed"]

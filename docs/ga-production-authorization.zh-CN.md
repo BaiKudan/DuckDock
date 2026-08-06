@@ -94,14 +94,48 @@ bash scripts/rehearse-kubernetes-ha.sh
    因而绝不能授权生产。若 Docker Desktop 只有约 8 GiB 内存，先暂停本地
    DuckDock/Langfuse 栈，演练结束后再恢复，避免宿主 OOM 污染结果。
 
-   然后必须在目标生产集群执行同一类节点和 zone 故障注入。目标报告 scope
-   必须为 `target-production`，绑定同一 target ID、commit、两个不可变镜像摘要；
-   通过真实目标 HTTPS 连续探测，证明 backend/frontend/worker 和单逻辑 Beat
-   恢复；验证故障域回归后新 ReplicaSet 重新覆盖全部目标域；实际执行目标 CNI
-   隔离，并证明托管 MySQL/Redis/S3、RWX 故障切换与数据完整性。任何本地报告、
-   仅有 YAML 的声明或与授权字段不一致的报告都会被内容级门禁拒绝。
-   报告字段模板见 `ops/ga/high-availability-evidence.example.json`；模板中的 Pod
-   条目只是结构示意，必须替换为目标集群实际快照，不能复制后自报通过。
+   目标生产演练必须使用 `collect_ga_target_ha.py`，不能手填 PASS 模板。先按后续
+   网络步骤取得同一 release 的目标 CNI/外部扫描报告；再按
+   `ops/ga/state-services-ha-evidence.example.json` 记录托管 MySQL、Redis、S3 和
+   RWX 的真实 provider receipt、切换时段与数据完整性，由组织审批策略中的
+   Operations 身份签署原文件：
+
+```bash
+ssh-keygen -Y sign \
+  -f ~/.ssh/operations-ga-approval \
+  -n duckdock-ha-state-services \
+  /secure/evidence/state-services-ha.json
+```
+
+   在已批准的故障演练窗口运行以下命令。它会 taint 并 drain 所选 zone 的全部
+   合格 worker 节点，属于有意的生产 disruption；确认值必须与 target ID 完全一致。
+   命令先校验精确 kube context、RBAC、三类 3 副本、Beat 所在区和实际 Deployment
+   镜像，故障期间从执行机持续探测公网 HTTPS，最后在 `finally` 中移除 taint、
+   uncordon，并滚动再均衡返回的故障域：
+
+```bash
+python backend/scripts/collect_ga_target_ha.py \
+  --context customer-production-admin \
+  --namespace duckdock \
+  --target-environment customer-production \
+  --acknowledge-target-disruption customer-production \
+  --source-commit "$DUCKDOCK_GA_SOURCE_COMMIT" \
+  --backend-image "$DUCKDOCK_GA_BACKEND_IMAGE" \
+  --frontend-image "$DUCKDOCK_GA_FRONTEND_IMAGE" \
+  --base-url https://duckdock.example.com \
+  --drain-zone cn-hangzhou-a \
+  --network-evidence /secure/evidence/target-network.json \
+  --state-services-evidence /secure/evidence/state-services-ha.json \
+  --state-services-signature /secure/evidence/state-services-ha.json.sig \
+  --state-services-signer-identity operations-release-approver@example.com \
+  --approval-policy /release-authority/duckdock-ga-approval-policy.json \
+  --output /secure/evidence/target-ha.json
+```
+
+   只有 `duckdock-kubernetes-ha-failover-v2` 可授权生产。报告保留 before/drain/
+   rebalance Pod→node→zone 原始快照、全部 drained node、每次 HTTPS 状态码、cleanup
+   结果，并内容寻址地绑定网络证据和 Operations 签名的状态服务回执。旧 v1、仅有
+   YAML 的声明、手填 Pod 名称或清理不完整的报告都会被门禁拒绝。
 7. 按 `ops/ga/secrets-evidence.example.json` 在目标环境实际轮换每类生产
    credential。验证旧 credential 被拒绝、工作负载重新加载、审计事件落盘，且
    证据只记录 secret 类别，绝不能包含 secret/token/password 值。

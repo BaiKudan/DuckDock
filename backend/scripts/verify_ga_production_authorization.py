@@ -557,6 +557,64 @@ def _verify_signed_evidence_file(
     )
 
 
+def _verify_policy_signed_evidence_file(
+    signed_file: dict[str, Any],
+    *,
+    authorization_path: Path,
+    namespace: str,
+    allowed_signers: Path | None,
+    allowed_identities: set[str],
+    approval_policy_reference: dict[str, Any],
+    trust_store_ok: bool,
+) -> tuple[bool, str, dict[str, Any] | None]:
+    path = _resolve_file(signed_file.get("path"), authorization_path)
+    signature = _resolve_file(signed_file.get("signature_path"), authorization_path)
+    identity = signed_file.get("signer_identity")
+    expected_digest = str(signed_file.get("sha256", ""))
+    exists = path is not None and path.is_file()
+    actual_digest = _sha256(path) if exists else "missing"
+    digest_ok = bool(DIGEST_RE.fullmatch(expected_digest)) and actual_digest == expected_digest
+    policy_ok = (
+        signed_file.get("approval_policy_id") == approval_policy_reference.get("policy_id")
+        and signed_file.get("approval_policy_sha256") == approval_policy_reference.get("sha256")
+    )
+    signer_ok = _meaningful_string(identity) and identity in allowed_identities
+    signature_ok = False
+    signature_detail = "missing or unauthorized policy-bound signature artifacts"
+    if (
+        exists
+        and digest_ok
+        and policy_ok
+        and signer_ok
+        and trust_store_ok
+        and allowed_signers is not None
+        and signature is not None
+        and signature.is_file()
+    ):
+        signature_ok, signature_detail = _verify_ssh_payload(
+            identity=str(identity),
+            allowed_signers=allowed_signers,
+            signature=signature,
+            namespace=namespace,
+            payload=path.read_bytes(),
+        )
+    report: dict[str, Any] | None = None
+    if exists:
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            value = None
+        report = value if isinstance(value, dict) else None
+    return (
+        exists and digest_ok and policy_ok and signer_ok and signature_ok and report is not None,
+        (
+            f"path={path or 'missing'}, digest={actual_digest}, signer={identity or 'missing'}, "
+            f"policy={policy_ok}, signature={signature_detail}"
+        ),
+        report,
+    )
+
+
 def _signed_backup_manifest(
     signed_file: dict[str, Any],
     *,
@@ -1288,6 +1346,7 @@ def evaluate(
     report_probe = ha_report.get("availability_probe") if isinstance(ha_report, dict) else None
     report_network = ha_report.get("network_policy") if isinstance(ha_report, dict) else None
     report_state = ha_report.get("state_services") if isinstance(ha_report, dict) else None
+    report_cleanup = ha_report.get("cleanup") if isinstance(ha_report, dict) else None
     evidence_observed_at = _parse_time(
         (ha.get("evidence") or {}).get("observed_at") if isinstance(ha.get("evidence"), dict) else None
     )
@@ -1326,9 +1385,187 @@ def evaluate(
         and report_fault.get("drained_node") not in _ha_ready_nodes(ha_report or {}, "after_zone_drain", name)
         for name in ("backend", "frontend", "worker", "beat")
     )
+    drained_nodes_raw = report_fault.get("drained_nodes") if isinstance(report_fault, dict) else None
+    drained_nodes = (
+        {str(item) for item in drained_nodes_raw if _meaningful_string(item)}
+        if isinstance(drained_nodes_raw, list)
+        else set()
+    )
+    cluster_nodes = ha_report.get("cluster_nodes") if isinstance(ha_report, dict) else None
+    cluster_node_names = (
+        [item.get("node") for item in cluster_nodes if isinstance(item, dict)]
+        if isinstance(cluster_nodes, list)
+        else []
+    )
+    eligible_drained_nodes = (
+        {
+            str(item.get("node"))
+            for item in cluster_nodes
+            if isinstance(item, dict)
+            and item.get("zone") == report_fault.get("drained_zone")
+            and item.get("ready") is True
+            and item.get("schedulable") is True
+            and item.get("control_plane") is False
+            and _meaningful_string(item.get("node"))
+        }
+        if isinstance(cluster_nodes, list) and isinstance(report_fault, dict)
+        else set()
+    )
+    surviving_eligible_nodes = (
+        [
+            item
+            for item in cluster_nodes
+            if isinstance(item, dict)
+            and item.get("zone") != report_fault.get("drained_zone")
+            and item.get("ready") is True
+            and item.get("schedulable") is True
+            and item.get("control_plane") is False
+        ]
+        if isinstance(cluster_nodes, list) and isinstance(report_fault, dict)
+        else []
+    )
+    snapshot_nodes = set().union(
+        *(
+            _ha_ready_nodes(ha_report or {}, snapshot, component)
+            for snapshot in ("before", "after_zone_drain", "after_zone_return_and_rolling_rebalance")
+            for component in ("backend", "frontend", "worker", "beat")
+        )
+    )
+    cluster_inventory_ok = (
+        isinstance(cluster_nodes, list)
+        and bool(cluster_nodes)
+        and all(isinstance(name, str) and bool(name) for name in cluster_node_names)
+        and len(cluster_node_names) == len(set(cluster_node_names))
+        and drained_nodes == eligible_drained_nodes
+        and len(surviving_eligible_nodes) >= 3
+        and snapshot_nodes.issubset(set(cluster_node_names))
+        and report_domains.issubset(
+            {
+                str(item.get("zone"))
+                for item in cluster_nodes
+                if isinstance(item, dict)
+                and item.get("ready") is True
+                and item.get("schedulable") is True
+                and item.get("control_plane") is False
+                and _meaningful_string(item.get("zone"))
+            }
+        )
+    )
+    all_drained_nodes_absent = bool(drained_nodes) and all(
+        not (drained_nodes & _ha_ready_nodes(ha_report or {}, "after_zone_drain", name))
+        for name in ("backend", "frontend", "worker", "beat")
+    )
+    probe_samples = report_probe.get("samples") if isinstance(report_probe, dict) else None
+    probe_sample_times = (
+        [_parse_time(item.get("observed_at")) for item in probe_samples if isinstance(item, dict)]
+        if isinstance(probe_samples, list)
+        else []
+    )
+    probe_samples_ok = (
+        isinstance(probe_samples, list)
+        and len(probe_samples) >= 5
+        and len(probe_samples) == int(report_probe.get("sample_count", -1))
+        and len(probe_sample_times) == len(probe_samples)
+        and all(value is not None for value in probe_sample_times)
+        and probe_sample_times == sorted(probe_sample_times)
+        and all(
+            isinstance(item, dict)
+            and item.get("passed") is True
+            and int(item.get("status_code", -1)) == 200
+            for item in probe_samples
+        )
+    )
+    network_reference = report_network.get("evidence") if isinstance(report_network, dict) else None
+    network_control_evidence = controls["network"].get("evidence")
+    network_evidence_bound = (
+        isinstance(network_reference, dict)
+        and isinstance(network_control_evidence, dict)
+        and network_reference.get("sha256") == network_control_evidence.get("sha256")
+        and bool(DIGEST_RE.fullmatch(str(network_reference.get("sha256", ""))))
+        and (network_path := _resolve_file(network_reference.get("path"), authorization_path)) is not None
+        and network_path.is_file()
+        and _sha256(network_path) == network_reference.get("sha256")
+    )
+    state_reference = report_state.get("evidence") if isinstance(report_state, dict) else {}
+    state_signature_ok, state_signature_detail, state_evidence_report = _verify_policy_signed_evidence_file(
+        state_reference if isinstance(state_reference, dict) else {},
+        authorization_path=authorization_path,
+        namespace="duckdock-ha-state-services",
+        allowed_signers=allowed_signers,
+        allowed_identities=role_identities.get("Operations", set()),
+        approval_policy_reference=approval_policy_reference,
+        trust_store_ok=trust_store_ok,
+    )
+    gate.add(
+        "high_availability_state_services_signature",
+        owner="Operations",
+        passed=state_signature_ok,
+        observed=state_signature_detail,
+        expected="Operations policy identity signature over a release-bound state-services failover report",
+        detail="Managed MySQL/Redis/object/RWX HA cannot be established by booleans copied into the Kubernetes report.",
+    )
+    state_services = (
+        state_evidence_report.get("services") if isinstance(state_evidence_report, dict) else None
+    )
+    state_evidence_observed_at = _parse_time(
+        state_evidence_report.get("observed_at") if isinstance(state_evidence_report, dict) else None
+    )
+    state_evidence_matches = (
+        state_signature_ok
+        and isinstance(state_evidence_report, dict)
+        and state_evidence_report.get("schema_version") == "duckdock-ga-state-services-failover-v1"
+        and state_evidence_report.get("scope") == "target-production"
+        and state_evidence_report.get("status") == "PASS"
+        and state_evidence_report.get("passed") is True
+        and state_evidence_report.get("target_environment") == target.get("target_id")
+        and state_evidence_report.get("source_commit") == commit
+        and isinstance(state_evidence_report.get("images"), dict)
+        and isinstance(state_evidence_report["images"].get("backend"), dict)
+        and isinstance(state_evidence_report["images"].get("frontend"), dict)
+        and state_evidence_report["images"]["backend"].get("name") == release.get("backend_image")
+        and state_evidence_report["images"]["frontend"].get("name") == release.get("frontend_image")
+        and state_evidence_observed_at is not None
+        and evidence_observed_at is not None
+        and timedelta(0) <= evidence_observed_at - state_evidence_observed_at <= timedelta(days=30)
+        and isinstance(state_services, dict)
+        and isinstance(report_state, dict)
+        and set(state_services) == {"mysql", "redis", "object_store", "rwx_repository_storage"}
+        and all(
+            isinstance(state_services.get(name), dict)
+            and _meaningful_string(state_services[name].get("provider"))
+            and _meaningful_string(state_services[name].get("failover_receipt_id"))
+            and state_services[name].get("ha_enabled") is True
+            and state_services[name].get("failover_exercised") is True
+            and state_services[name].get("data_integrity_passed") is True
+            and _ordered_report_times(
+                state_services[name].get("started_at"),
+                state_services[name].get("recovered_at"),
+                no_later_than=state_evidence_observed_at,
+            )
+            for name in ("mysql", "redis", "object_store", "rwx_repository_storage")
+        )
+        and all(
+            state_evidence_report.get(key) is True and report_state.get(key) is True
+            for key in (
+                "managed_mysql_ha",
+                "managed_redis_ha",
+                "object_store_ha",
+                "rwx_repository_storage_ha",
+                "failover_exercised",
+                "data_integrity_passed",
+            )
+        )
+    )
+    cleanup_ok = (
+        isinstance(report_cleanup, dict)
+        and report_cleanup.get("passed") is True
+        and report_cleanup.get("errors") == []
+        and isinstance(report_cleanup.get("restored_nodes"), list)
+        and drained_nodes.issubset({str(item) for item in report_cleanup["restored_nodes"]})
+    )
     report_matches_target = (
         isinstance(ha_report, dict)
-        and ha_report.get("schema_version") == "duckdock-kubernetes-ha-failover-v1"
+        and ha_report.get("schema_version") == "duckdock-kubernetes-ha-failover-v2"
         and ha_report.get("scope") == "target-production"
         and ha_report.get("status") == "PASS"
         and ha_report.get("passed") is True
@@ -1349,6 +1586,8 @@ def evaluate(
         and before_spread
         and drain_ready
         and drained_zone_absent
+        and all_drained_nodes_absent
+        and cluster_inventory_ok
         and restored_ready_and_spread
         and isinstance(report_fault, dict)
         and report_fault.get("drained_zone") in target_domains
@@ -1365,9 +1604,11 @@ def evaluate(
         and report_probe.get("passed") is True
         and int(report_probe.get("sample_count", 0)) >= 5
         and int(report_probe.get("failure_count", -1)) == 0
+        and probe_samples_ok
         and isinstance(report_network, dict)
         and report_network.get("enforcement_exercised") is True
         and report_network.get("passed") is True
+        and network_evidence_bound
         and isinstance(report_state, dict)
         and report_state.get("managed_mysql_ha") is True
         and report_state.get("managed_redis_ha") is True
@@ -1375,6 +1616,11 @@ def evaluate(
         and report_state.get("rwx_repository_storage_ha") is True
         and report_state.get("failover_exercised") is True
         and report_state.get("data_integrity_passed") is True
+        and state_evidence_matches
+        and cleanup_ok
+        and _meaningful_string(ha_report.get("cluster_context"))
+        and _meaningful_string(ha_report.get("namespace"))
+        and ha_report.get("exercise_error") is None
     )
     ha_ok = (
         ha.get("status") == "PASS"
@@ -1397,7 +1643,11 @@ def evaluate(
         observed=(
             f"status={ha.get('status')}, replicas={replica_counts}, "
             f"zones={ha.get('fault_domains_exercised')}, "
-            f"report_scope={ha_report.get('scope') if isinstance(ha_report, dict) else 'missing'}"
+            f"report_scope={ha_report.get('scope') if isinstance(ha_report, dict) else 'missing'}, "
+            f"before={before_ready}/{before_spread}, drain={drain_ready}/{drained_zone_absent}/"
+            f"{all_drained_nodes_absent}, inventory={cluster_inventory_ok}, restored={restored_ready_and_spread}, "
+            f"probe={probe_samples_ok}, network={network_evidence_bound}, "
+            f"state={state_evidence_matches}, cleanup={cleanup_ok}"
         ),
         expected="3x stateless replicas; 2+ zones; HA state stores/RWX; node+zone+beat failover passed",
         detail="The content-addressed report must bind the exact target, commit and images; prove target HTTPS continuity, node/zone/Beat failover, restored spread, enforced policy and state-service integrity. Local kind evidence cannot authorize production.",

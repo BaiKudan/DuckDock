@@ -27,6 +27,8 @@ python backend/scripts/verify_ga_production_authorization.py \
 - `recovery-evidence.example.json`：签名备份与非生产破坏性恢复；
 - `independent-security-evidence.example.json`：独立渗透/代码审查和签名报告；
 - `high-availability-evidence.example.json`：目标多故障域故障注入。
+- `state-services-ha-evidence.example.json`：托管 MySQL、Redis、对象存储与 RWX
+  的真实故障切换回执；必须由审批策略中的 Operations 身份签名。
 
 所有这些目标报告以及 readiness v1、TLS v2、容量 v2 报告都必须绑定相同 target
 ID、source commit、backend/frontend 镜像摘要；报告内部 `observed_at` 必须与授权

@@ -34,6 +34,11 @@ kubectl -n duckdock rollout status deployment/backend --timeout=10m
 zone 后 API 仍满足 SLO，Beat 在约定 RTO 内恢复，MySQL/Redis/S3/RWX 存储均未
 丢数据。仓库模板本身不能替代这次演练。
 
+目标执行器为 `backend/scripts/collect_ga_target_ha.py`。它需要显式 target
+disruption 确认、精确 kube context、已通过的目标网络报告，以及由组织 Operations
+身份签名的四类状态服务故障切换报告；输出 v2 快照。完整参数和签名流程见
+`docs/ga-production-authorization.zh-CN.md`。
+
 跨区约束同时使用 `nodeTaintsPolicy: Honor` 和
 `matchLabelKeys: [pod-template-hash]`。故障处置必须先给失效节点或失效区节点加
 `duckdock.io/fault-domain-unavailable=true:NoSchedule` taint，再执行 drain；否则

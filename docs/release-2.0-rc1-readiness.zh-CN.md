@@ -79,7 +79,7 @@ Langfuse 保持可替换的 provider adapter：关闭或不可用时，依赖它
 ## 5. RC 后仍存在的风险
 
 1. **独立安全审计未完成。** 当前有代码、依赖和镜像门禁，但没有与最终 commit/镜像摘要绑定的第三方渗透测试或审计报告。
-2. **HA 已完成本机真实 Kubernetes 无状态演练，但未完成目标环境承诺。** `ops/kubernetes/ha` 的受限镜像、PDB/HPA、严格且 taint-aware/revision-aware 的拓扑分散已经在三模拟 zone 中执行节点/整区 drain、Beat 迁移与恢复后再均衡；本地单节点 MySQL/Redis/MinIO、`emptyDir` 和未证明 enforcement 的 kindnet 不代表托管 MySQL/Redis/S3/RWX/CNI，目标集群仍必须重跑并保留内容级报告。
+2. **HA 已完成本机真实 Kubernetes 无状态演练，但未完成目标环境承诺。** `ops/kubernetes/ha` 的受限镜像、PDB/HPA、严格且 taint-aware/revision-aware 的拓扑分散已经在三模拟 zone 中执行节点/整区 drain、Beat 迁移与恢复后再均衡；仓库现提供 fail-closed 的目标 v2 执行器，可校验精确 context/镜像、整区节点、持续公网 HTTPS、自动清理、网络证据和 Operations 签名的状态服务回执，但尚未在真实目标集群运行。本地单节点 MySQL/Redis/MinIO、`emptyDir` 和未证明 enforcement 的 kindnet 不代表托管 MySQL/Redis/S3/RWX/CNI。
 3. **目标容量尚未证明。** 本地真实 MySQL 工程基线通过，300 rps 边界探针也能 fail closed；仍需通过真实目标 HTTPS、负载均衡器和目标数据服务重跑 G2。
 4. **目标运维回执缺失。** 生产 Secret Manager/轮换、双告警接收人、异地不可变备份恢复、RPO/RTO 和 on-call 尚未绑定到最终目标。
 5. **随 Compose 打包的第三方数据镜像不属于 GA 路径。** 本地扫描发现 MySQL/MinIO 官方镜像仍含 Critical/High；单机 Compose 仅作加固参考，GA 强制使用经独立评估的外部 HA MySQL/Redis/S3。Prometheus 的 1 个 High 需要独立评估/VEX 确认，项目不得自行豁免。
@@ -90,7 +90,7 @@ Langfuse 保持可替换的 provider adapter：关闭或不可用时，依赖它
 ## 6. GA 前必须完成
 
 - 用真实生产密钥、域名和 TLS 部署 `ops/kubernetes/ha` 目标 overlay，替换所有占位镜像/域名/egress；
-- 在真实目标 HTTPS 上执行 G2 容量与数据增长门禁，并完成节点/zone/Beat/托管数据服务故障注入；
+- 在真实目标 HTTPS 上执行 G2 容量与数据增长门禁，并用 `collect_ga_target_ha.py` 完成节点/zone/Beat/托管数据服务故障注入；
 - 从异地、加密、不可变介质做破坏性 staging 恢复，保留 MySQL/Git/S3 与 RPO/RTO 回执；
 - 触发和恢复告警，证明两个实际接收人及 on-call schedule；
 - 完成独立安全评审/VEX，关闭最终应用镜像和依赖中的全部 Critical/High；
