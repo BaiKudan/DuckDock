@@ -1,5 +1,9 @@
 {
   "execution": {
+    "backup_allowed_signers": {
+      "path": "/release-authority/__CHANGE_ME_BACKUP_ALLOWED_SIGNERS__",
+      "sha256": "__CHANGE_ME_64_HEX__"
+    },
     "evidence_root": "/secure/duckdock-2.0.0/ga-execution-__CHANGE_ME_CAMPAIGN__",
     "kubernetes_context": "__CHANGE_ME_PRODUCTION_KUBE_CONTEXT__",
     "namespace": "duckdock",
@@ -15,7 +19,7 @@
     "git_commit": "__CHANGE_ME_40_HEX_COMMIT__",
     "version": "2.0.0"
   },
-  "schema_version": "duckdock-ga-execution-campaign-request-v1",
+  "schema_version": "duckdock-ga-execution-campaign-request-v2",
   "target": {
     "deployment_mode": "kubernetes-ha",
     "environment": "production",

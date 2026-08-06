@@ -43,8 +43,8 @@ SHA-256。输出是不可覆盖的 `duckdock-ga-trust-topology-verification-v1` 
 `FOUNDATION`。缺任一策略时不得开始昂贵或有破坏性的目标演练。
 
 信任拓扑通过后，复制 `execution-campaign-request.example.json`，一次性填写最终
-release、production target、Kubernetes context、独立 recovery target、最长 14 天执行
-窗口和一个尚不存在的专用 evidence root。由发布机构在 evidence root 之外生成不可覆盖
+release、production target、Kubernetes context、独立 recovery target、备份签名专用
+allowed-signers 路径/摘要、最长 14 天执行窗口和一个尚不存在的专用 evidence root。由发布机构在 evidence root 之外生成不可覆盖
 的执行计划和后续组装请求：
 
 ```bash
@@ -62,19 +62,21 @@ target 不同。所有 phase 初始状态只能是 `PENDING_EXTERNAL_EVIDENCE`�
 和逐步授权后，外部执行人才可按 phase 中的精确 acknowledgement 启动相应工具。
 
 `preapproval-assembly-request.example.json` 是证据接线输入，只包含 release/target 身份和
-九份最终 evidence 路径。真实采集完成后，应先使用独立 CLI 参数提供 approval policy，
-由组装器投影完整授权底稿；禁止继续手工复制 wrapper 字段和 SHA-256：
+九份最终 evidence 路径。正式 campaign 的真实采集完成后，必须用 closure 工具验证全部
+64 份外部产物及显式引用与计划完全一致，再由其调用底层组装器；禁止继续手工复制
+wrapper 字段和 SHA-256：
 
 ```bash
-python backend/scripts/assemble_ga_preapproval_authorization.py \
-  --request /secure/duckdock-2.0.0-preapproval-request.json \
-  --approval-policy /release-authority/duckdock-ga-approval-policy.json \
-  --output /secure/duckdock-2.0.0-authorization.json \
-  --receipt-output /secure/duckdock-2.0.0-assembly.json
+python backend/scripts/close_ga_execution_campaign.py \
+  --campaign /release-authority/duckdock-2.0.0-execution-campaign.json \
+  --assembly-request /release-authority/duckdock-2.0.0-preapproval-request.json
 ```
 
-组装器只有在重新验证全部证据并得到 `APPROVAL_COLLECTION` 时才写不可覆盖输出。请求
-不能选择 policy，输出固定为空 approvals 且无 campaign 引用；后者只能由 finalizer 写入。
+工具从已验证 topology 推导 approval policy，重验执行窗口和全部显式引用，只有在重新
+验证全部证据并得到 `APPROVAL_COLLECTION` 时才原子写出空 approvals authorization、
+assembly receipt 和 `PREAPPROVAL_ASSEMBLED` closure。三者都不代表 GA 授权；后续
+approval campaign 引用只能由 finalizer 写入。通用 assembler 只是底层测试/投影原语，
+不能替代正式 closure。
 
 在收集任何四方签字前，必须使用同一个权威授权器执行预签字门禁：
 
@@ -112,7 +114,7 @@ JSON 拼装伪造活动。
 `--supplemental-file`；它不扫描目录，因此不会把邻近私钥带入包。授权目录与独立策略
 目录是默认允许根，其他证据根必须用 `--include-root label=/absolute/path` 明确授权。
 campaign freeze 与空 base 会从最终授权的内容寻址引用自动归档。发布前应在 supplemental
-列表中加入 assembly/finalization receipt、四份 signer preflight 和最终授权结果，并把 bundle
+列表中加入 execution closure、assembly/finalization receipt、四份 signer preflight 和最终授权结果，并把 bundle
 SHA-256 发布到独立不可变渠道。
 
 接收方使用 `backend/scripts/verify_ga_authorized_archive.py`，同时传入 archive、外部

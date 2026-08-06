@@ -37,7 +37,7 @@ Runtime/Reporter
 | SLO | PASS | `HEALTHY`；142 个发布窗口请求、0 错误；ingest p95 7.729 ms、timeline p95 12.636 ms、policy p95 54.426 ms |
 | Readiness | PASS | `READY`；14 PASS / 0 WARN / 0 BLOCK |
 | 浏览器 | PASS | Playwright 3/3：未登录守卫、登录表单、审批→执行→回执→验证→完成；应用内浏览器复核 Operations/Release Control，console 0 warning/error |
-| 后端回归 | PASS | 1215 passed、19 skipped；核心覆盖率历史门禁 81.04%（门槛 65%） |
+| 后端回归 | PASS | 1221 passed、19 skipped；核心覆盖率历史门禁 81.04%（门槛 65%） |
 | Python 3.12 锁定环境 | PASS | hashed dev lock；runtime lock `pip-audit` 0 已知漏洞；Ruff/compile 通过 |
 | 真实 MySQL 测试 lane | PASS | 独立临时数据库 17/17；验证后数据库与用户均已删除 |
 | 前端 | PASS | npm audit 0；lint 0 warning；11 files / 56 tests；生产 build 最大入口块 569.69 kB（门槛 600 kB） |
@@ -108,7 +108,7 @@ Langfuse 保持可替换的 provider adapter：关闭或不可用时，依赖它
 - 用 `collect_ga_target_alerting.py` 触发和恢复目标告警，由 delivery 服务签署投递回执、实际值班人员签署 ack，并证明目标接收人与 on-call schedule；
 - 由组织策略预授权的第三方使用 `security-assessment-report.example.json` 交付并签署原始报告，再运行 `collect_ga_independent_security.py`，关闭最终应用镜像和依赖中的全部 Critical/High；
 - 创建 GitHub 验证通过的签名 annotated `v2.0.0` tag，让受控 CI 在最终 commit 上重跑 backend/frontend/E2E/Compose 并推送带 BuildKit attestation 的 GHCR 镜像；按发布 provenance 策略由独立 builder 签署 tag/source/SLSA/SPDX/scan 原始报告，运行 `collect_ga_release_provenance.py`，将输出绑定到授权文件 `release.provenance`；
-- 用 `preapproval-assembly-request.example.json` 只声明最终 release/target 和九份证据路径，通过独立 `--approval-policy` 运行 `assemble_ga_preapproval_authorization.py`；仅接受其落盘重验后的 `APPROVAL_COLLECTION` 空审批底稿和 assembly receipt，禁止手工投影 control 字段；
+- 真实采集后运行 `close_ga_execution_campaign.py`，只接受与已审阅 campaign 的 64 份外部产物、执行窗口和显式引用完全一致且落盘重验后的 `APPROVAL_COLLECTION` 空审批底稿、assembly receipt 与非授权 closure receipt；禁止直接用通用 assembler 绕过 campaign 对齐；
 - 由发布机构通过受控、内容寻址的组织策略固定共享信任库和角色身份；在四方签字前运行生产授权器 `--require-evidence-ready`，确认 `campaign_stage=APPROVAL_COLLECTION`、`evidence_ready_for_approval=true` 且 foundation/evidence 失败列表为空；
 - 运行 `freeze_ga_approval_campaign.py` 生成同一份不可覆盖、限时 campaign freeze，再由 Product、Architecture、Security、Operations 四个不同身份在窗口内签署同一 release/target/evidence/policy/campaign 摘要；
 - 用 finalizer 组装并重验，运行生产授权器取得唯一可接受结果 `GA_AUTHORIZED`，随后生成可搬运授权归档并通过独立渠道发布其摘要。

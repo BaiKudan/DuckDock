@@ -34,8 +34,8 @@ except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
     )
 
 
-REQUEST_SCHEMA_VERSION = "duckdock-ga-execution-campaign-request-v1"
-PLAN_SCHEMA_VERSION = "duckdock-ga-execution-campaign-v1"
+REQUEST_SCHEMA_VERSION = "duckdock-ga-execution-campaign-request-v2"
+PLAN_SCHEMA_VERSION = "duckdock-ga-execution-campaign-v2"
 CAMPAIGN_ID_RE = re.compile(r"^gaexec_[0-9a-f]{64}$")
 DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -62,6 +62,7 @@ TARGET_KEYS = {
 }
 EXECUTION_KEYS = {
     "evidence_root",
+    "backup_allowed_signers",
     "kubernetes_context",
     "namespace",
     "recovery_target_environment",
@@ -183,6 +184,7 @@ def _validate_execution(
     *,
     target_id: str,
     current: datetime,
+    require_fresh_evidence_root: bool,
 ) -> tuple[dict[str, Any], Path, datetime, datetime]:
     if not isinstance(execution, dict) or set(execution) != EXECUTION_KEYS:
         raise ValueError("execution must contain the exact campaign execution controls")
@@ -203,8 +205,28 @@ def _validate_execution(
     evidence_root = evidence_root.resolve()
     if evidence_root in {Path("/"), Path.home().resolve()} or len(evidence_root.parts) < 4:
         raise ValueError("execution evidence_root is too broad")
-    if evidence_root.exists():
-        raise ValueError("execution evidence_root already exists; campaigns require a fresh directory")
+    if require_fresh_evidence_root:
+        if evidence_root.exists():
+            raise ValueError("execution evidence_root already exists; campaigns require a fresh directory")
+    elif evidence_root.is_symlink() or not evidence_root.is_dir():
+        raise ValueError("execution evidence_root must be the existing non-symlink campaign directory")
+    backup_reference = execution.get("backup_allowed_signers")
+    if not isinstance(backup_reference, dict) or set(backup_reference) != {"path", "sha256"}:
+        raise ValueError("execution backup_allowed_signers must contain exactly path and sha256")
+    raw_backup_path = backup_reference.get("path")
+    if not isinstance(raw_backup_path, str) or not raw_backup_path.strip():
+        raise ValueError("execution backup_allowed_signers.path must be a non-empty absolute path")
+    backup_path = Path(raw_backup_path).expanduser()
+    if not backup_path.is_absolute():
+        raise ValueError("execution backup_allowed_signers.path must be absolute")
+    if backup_path.is_symlink():
+        raise ValueError("execution backup_allowed_signers must not be a symbolic link")
+    backup_path = backup_path.resolve()
+    if not backup_path.is_file():
+        raise ValueError(f"execution backup_allowed_signers does not exist: {backup_path}")
+    backup_digest = _sha256(backup_path)
+    if backup_reference.get("sha256") != backup_digest:
+        raise ValueError("execution backup_allowed_signers digest mismatch")
     starts_at = _parse_time(execution.get("window_starts_at"), "window_starts_at")
     expires_at = _parse_time(execution.get("window_expires_at"), "window_expires_at")
     if starts_at < current - timedelta(minutes=5):
@@ -215,6 +237,10 @@ def _validate_execution(
         raise ValueError("execution window is already expired")
     normalized = dict(execution)
     normalized["evidence_root"] = str(evidence_root)
+    normalized["backup_allowed_signers"] = {
+        "path": str(backup_path),
+        "sha256": backup_digest,
+    }
     normalized["window_starts_at"] = starts_at.isoformat()
     normalized["window_expires_at"] = expires_at.isoformat()
     return normalized, evidence_root, starts_at, expires_at
@@ -304,6 +330,7 @@ def _artifact_paths(root: Path) -> dict[str, str]:
         "security_assessment": "independent-security-evidence.json",
         "preapproval_authorization": "preapproval-authorization.json",
         "preapproval_assembly_receipt": "preapproval-assembly-receipt.json",
+        "execution_closure": "execution-campaign-closure.json",
     }
     return {key: str(root / name) for key, name in names.items()}
 
@@ -536,8 +563,12 @@ def _phases(
             "preapproval_assembly",
             risk_class="READ_ONLY_ASSEMBLY",
             depends_on=["release_provenance", *evidence_phases],
-            tools=["assemble_ga_preapproval_authorization.py"],
-            outputs=["preapproval_authorization", "preapproval_assembly_receipt"],
+            tools=["close_ga_execution_campaign.py"],
+            outputs=[
+                "preapproval_authorization",
+                "preapproval_assembly_receipt",
+                "execution_closure",
+            ],
         ),
     ]
 
@@ -601,6 +632,7 @@ def prepare(
     assembly_request_output: Path,
     *,
     now: datetime | None = None,
+    require_fresh_evidence_root: bool = True,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     request_path = request_path.resolve()
@@ -616,6 +648,7 @@ def prepare(
         request.get("execution"),
         target_id=str(target["target_id"]),
         current=current,
+        require_fresh_evidence_root=require_fresh_evidence_root,
     )
     topology_receipt, topology_manifest_path = _verified_topology_receipt(topology_receipt_path)
     if _sha256(topology_receipt_path) != topology_receipt_digest:

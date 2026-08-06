@@ -19,23 +19,24 @@ network/secrets stability, HA before state-service evidence, or destructive
 restore against the production target was an avoidable operational risk.
 
 `prepare_ga_execution_campaign.py` now consumes
-`duckdock-ga-execution-campaign-request-v1` plus an independently supplied
+`duckdock-ga-execution-campaign-request-v2` plus an independently supplied
 topology PASS receipt. It reopens and revalidates the receipt, manifest, nine
 policies and trust stores, then content-addresses:
 
 - the exact `2.0.0` commit, contract and immutable backend/frontend images;
 - the named HTTPS production Kubernetes HA target and fault domains;
 - exact Kubernetes context/Namespace and a distinct recovery/staging target;
+- a content-addressed backup-manifest allowed-signers file;
 - a fresh, previously nonexistent evidence root;
 - a timezone-aware execution window of no more than 14 days;
 - the generated preapproval request digest.
 
-The emitted `duckdock-ga-execution-campaign-v1` validates a 12-phase dependency
-graph and assigns all 66 planned artifacts exactly once, including signed tag,
+The emitted `duckdock-ga-execution-campaign-v2` validates a 12-phase dependency
+graph and assigns all 67 planned artifacts exactly once, including signed tag,
 source archive, SLSA/SPDX/registry predicates, raw SARIF and scans. Capacity depends on
 readiness, network and secrets; HA depends on readiness, network and signed
 state-service evidence; the final assembly depends on release provenance and
-all nine target wrappers. External-vantage, mutating, destructive and
+all nine target wrappers plus the later execution-closure receipt. External-vantage, mutating, destructive and
 disruptive phases carry the exact target acknowledgement they require. Phase
 roles must exist in the verified trust topology.
 
@@ -43,8 +44,9 @@ Every phase is initially `PENDING_EXTERNAL_EVIDENCE`, the campaign status is
 only `PLANNED_EXTERNAL_EXECUTION`, and the plan states
 `does_not_authorize_GA_or_target_mutation`. It therefore coordinates external
 work without manufacturing a PASS or bypassing the release authority. The tool
-also emits the exact `duckdock-ga-preapproval-assembly-request-v1` that can be
-used after all expected files exist, eliminating a second manual projection.
+also emits the exact `duckdock-ga-preapproval-assembly-request-v1` consumed by
+the formal campaign-closure gate after all expected files exist, eliminating a
+second manual projection.
 Both outputs are atomic, non-overwriting, outside the fresh evidence root and
 are reopened with all inputs independently reverified before success.
 

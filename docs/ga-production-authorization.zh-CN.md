@@ -120,7 +120,8 @@ python backend/scripts/verify_ga_trust_topology.py \
 
    随后复制 `ops/ga/execution-campaign-request.example.json`，只填写最终 release/target、
    精确 Kubernetes context/Namespace、与 production 不同的 recovery/staging target、
-   最长 14 天窗口，以及一个尚不存在的专用 evidence root。发布机构使用刚才的独立
+   备份签名专用 allowed-signers 的绝对路径及 SHA-256、最长 14 天窗口，以及一个尚不
+   存在的专用 evidence root。发布机构使用刚才的独立
    topology PASS 回执生成计划：
 
 ```bash
@@ -132,7 +133,7 @@ python backend/scripts/prepare_ga_execution_campaign.py \
 ```
 
    工具会重新验证 topology receipt、manifest、九份 policy/trust store，内容寻址绑定
-   release/target/window，分配全部 raw/signature/wrapper 的唯一预期路径并验证 phase DAG。
+   release/target/window，分配全部 raw/signature/wrapper/closure 的唯一预期路径并验证 phase DAG。
    容量在 readiness/network/secrets 后，HA 在 network/state-services 后，破坏性恢复仅能
    指向独立 recovery/staging target。生成的每个 phase 都是
    `PENDING_EXTERNAL_EVIDENCE`；`PLANNED_EXTERNAL_EXECUTION` 明确不授权任何目标变更，
@@ -708,23 +709,27 @@ shasum -a 256 /release-authority/duckdock-ga-approval-policy.json
 ```
 
 15. 九类采集器和外部评估输出齐备后，不要再手工把报告字段、时间和摘要复制到完整
-    authorization JSON。复制 `ops/ga/preapproval-assembly-request.example.json`，只填写
-    最终 release/target 身份和九份证据路径；approval policy 仍通过独立 CLI 参数选择，
-    不能由请求文件自选信任根：
+    authorization JSON，也不要在正式 campaign 中直接调用通用 assembler。使用计划阶段
+    自动生成的 campaign 和 preapproval request 运行闭环工具：
 
 ```bash
-python backend/scripts/assemble_ga_preapproval_authorization.py \
-  --request /secure/duckdock-2.0.0-preapproval-request.json \
-  --approval-policy /release-authority/duckdock-ga-approval-policy.json \
-  --output /secure/duckdock-2.0.0-authorization.json \
-  --receipt-output /secure/duckdock-2.0.0-assembly.json
+python backend/scripts/close_ga_execution_campaign.py \
+  --campaign /release-authority/duckdock-2.0.0-execution-campaign.json \
+  --assembly-request /release-authority/duckdock-2.0.0-preapproval-request.json
 ```
 
-组装器重新打开 release provenance 和九份 wrapper，从签名容量原始回执重算负载/增长/
-清理投影，其余 control 也只从证据投影；随后调用同一权威授权器。只有基础和全部非审批
-检查均通过、状态精确为 `APPROVAL_COLLECTION` 时才写出 approvals 为空且不含
-`approval_campaign` 的不可覆盖底稿。落盘后再次评估，输入中途变化或输出已存在都会
-fail closed。assembly receipt 记录请求、策略、十份顶层证据摘要和完整评估结果。
+闭环工具按 campaign 预分配路径要求 64 份外部产物全部存在，拒绝 symlink、缺失、摘要
+冲突和任何指向未计划路径的 `path+sha256`、`path+manifest_sha256`、allowed-signers 或
+signature 引用；十份最终 wrapper 的 `observed_at` 必须位于执行窗口内。它重新生成并逐字
+比较 campaign/request、重验 topology/九份 policy/trust store 和单独内容寻址的 backup
+allowed-signers，然后调用同一 assembler 与权威授权器。只有结果精确为
+`APPROVAL_COLLECTION` 时才原子写出计划内的 `preapproval-authorization.json`、
+`preapproval-assembly-receipt.json` 和 `execution-campaign-closure.json`。任一步失败会删除
+本轮已创建的输出；第二次运行不能覆盖。closure 的 `PREAPPROVAL_ASSEMBLED` 只表示证据
+接线闭合，仍明确 `does_not_authorize_GA_or_target_mutation`。
+
+`assemble_ga_preapproval_authorization.py` 仍保留为可单独测试投影规则的底层原语；它本身
+不证明产物来自已审阅 campaign，不能替代上述正式发布路径。
 
 使用受控策略再次运行不可绕过的预签字门禁。授权文件的 `approvals` 此时为空，
 但发布基础、九类目标证据、外部安全签名及所有内容摘要已经完整：
@@ -843,6 +848,7 @@ python backend/scripts/verify_ga_production_authorization.py \
 python backend/scripts/archive_ga_authorized_bundle.py \
   --authorization /secure/duckdock-2.0.0-authorized.json \
   --approval-policy /release-authority/duckdock-ga-approval-policy.json \
+  --supplemental-file /secure/evidence/execution-campaign-closure.json \
   --supplemental-file /secure/duckdock-2.0.0-assembly.json \
   --supplemental-file /secure/duckdock-2.0.0-finalization.json \
   --supplemental-file /secure/product-preflight.json \
@@ -859,7 +865,9 @@ python backend/scripts/archive_ga_authorized_bundle.py \
 `GA_AUTHORIZED` 才写出结果；三个输出均不可覆盖，持久化后会重新读取并验证。
 它不会扫描目录，只沿 JSON 中显式的 `path+sha256`、`path+manifest_sha256`、
 `allowed_signers_path+allowed_signers_sha256`、`signature_path` 引用闭包，并加入明确
-传入的 supplemental receipt/result。campaign freeze 及其空 base 由最终授权中的
+传入的 supplemental receipt/result。正式 GA 必须把 execution closure 作为 supplemental；
+它会继续显式引用 campaign/request/topology、64 份外部产物和 preapproval outputs，从而
+把计划到实际证据的完整映射带入 portable archive。campaign freeze 及其空 base 由最终授权中的
 内容寻址引用自动进入闭包，不需要作为 supplemental 重复传入。因此同目录审批私钥、builder 私钥和未引用文件
 不会进入归档；即使显式引用，常见 OpenSSH/PEM/age 私钥材料也会被拒绝。授权文件
 目录和策略目录自动成为允许根；引用位于其他受控目录时，

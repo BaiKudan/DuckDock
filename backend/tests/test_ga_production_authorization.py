@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 import scripts.archive_ga_authorized_bundle as authorized_bundle_archiver
+import scripts.close_ga_execution_campaign as execution_campaign_closer
 import scripts.collect_ga_release_provenance as release_provenance_collector
 import scripts.prepare_ga_execution_campaign as execution_campaign_preparer
 import scripts.verify_ga_trust_topology as trust_topology_verifier
@@ -3664,6 +3665,12 @@ def _execution_campaign_fixture(
         },
         "target": document["target"],
         "execution": {
+            "backup_allowed_signers": {
+                "path": str(tmp_path / "backup_allowed_signers"),
+                "sha256": hashlib.sha256(
+                    (tmp_path / "backup_allowed_signers").read_bytes()
+                ).hexdigest(),
+            },
             "evidence_root": str(evidence_root),
             "kubernetes_context": "customer-production-context",
             "namespace": "duckdock",
@@ -3857,7 +3864,10 @@ def test_execution_campaign_generates_pending_dependency_plan_and_assembly_reque
     assert plan["preapproval_assembly_request"]["sha256"] == hashlib.sha256(
         assembly_request_output.read_bytes()
     ).hexdigest()
-    assert len(plan["artifacts"]) == 66
+    assert len(plan["artifacts"]) == 67
+    assert phases["preapproval_assembly"]["tools"] == [
+        "close_ga_execution_campaign.py"
+    ]
     assert not evidence_root.exists()
     assert all(
         Path(path).is_relative_to(evidence_root) for path in plan["artifacts"].values()
@@ -3923,6 +3933,380 @@ def test_execution_campaign_rejects_unsafe_execution_boundaries(
             tmp_path / "preapproval-request.json",
             now=now,
         )
+
+
+def test_execution_campaign_closure_accepts_only_the_exact_reference_set(
+    tmp_path: Path,
+) -> None:
+    evidence_root = tmp_path / "campaign-evidence"
+    evidence_root.mkdir()
+    raw = evidence_root / "raw.json"
+    signature = evidence_root / "raw.json.sig"
+    wrapper = evidence_root / "wrapper.json"
+    raw.write_text('{"status":"PASS"}\n', encoding="utf-8")
+    signature.write_bytes(b"detached-signature")
+    wrapper.write_text(
+        json.dumps(
+            {
+                "raw": {
+                    "path": str(raw),
+                    "sha256": hashlib.sha256(raw.read_bytes()).hexdigest(),
+                    "signature_path": str(signature),
+                }
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    allowed = {raw, signature, wrapper}
+
+    captured, references = execution_campaign_closer._capture_exact_closure(
+        allowed,
+        allowed_paths=allowed,
+        authorization_path=evidence_root / "preapproval-authorization.json",
+    )
+
+    assert {item.path for item in captured} == {path.resolve() for path in allowed}
+    assert {(item.reference_type, item.target) for item in references} == {
+        ("content_sha256", raw.resolve()),
+        ("signature", signature.resolve()),
+    }
+
+
+def test_execution_campaign_closure_rejects_evidence_outside_execution_window(
+    tmp_path: Path,
+) -> None:
+    starts_at = datetime.now(timezone.utc)
+    artifacts: dict[str, Path] = {}
+    for name in execution_campaign_closer.FINAL_EVIDENCE_KEYS:
+        path = tmp_path / f"{name}.json"
+        observed_at = starts_at
+        if name == "network":
+            observed_at -= timedelta(seconds=1)
+        path.write_text(
+            json.dumps({"observed_at": observed_at.isoformat()}) + "\n",
+            encoding="utf-8",
+        )
+        artifacts[name] = path
+
+    with pytest.raises(ValueError, match="network evidence was not observed inside"):
+        execution_campaign_closer._validate_observation_window(
+            artifacts,
+            starts_at=starts_at,
+            closed_at=starts_at + timedelta(minutes=5),
+        )
+
+
+@pytest.mark.parametrize("mutation", ["missing", "substitution", "digest_mismatch"])
+def test_execution_campaign_closure_rejects_incomplete_or_substituted_paths(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    evidence_root = tmp_path / "campaign-evidence"
+    evidence_root.mkdir()
+    raw = evidence_root / "raw.json"
+    wrapper = evidence_root / "wrapper.json"
+    raw.write_text('{"status":"PASS"}\n', encoding="utf-8")
+    declared_path = raw
+    declared_digest = hashlib.sha256(raw.read_bytes()).hexdigest()
+    allowed = {raw, wrapper}
+    expected = "referenced file does not exist"
+    if mutation == "missing":
+        missing = evidence_root / "missing.json"
+        allowed.add(missing)
+    elif mutation == "substitution":
+        rogue = evidence_root / "rogue.json"
+        rogue.write_text('{"status":"PASS"}\n', encoding="utf-8")
+        declared_path = rogue
+        declared_digest = hashlib.sha256(rogue.read_bytes()).hexdigest()
+        expected = "closure is not exact"
+    else:
+        declared_digest = "0" * 64
+        expected = "digest mismatch"
+    wrapper.write_text(
+        json.dumps(
+            {"path": str(declared_path), "sha256": declared_digest},
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=expected):
+        execution_campaign_closer._capture_exact_closure(
+            allowed,
+            allowed_paths=allowed,
+            authorization_path=evidence_root / "preapproval-authorization.json",
+        )
+
+
+CAMPAIGN_FIXTURE_SOURCES = {
+    "release_tag_object": "v2.0.0-tag-object.txt",
+    "release_tag_verification": "v2.0.0-tag-verification.json",
+    "release_source_archive": "duckdock-v2.0.0-source.tar.gz",
+    "release_build_report": "release-build-report.json",
+    "release_build_signature": "release-build-report.json.sig",
+    "backend_slsa_statement": "backend-slsa.json",
+    "backend_registry_slsa_predicate": "backend-buildkit-slsa-predicate.json",
+    "backend_sbom_statement": "backend-sbom.spdx.json",
+    "backend_registry_sbom": "backend-buildkit-sbom.spdx.json",
+    "backend_scout_sarif": "backend-scout.sarif.json",
+    "backend_vulnerability_scan": "backend-vulnerability-scan.json",
+    "frontend_slsa_statement": "frontend-slsa.json",
+    "frontend_registry_slsa_predicate": "frontend-buildkit-slsa-predicate.json",
+    "frontend_sbom_statement": "frontend-sbom.spdx.json",
+    "frontend_registry_sbom": "frontend-buildkit-sbom.spdx.json",
+    "frontend_scout_sarif": "frontend-scout.sarif.json",
+    "frontend_vulnerability_scan": "frontend-vulnerability-scan.json",
+    "release_provenance": "release-provenance-evidence.json",
+    "application_readiness": "application.json",
+    "tls_probe_report": "tls-raw.json",
+    "tls_probe_signature": "tls-raw.json.sig",
+    "tls": "tls.json",
+    "network_probe_report": "network-raw.json",
+    "network_probe_signature": "network-raw.json.sig",
+    "network": "network.json",
+    "secret_rotation_receipt": "secret-rotation-receipt.json",
+    "secret_rotation_signature": "secret-rotation-receipt.json.sig",
+    "secret_verification_receipt": "secret-verification-receipt.json",
+    "secret_verification_signature": "secret-verification-receipt.json.sig",
+    "secrets": "secrets.json",
+    "capacity_load_report": "capacity-load.json",
+    "capacity_load_signature": "capacity-load.json.sig",
+    "capacity_growth_receipt": "capacity-growth.json",
+    "capacity_growth_signature": "capacity-growth.json.sig",
+    "capacity_cleanup_receipt": "capacity-cleanup.json",
+    "capacity_cleanup_signature": "capacity-cleanup.json.sig",
+    "capacity": "capacity.json",
+    "alert_firing_receipt": "alert-firing-receipt.json",
+    "alert_firing_signature": "alert-firing-receipt.json.sig",
+    "oncall_acknowledgement": "alert-oncall-ack.json",
+    "oncall_acknowledgement_signature": "alert-oncall-ack.json.sig",
+    "alert_resolved_receipt": "alert-resolved-receipt.json",
+    "alert_resolved_signature": "alert-resolved-receipt.json.sig",
+    "alerting": "alerting.json",
+    "backup_manifest": "backup-manifest.json",
+    "backup_manifest_signature": "backup-manifest.json.sig",
+    "backup_media_receipt": "backup-media-receipt.json",
+    "backup_media_signature": "backup-media-receipt.json.sig",
+    "restore_execution_receipt": "restore-execution-receipt.json",
+    "restore_execution_signature": "restore-execution-receipt.json.sig",
+    "recovery_verification_receipt": "recovery-verification-receipt.json",
+    "recovery_verification_signature": "recovery-verification-receipt.json.sig",
+    "recovery": "recovery.json",
+    "state_provider_receipt": "state-provider-receipt.json",
+    "state_provider_signature": "state-provider-receipt.json.sig",
+    "state_verification_receipt": "state-verification-receipt.json",
+    "state_verification_signature": "state-verification-receipt.json.sig",
+    "state_services": "state-services-failover.json",
+    "state_services_operations_signature": "state-services-failover.json.sig",
+    "high_availability": "ha.json",
+    "security_assessment_report": "independent-assessment.json",
+    "security_assessment_signature": "independent-assessment.json.sig",
+    "security_assessment_pdf": "independent-assessment-report.pdf",
+    "security_assessment": "security.json",
+}
+
+
+def _materialize_campaign_fixture(
+    tmp_path: Path,
+    plan: dict,
+) -> None:
+    artifacts = {name: Path(path) for name, path in plan["artifacts"].items()}
+    mapping: dict[str, Path] = {}
+    for name, source_name in CAMPAIGN_FIXTURE_SOURCES.items():
+        source = tmp_path / source_name
+        target = artifacts[name]
+        shutil.copyfile(source, target)
+        mapping[str(source)] = target
+        mapping[str(source.resolve())] = target
+
+    def remap(value: object) -> None:
+        if isinstance(value, dict):
+            raw_path = value.get("path")
+            if isinstance(raw_path, str) and raw_path in mapping:
+                target = mapping[raw_path]
+                value["path"] = str(target)
+                if "sha256" in value:
+                    value["sha256"] = hashlib.sha256(target.read_bytes()).hexdigest()
+                if "manifest_sha256" in value:
+                    value["manifest_sha256"] = hashlib.sha256(
+                        target.read_bytes()
+                    ).hexdigest()
+            signature_path = value.get("signature_path")
+            if isinstance(signature_path, str) and signature_path in mapping:
+                value["signature_path"] = str(mapping[signature_path])
+            for nested in value.values():
+                remap(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                remap(nested)
+
+    def rewrite(path: Path) -> dict:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        remap(value)
+        path.write_text(json.dumps(value, sort_keys=True) + "\n", encoding="utf-8")
+        return value
+
+    def resign(path: Path, signature: Path, key: Path, namespace: str) -> None:
+        signature.unlink()
+        subprocess.run(
+            [
+                "ssh-keygen",
+                "-q",
+                "-Y",
+                "sign",
+                "-f",
+                str(key),
+                "-n",
+                namespace,
+                str(path),
+            ],
+            check=True,
+        )
+
+    build_report = rewrite(artifacts["release_build_report"])
+    resign(
+        artifacts["release_build_report"],
+        artifacts["release_build_signature"],
+        tmp_path / "release_builder_key",
+        BUILD_SIGNATURE_NAMESPACE,
+    )
+    rewrite(artifacts["state_services"])
+    resign(
+        artifacts["state_services"],
+        artifacts["state_services_operations_signature"],
+        tmp_path / "operations_key",
+        "duckdock-ha-state-services",
+    )
+    assessment = rewrite(artifacts["security_assessment_report"])
+    resign(
+        artifacts["security_assessment_report"],
+        artifacts["security_assessment_signature"],
+        tmp_path / "independent_assessor_key",
+        ASSESSMENT_SIGNATURE_NAMESPACE,
+    )
+    for name in (
+        "tls",
+        "network",
+        "secrets",
+        "capacity",
+        "alerting",
+        "recovery",
+        "high_availability",
+        "security_assessment",
+    ):
+        rewrite(artifacts[name])
+
+    provenance = rewrite(artifacts["release_provenance"])
+    build_signed_reference = provenance["signed_build_report"]["signed_evidence"]
+    provenance["signed_build_report"] = {
+        **build_report,
+        "signed_evidence": {
+            "path": str(artifacts["release_build_report"]),
+            "sha256": hashlib.sha256(
+                artifacts["release_build_report"].read_bytes()
+            ).hexdigest(),
+            "signature_path": str(artifacts["release_build_signature"]),
+            "signer_identity": build_signed_reference["signer_identity"],
+        },
+    }
+    artifacts["release_provenance"].write_text(
+        json.dumps(provenance, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    security = json.loads(artifacts["security_assessment"].read_text(encoding="utf-8"))
+    security["signed_assessment"] = {
+        **assessment,
+        "signed_evidence": security["signed_assessment"]["signed_evidence"],
+    }
+    remap(security)
+    artifacts["security_assessment"].write_text(
+        json.dumps(security, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def test_execution_campaign_closure_reverifies_all_64_external_artifacts(
+    tmp_path: Path,
+) -> None:
+    if shutil.which("ssh-keygen") is None:
+        pytest.skip("ssh-keygen is required for signed campaign closure verification")
+    now = datetime.now(timezone.utc)
+    _, request_path, topology_receipt_path, evidence_root = (
+        _execution_campaign_fixture(tmp_path, now)
+    )
+    request = json.loads(request_path.read_text(encoding="utf-8"))
+    request["execution"]["window_starts_at"] = (now - timedelta(minutes=5)).isoformat()
+    request["execution"]["window_expires_at"] = (now + timedelta(days=1)).isoformat()
+    request_path.write_text(json.dumps(request, sort_keys=True) + "\n", encoding="utf-8")
+    campaign_path = tmp_path / "execution-campaign.json"
+    assembly_request_path = tmp_path / "generated-preapproval-request.json"
+    plan, assembly_request = execution_campaign_preparer.prepare(
+        request_path,
+        topology_receipt_path,
+        assembly_request_path,
+        now=now - timedelta(minutes=10),
+    )
+    assembly_request_path.write_text(
+        json.dumps(assembly_request, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    campaign_path.write_text(
+        json.dumps(plan, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    evidence_root.mkdir()
+    _materialize_campaign_fixture(tmp_path, plan)
+
+    authorization, receipt, closure, tracked = execution_campaign_closer.close(
+        campaign_path,
+        assembly_request_path,
+        now=now,
+    )
+
+    assert authorization["approvals"] == []
+    assert receipt["evaluation"]["campaign_stage"] == "APPROVAL_COLLECTION"
+    assert closure["status"] == "PREAPPROVAL_ASSEMBLED"
+    assert closure["external_artifact_count"] == 64
+    assert closure["captured_input_count"] == len(tracked) == 88
+    assert closure["reference_count"] == 133
+    assert closure["outputs"] == {}
+
+    assert (
+        execution_campaign_closer.main(
+            [
+                "--campaign",
+                str(campaign_path),
+                "--assembly-request",
+                str(assembly_request_path),
+            ]
+        )
+        == 0
+    )
+    persisted_closure_path = Path(plan["artifacts"]["execution_closure"])
+    persisted_closure = json.loads(
+        persisted_closure_path.read_text(encoding="utf-8")
+    )
+    assert persisted_closure["status"] == "PREAPPROVAL_ASSEMBLED"
+    for name in ("preapproval_authorization", "preapproval_assembly_receipt"):
+        reference = persisted_closure["outputs"][name]
+        path = Path(reference["path"])
+        assert reference["sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+    original_closure = persisted_closure_path.read_bytes()
+    assert (
+        execution_campaign_closer.main(
+            [
+                "--campaign",
+                str(campaign_path),
+                "--assembly-request",
+                str(assembly_request_path),
+            ]
+        )
+        == 3
+    )
+    assert persisted_closure_path.read_bytes() == original_closure
 
 
 def _preapproval_assembly_command(

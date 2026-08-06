@@ -173,6 +173,7 @@ def verify(env_file: Path) -> dict[str, Any]:
     trust_topology_verifier = REPO_ROOT / "backend/scripts/verify_ga_trust_topology.py"
     trust_topology_manifest = REPO_ROOT / "ops/ga/trust-topology-manifest.example.json"
     execution_campaign_preparer = REPO_ROOT / "backend/scripts/prepare_ga_execution_campaign.py"
+    execution_campaign_closer = REPO_ROOT / "backend/scripts/close_ga_execution_campaign.py"
     execution_campaign_request = REPO_ROOT / "ops/ga/execution-campaign-request.example.json"
     approval_freezer = REPO_ROOT / "backend/scripts/freeze_ga_approval_campaign.py"
     approval_signer = REPO_ROOT / "backend/scripts/sign_ga_approval.py"
@@ -194,6 +195,11 @@ def verify(env_file: Path) -> dict[str, Any]:
     execution_campaign_text = (
         execution_campaign_preparer.read_text(encoding="utf-8")
         if execution_campaign_preparer.is_file()
+        else ""
+    )
+    execution_closure_text = (
+        execution_campaign_closer.read_text(encoding="utf-8")
+        if execution_campaign_closer.is_file()
         else ""
     )
     freezer_text = (
@@ -256,6 +262,18 @@ def verify(env_file: Path) -> dict[str, Any]:
         and "preapproval assembly input changed before receipt emission" in assembler_text,
         "nine release-bound evidence reports are projected and re-evaluated into one immutable approval-empty base",
         "no manual control projection; emit only at APPROVAL_COLLECTION with foundation/evidence clean",
+    )
+    add(
+        "ga_execution_campaign_closure",
+        "duckdock-ga-execution-campaign-closure-v1" in execution_closure_text
+        and "campaign evidence closure is not exact" in execution_closure_text
+        and "execution campaign can close only inside its bound execution window"
+        in execution_closure_text
+        and "PREAPPROVAL_ASSEMBLED" in execution_closure_text
+        and "campaign input changed before closure receipt emission"
+        in execution_closure_text,
+        "exact 64-artifact/reference closure plus transactional preapproval assembly",
+        "planned paths equal actual evidence before immutable non-authorizing closure",
     )
     add(
         "ga_approval_campaign",
