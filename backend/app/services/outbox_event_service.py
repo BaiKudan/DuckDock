@@ -2287,7 +2287,10 @@ def build_release_receipt_recorded(receipt: ReleaseDeploymentReceipt) -> DomainE
     if receipt.promotion is not None:
         dispatch_public_id = receipt.promotion.dispatch_public_id
     else:
-        assert receipt.rollback is not None
+        if receipt.rollback is None:
+            raise OutboxPayloadError(
+                "release receipt has neither promotion nor rollback"
+            )
         dispatch_public_id = receipt.rollback.dispatch_public_id
     return _event(
         namespace_id=receipt.namespace_id,

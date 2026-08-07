@@ -37,6 +37,20 @@ backend/.venv/bin/python scripts/run_ga_local_preflight.py \
 交接和减少最终流水线返工，不能进入 `APPROVAL_COLLECTION`，也不能替代下文任何真实
 目标证据或最终 tag CI。
 
+第三方安全评估委托前，可在同样的干净工作树上运行内部安全预审：
+
+```bash
+preaudit_parent="$(mktemp -d)"
+backend/.venv/bin/python scripts/run_security_preaudit.py \
+  --output-dir "$preaudit_parent/duckdock-security-preaudit"
+```
+
+该预审覆盖后端与前端依赖审计、高置信 SAST、安全负向用例、当前 tracked 非测试源码
+的凭据启发式扫描，以及 backend、frontend、TLS gateway、Alertmanager 四个一方镜像
+的当前源码重建和 Critical/High Docker Scout 门禁。回执会绑定 Git commit/tree、镜像
+ID、日志和 SARIF 摘要，但它明确不是独立第三方评估，不能替代目标环境测试、修复复测、
+评估数据删除证明或 GA 授权。
+
 ## 执行顺序
 
 1. 从 `ops/ga/production-authorization.example.json` 复制目标环境文件。

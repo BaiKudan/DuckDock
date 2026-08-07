@@ -17,12 +17,13 @@ import math
 import re
 import subprocess
 import sys
-import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Sequence
 from urllib.parse import urlparse
+
+from defusedxml import DefusedXmlException, ElementTree as ET
 
 try:
     from scripts.ga_path_resolution import ga_file_resolution_override
@@ -564,7 +565,7 @@ def _nmap_xml_summary(value: Any) -> dict[str, Any] | None:
         return None
     try:
         root = ET.fromstring(value)
-    except ET.ParseError:
+    except (ET.ParseError, DefusedXmlException):
         return None
     host_node = root.find("host")
     status_node = host_node.find("status") if host_node is not None else None

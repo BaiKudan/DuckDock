@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -25,6 +26,7 @@ from app.models.user import AuthSource, SystemRole, User
 
 DEFAULT_USERNAME = "e09-ga-validator"
 DEFAULT_PASSWORD = "DuckDock@E09Local2026!"
+logger = logging.getLogger(__name__)
 
 
 async def _ensure_admin(username: str, password: str) -> None:
@@ -250,7 +252,9 @@ async def verify(args: argparse.Namespace) -> dict[str, Any]:
                     payload={"reason": "E09 GA probe cleanup after failure"},
                 )
             except Exception:
-                pass
+                logger.exception(
+                    "Failed to revoke temporary GA validation workload identity"
+                )
         await api.close()
         await engine.dispose()
 

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 import scripts.collect_ga_target_network as target_network
+import scripts.verify_ga_production_authorization as production_authorization
 from scripts.ga_network_evidence import validate_network_probe_envelope
 from scripts.ga_release_identity import build_release_binding
 
@@ -15,6 +16,24 @@ from scripts.ga_release_identity import build_release_binding
 COMMIT = "a" * 40
 BACKEND_IMAGE = f"registry.example.com/duckdock/backend@sha256:{'b' * 64}"
 FRONTEND_IMAGE = f"registry.example.com/duckdock/frontend@sha256:{'c' * 64}"
+
+
+@pytest.mark.parametrize(
+    "parser",
+    [
+        target_network._nmap_xml_summary,
+        production_authorization._nmap_xml_summary,
+    ],
+)
+def test_nmap_summary_rejects_xml_entities(parser) -> None:
+    malicious_xml = (
+        "<!DOCTYPE nmaprun [<!ENTITY probe SYSTEM 'file:///etc/passwd'>]>"
+        "<nmaprun version='7.98'><host><status state='up'/>"
+        "<address addr='&probe;'/></host>"
+        "<runstats><finished elapsed='1.0'/></runstats></nmaprun>"
+    )
+
+    assert parser(malicious_xml) is None
 
 
 def _binding() -> dict:

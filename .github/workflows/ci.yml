@@ -75,6 +75,10 @@ jobs:
         working-directory: backend
         run: python -m ruff check app alembic scripts
 
+      - name: High-confidence security static gate
+        working-directory: backend
+        run: python -m ruff check --select S101,S110,S314 app scripts
+
       - name: Type check (mypy, baseline ratchet)
         working-directory: backend
         shell: bash
@@ -336,6 +340,7 @@ jobs:
           python3 backend/scripts/verify_ga_authorized_archive.py --help >/dev/null
           python3 backend/scripts/authorize_ga_publication.py --help >/dev/null
           python3 scripts/run_ga_local_preflight.py --help >/dev/null
+          python3 scripts/run_security_preaudit.py --help >/dev/null
 
       - name: Validate Prometheus and Alertmanager configuration
         shell: bash

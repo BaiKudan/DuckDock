@@ -10,12 +10,13 @@ import json
 import re
 import subprocess
 import sys
-import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
 from urllib.parse import urlparse
+
+from defusedxml import DefusedXmlException, ElementTree as ET
 
 try:
     from scripts.ga_network_evidence import (
@@ -125,7 +126,7 @@ class ScanResult:
 def _nmap_xml_summary(raw_xml: str) -> dict[str, Any] | None:
     try:
         root = ET.fromstring(raw_xml)
-    except ET.ParseError:
+    except (ET.ParseError, DefusedXmlException):
         return None
     host_node = root.find("host")
     status_node = host_node.find("status") if host_node is not None else None
@@ -219,7 +220,7 @@ class NmapScanner:
         xml_bytes = completed.stdout
         try:
             root = ET.fromstring(xml_bytes)
-        except ET.ParseError as exc:
+        except (ET.ParseError, DefusedXmlException) as exc:
             raise RuntimeError(f"nmap returned invalid XML for {host}: {exc}") from exc
         host_node = root.find("host")
         status_node = host_node.find("status") if host_node is not None else None

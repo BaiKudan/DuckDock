@@ -1466,8 +1466,10 @@ class LangfuseExperimentRunner:
                 score = 1.0 if output == expected_output else 0.0
                 passed = score == 1.0
             else:
-                assert metric_spec is not None
-                assert evaluation_adapter is not None
+                if metric_spec is None or evaluation_adapter is None:
+                    raise LangfuseExperimentRunnerError(
+                        "Evaluator configuration invariant was not satisfied"
+                    )
                 summaries = evaluation_adapter.evaluate(
                     case=EphemeralEvaluationCase(
                         input_text=_content_text(input),

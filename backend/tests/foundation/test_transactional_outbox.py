@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -62,6 +63,7 @@ from app.services.outbox_event_service import (
     TRACE_ARTIFACT_STORED,
     OutboxPayloadError,
     build_agent_run_trust_degraded,
+    build_release_receipt_recorded,
     enqueue_domain_event,
     serialize_event_payload,
 )
@@ -173,6 +175,16 @@ def test_event_serializer_rejects_sensitive_nested_and_incomplete_payloads(
 ) -> None:
     with pytest.raises(OutboxPayloadError):
         serialize_event_payload(AGENT_RUN_REGISTERED, payload)
+
+
+def test_release_receipt_event_rejects_missing_dispatch_relationship() -> None:
+    receipt = SimpleNamespace(promotion=None, rollback=None)
+
+    with pytest.raises(
+        OutboxPayloadError,
+        match="neither promotion nor rollback",
+    ):
+        build_release_receipt_recorded(receipt)
 
 
 async def test_lifecycle_and_artifact_mutations_emit_one_low_sensitive_event(

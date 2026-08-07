@@ -863,7 +863,10 @@ async def _activate_environment_release(
     if promotion is not None:
         environment_id = promotion.target_environment_id
     else:
-        assert rollback is not None
+        if rollback is None:
+            raise ReleaseControlStateError(
+                "activation requires a rollback when promotion is absent"
+            )
         environment_id = rollback.environment_id
     current = await _active_environment_release(db, environment_id=environment_id, lock=True)
     now = ensure_utc(receipt.occurred_at)
@@ -1062,7 +1065,10 @@ async def record_release_deployment_receipt(
     if promotion is not None:
         candidate = promotion.candidate
     else:
-        assert rollback is not None
+        if rollback is None:
+            raise ReleaseControlStateError(
+                "rollback receipt dispatch invariant was not satisfied"
+            )
         candidate = rollback.target_environment_release.candidate
     if candidate.namespace_id != identity.namespace_id:
         raise ReleaseControlTenantMismatchError("dispatch belongs to another Namespace")
@@ -1171,7 +1177,10 @@ async def record_release_deployment_receipt(
             if candidate.deployment.status == AgentDeploymentStatus.REGISTERED:
                 candidate.deployment.status = AgentDeploymentStatus.FAILED
     else:
-        assert rollback is not None
+        if rollback is None:
+            raise ReleaseControlStateError(
+                "rollback receipt state invariant was not satisfied"
+            )
         if effective_status == ReleaseReceiptStatus.APPLIED:
             rollback.status = ReleaseRollbackStatus.SUCCEEDED
             rollback.completed_at = row.occurred_at
@@ -1224,7 +1233,10 @@ def release_deployment_receipt_out(row: ReleaseDeploymentReceipt) -> ReleaseDepl
     if row.promotion is not None:
         dispatch_public_id = row.promotion.dispatch_public_id
     else:
-        assert row.rollback is not None
+        if row.rollback is None:
+            raise ReleaseControlStateError(
+                "release receipt has neither promotion nor rollback"
+            )
         dispatch_public_id = row.rollback.dispatch_public_id
     return ReleaseDeploymentReceiptOut(
         public_id=row.public_id,
