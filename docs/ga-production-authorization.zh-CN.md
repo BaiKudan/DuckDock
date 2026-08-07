@@ -140,7 +140,53 @@ python backend/scripts/prepare_ga_execution_campaign.py \
    外部负责人仍须逐步审阅并执行 acknowledgement。工具同时生成后续 assembler 可直接
    使用的预审批 request，避免采集结束后再次手抄 release/target 和九份 evidence 路径。
 
-   外部执行期间不要等到第 66 份产物才发现早期错误。可随时运行非授权增量检查器：
+   campaign 文件落盘后、`window_starts_at` 之前，必须先完成 Security 与 Operations
+   双人执行授权。manifest 由工具从 campaign 推导，不能手写 phase 列表；它绑定 campaign
+   SHA-256、最终 release/target、执行窗口、Kubernetes context/Namespace、恢复目标，以及
+   TLS/network/secrets/capacity/alerting/recovery/state-services/HA 八个带精确
+   acknowledgement 的阶段、工具和输出。两名签署者必须来自 topology 固定的同一份
+   approval policy/shared allowed-signers，且 identity 与公钥互不重叠：
+
+```bash
+python backend/scripts/prepare_ga_execution_authorization.py \
+  --campaign /release-authority/duckdock-2.0.0-execution-campaign.json \
+  --output /secure/evidence/execution-authorization-manifest.json
+
+python backend/scripts/sign_ga_execution_authorization.py \
+  --campaign /release-authority/duckdock-2.0.0-execution-campaign.json \
+  --manifest /secure/evidence/execution-authorization-manifest.json \
+  --approval-policy /release-authority/duckdock-ga-approval-policy.json \
+  --role Security \
+  --identity security-release-authorizer@corp.example \
+  --key /secure/keys/security-release-authorizer \
+  --statement-output /secure/evidence/execution-authorization-security.json \
+  --signature-output /secure/evidence/execution-authorization-security.json.sig
+
+python backend/scripts/sign_ga_execution_authorization.py \
+  --campaign /release-authority/duckdock-2.0.0-execution-campaign.json \
+  --manifest /secure/evidence/execution-authorization-manifest.json \
+  --approval-policy /release-authority/duckdock-ga-approval-policy.json \
+  --role Operations \
+  --identity operations-release-authorizer@corp.example \
+  --key /secure/keys/operations-release-authorizer \
+  --statement-output /secure/evidence/execution-authorization-operations.json \
+  --signature-output /secure/evidence/execution-authorization-operations.json.sig
+
+python backend/scripts/verify_ga_execution_authorization.py \
+  --campaign /release-authority/duckdock-2.0.0-execution-campaign.json \
+  --manifest /secure/evidence/execution-authorization-manifest.json \
+  --security-statement /secure/evidence/execution-authorization-security.json \
+  --security-signature /secure/evidence/execution-authorization-security.json.sig \
+  --operations-statement /secure/evidence/execution-authorization-operations.json \
+  --operations-signature /secure/evidence/execution-authorization-operations.json.sig
+```
+
+   verifier 只返回 `AUTHORIZED_FOR_NAMED_PHASE_EXECUTION`；它不授权 GA、不授权未列明的
+   mutation，也不替代安全评估的单独 Security 签署委托。缺任一签名、角色/identity 不符、
+   签署后改动、跨 campaign/target 复用或在窗口开始后补签都会失败。closure 和离线归档
+   verifier 会再次验证原始两份 statement/signature，不能只保留命令输出。
+
+   外部执行期间不要等到第 71 份产物才发现早期错误。可随时运行非授权增量检查器：
 
 ```bash
 python backend/scripts/inspect_ga_execution_campaign.py \
@@ -149,7 +195,7 @@ python backend/scripts/inspect_ga_execution_campaign.py \
 ```
 
    它会独立重验 campaign/request/topology/九份 policy/trust store，按原始 lexical 计划路径
-   检查 66 份外部产物的 missing/regular-file/symlink/size/JSON/private-key marker，并验证
+   检查 71 份外部产物的 missing/regular-file/symlink/size/JSON/private-key marker，并验证
    所有已出现 `path+sha256`、manifest、allowed-signers 和 signature 引用只能指向计划产物
    或内容寻址的发布机构输入。输出的 `duckdock-ga-execution-campaign-progress-v1` 按 phase
    区分 `PENDING`、`PARTIAL`、`INVALID`、`BLOCKED_BY_DEPENDENCIES` 与
@@ -774,7 +820,7 @@ python backend/scripts/close_ga_execution_campaign.py \
   --assembly-request /release-authority/duckdock-2.0.0-preapproval-request.json
 ```
 
-闭环工具按 campaign 预分配路径要求 66 份外部产物全部存在，拒绝 symlink、缺失、摘要
+闭环工具按 campaign 预分配路径要求 71 份外部产物全部存在，拒绝 symlink、缺失、摘要
 冲突和任何指向未计划路径的 `path+sha256`、`path+manifest_sha256`、allowed-signers 或
 signature 引用；十份最终 wrapper 的 `observed_at` 必须位于执行窗口内。它重新生成并逐字
 比较 campaign/request、重验 topology/九份 policy/trust store 和单独内容寻址的 backup
@@ -816,7 +862,7 @@ next_action=collect_organizational_approvals
 `campaign_stage=FOUNDATION`。这两种状态都禁止继续签字。
 
 预签字门禁通过后，先冻结一次有时限的审批活动。正式 freeze v2 先独立重验 persisted
-execution closure 的 campaign/request/topology、66 份外部产物、90 个闭包输入、135 条
+execution closure 的 campaign/request/topology、71 份外部产物、95 个闭包输入、139 条
 引用和预审批评估，再把 closure、空 `approvals` 授权文件、发布机构策略、release digest、
 冻结时间和审批截止时间共同内容寻址到不可覆盖的回执；窗口默认 24 小时，最大 72 小时：
 
@@ -929,7 +975,7 @@ python backend/scripts/archive_ga_authorized_bundle.py \
 它不会扫描目录，只沿 JSON 中显式的 `path+sha256`、`path+manifest_sha256`、
 `allowed_signers_path+allowed_signers_sha256`、`signature_path` 引用闭包，并加入明确
 传入的 supplemental receipt/result。正式 v2 campaign freeze 已内容寻址 execution closure；
-closure 又显式引用 campaign/request/topology、66 份外部产物和 preapproval outputs，因此
+closure 又显式引用 campaign/request/topology、71 份外部产物和 preapproval outputs，因此
 完整“计划→实际证据”图会自动进入 portable archive，不再需要把 closure 作为 supplemental
 重复传入。campaign freeze 及其空 base 同样由最终授权中的内容寻址引用自动进入闭包。
 因此同目录审批私钥、builder 私钥和未引用文件不会进入归档；即使显式引用，常见

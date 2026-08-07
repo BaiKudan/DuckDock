@@ -20,6 +20,10 @@ import scripts.collect_ga_independent_security as security_assessment_collector
 import scripts.collect_ga_release_provenance as release_provenance_collector
 import scripts.inspect_ga_execution_campaign as execution_campaign_inspector
 import scripts.prepare_ga_execution_campaign as execution_campaign_preparer
+import scripts.prepare_ga_execution_authorization as execution_authorization_preparer
+import scripts.sign_ga_execution_authorization as execution_authorization_signer
+import scripts.ga_execution_authorization as execution_authorization
+import scripts.verify_ga_execution_authorization as execution_authorization_verifier
 import scripts.verify_ga_trust_topology as trust_topology_verifier
 from scripts.ga_approval_campaign import derive_campaign_id, validate_campaign_freeze
 
@@ -3954,11 +3958,13 @@ def test_execution_campaign_generates_pending_dependency_plan_and_assembly_reque
     assert execution_campaign_preparer.CAMPAIGN_ID_RE.fullmatch(plan["campaign_id"])
     assert all(phase["status"] == "PENDING_EXTERNAL_EVIDENCE" for phase in plan["phases"])
     assert phases["capacity"]["depends_on"] == [
+        "execution_authorization",
         "application_readiness",
         "network",
         "secrets",
     ]
     assert phases["high_availability"]["depends_on"] == [
+        "execution_authorization",
         "application_readiness",
         "network",
         "state_services",
@@ -3966,6 +3972,7 @@ def test_execution_campaign_generates_pending_dependency_plan_and_assembly_reque
     assert phases["recovery"]["risk_class"] == "DESTRUCTIVE_NON_PRODUCTION"
     assert phases["recovery"]["required_acknowledgement"] == "customer-recovery"
     assert set(phases["preapproval_assembly"]["depends_on"]) == {
+        "execution_authorization",
         "release_provenance",
         "application_readiness",
         "tls",
@@ -3994,7 +4001,7 @@ def test_execution_campaign_generates_pending_dependency_plan_and_assembly_reque
     assert plan["preapproval_assembly_request"]["sha256"] == hashlib.sha256(
         assembly_request_output.read_bytes()
     ).hexdigest()
-    assert len(plan["artifacts"]) == 69
+    assert len(plan["artifacts"]) == 74
     assert phases["preapproval_assembly"]["tools"] == [
         "close_ga_execution_campaign.py"
     ]
@@ -4032,6 +4039,170 @@ def test_execution_campaign_rejects_forged_topology_receipt(tmp_path: Path) -> N
             topology_receipt_path,
             tmp_path / "preapproval-request.json",
             now=now,
+        )
+
+
+def test_execution_authorization_requires_two_prewindow_role_signatures(
+    tmp_path: Path,
+) -> None:
+    if shutil.which("ssh-keygen") is None:
+        pytest.skip("ssh-keygen is required for execution authorization verification")
+    now = datetime.now(timezone.utc)
+    _, request_path, topology_receipt_path, _ = _execution_campaign_fixture(tmp_path, now)
+    campaign_path = tmp_path / "dual-control-campaign.json"
+    assembly_request_path = tmp_path / "dual-control-preapproval-request.json"
+    plan, assembly_request = execution_campaign_preparer.prepare(
+        request_path,
+        topology_receipt_path,
+        assembly_request_path,
+        now=now,
+    )
+    assembly_request_path.write_text(
+        json.dumps(assembly_request, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    campaign_path.write_text(
+        json.dumps(plan, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    artifacts = {name: Path(path) for name, path in plan["artifacts"].items()}
+    assert execution_authorization_preparer.main(
+        [
+            "--campaign",
+            str(campaign_path),
+            "--output",
+            str(artifacts["execution_authorization_manifest"]),
+        ]
+    ) == 0
+    for role, identity, key_name in (
+        ("Security", "security@example.com", "security_key"),
+        ("Operations", "operations@example.com", "operations_key"),
+    ):
+        slug = role.lower()
+        assert execution_authorization_signer.main(
+            [
+                "--campaign",
+                str(campaign_path),
+                "--manifest",
+                str(artifacts["execution_authorization_manifest"]),
+                "--approval-policy",
+                str(tmp_path / "approval-policy.json"),
+                "--role",
+                role,
+                "--identity",
+                identity,
+                "--key",
+                str(tmp_path / key_name),
+                "--statement-output",
+                str(artifacts[f"execution_authorization_{slug}_statement"]),
+                "--signature-output",
+                str(artifacts[f"execution_authorization_{slug}_signature"]),
+            ]
+        ) == 0
+    assert execution_authorization_verifier.main(
+        [
+            "--campaign",
+            str(campaign_path),
+            "--manifest",
+            str(artifacts["execution_authorization_manifest"]),
+            "--security-statement",
+            str(artifacts["execution_authorization_security_statement"]),
+            "--security-signature",
+            str(artifacts["execution_authorization_security_signature"]),
+            "--operations-statement",
+            str(artifacts["execution_authorization_operations_statement"]),
+            "--operations-signature",
+            str(artifacts["execution_authorization_operations_signature"]),
+        ]
+    ) == 0
+    receipt = execution_authorization.verify_authorization(
+        campaign_path,
+        artifacts["execution_authorization_manifest"],
+        {
+            "Security": (
+                artifacts["execution_authorization_security_statement"],
+                artifacts["execution_authorization_security_signature"],
+            ),
+            "Operations": (
+                artifacts["execution_authorization_operations_statement"],
+                artifacts["execution_authorization_operations_signature"],
+            ),
+        },
+        now=now + timedelta(seconds=4),
+    )
+    assert receipt["status"] == "AUTHORIZED_FOR_NAMED_PHASE_EXECUTION"
+    assert receipt["authorized_phase_ids"] == [
+        "tls",
+        "network",
+        "secrets",
+        "capacity",
+        "alerting",
+        "recovery",
+        "state_services",
+        "high_availability",
+    ]
+    assert set(receipt["signers"]) == {"Operations", "Security"}
+    with pytest.raises(ValueError, match="campaign has expired"):
+        execution_authorization.verify_authorization(
+            campaign_path,
+            artifacts["execution_authorization_manifest"],
+            {
+                "Security": (
+                    artifacts["execution_authorization_security_statement"],
+                    artifacts["execution_authorization_security_signature"],
+                ),
+                "Operations": (
+                    artifacts["execution_authorization_operations_statement"],
+                    artifacts["execution_authorization_operations_signature"],
+                ),
+            },
+            now=datetime.fromisoformat(plan["window_expires_at"])
+            + timedelta(microseconds=1),
+        )
+
+    security_statement_path = artifacts["execution_authorization_security_statement"]
+    security_statement = json.loads(security_statement_path.read_text(encoding="utf-8"))
+    security_statement["decision"] = "DENY"
+    security_statement_path.write_text(
+        json.dumps(security_statement, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="Security execution authorization statement"):
+        execution_authorization.verify_authorization(
+            campaign_path,
+            artifacts["execution_authorization_manifest"],
+            {
+                "Security": (
+                    security_statement_path,
+                    artifacts["execution_authorization_security_signature"],
+                ),
+                "Operations": (
+                    artifacts["execution_authorization_operations_statement"],
+                    artifacts["execution_authorization_operations_signature"],
+                ),
+            },
+            now=now + timedelta(seconds=4),
+        )
+    with pytest.raises(ValueError, match="before the window starts"):
+        execution_authorization.prepare_manifest(
+            campaign_path,
+            now=datetime.fromisoformat(plan["window_starts_at"]),
+        )
+    with pytest.raises(ValueError, match="cannot predate campaign creation"):
+        execution_authorization.prepare_manifest(
+            campaign_path,
+            now=datetime.fromisoformat(plan["created_at"]) - timedelta(microseconds=1),
+        )
+    forged_campaign = json.loads(campaign_path.read_text(encoding="utf-8"))
+    forged_campaign["next_action"] = "execute_without_release_authority_review"
+    campaign_path.write_text(
+        json.dumps(forged_campaign, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="campaign did not independently re-verify"):
+        execution_authorization.prepare_manifest(
+            campaign_path,
+            now=now + timedelta(seconds=5),
         )
 
 
@@ -4244,6 +4415,7 @@ CAMPAIGN_FIXTURE_SOURCES = {
 def _materialize_campaign_fixture(
     tmp_path: Path,
     plan: dict,
+    campaign_path: Path,
 ) -> None:
     artifacts = {name: Path(path) for name, path in plan["artifacts"].items()}
     mapping: dict[str, Path] = {}
@@ -4322,6 +4494,34 @@ def _materialize_campaign_fixture(
     campaign_expires_at = datetime.fromisoformat(
         str(plan["window_expires_at"]).replace("Z", "+00:00")
     )
+    authorization_manifest = execution_authorization.prepare_manifest(
+        campaign_path,
+        now=campaign_created_at + timedelta(seconds=1),
+    )
+    artifacts["execution_authorization_manifest"].write_text(
+        json.dumps(authorization_manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    for offset, role, identity, key_name in (
+        (2, "Security", "security@example.com", "security_key"),
+        (3, "Operations", "operations@example.com", "operations_key"),
+    ):
+        statement, _ = execution_authorization.create_statement(
+            campaign_path,
+            artifacts["execution_authorization_manifest"],
+            role=role,
+            identity=identity,
+            approval_policy_path=tmp_path / "approval-policy.json",
+            now=campaign_created_at + timedelta(seconds=offset),
+        )
+        slug = role.lower()
+        statement_path = artifacts[f"execution_authorization_{slug}_statement"]
+        signature_path = artifacts[f"execution_authorization_{slug}_signature"]
+        payload = execution_authorization.json_payload(statement)
+        statement_path.write_bytes(payload)
+        signature_path.write_bytes(
+            execution_authorization.sign_payload(payload, key=tmp_path / key_name)
+        )
     assessment_started_at = campaign_starts_at + timedelta(seconds=1)
     assessment_deleted_at = campaign_starts_at + timedelta(seconds=2)
     assessment_completed_at = campaign_starts_at + timedelta(seconds=3)
@@ -4445,7 +4645,7 @@ def test_execution_campaign_closure_reverifies_all_66_external_artifacts(
         encoding="utf-8",
     )
     evidence_root.mkdir()
-    _materialize_campaign_fixture(tmp_path, plan)
+    _materialize_campaign_fixture(tmp_path, plan, campaign_path)
 
     authorization, receipt, closure, tracked = execution_campaign_closer.close(
         campaign_path,
@@ -4456,9 +4656,12 @@ def test_execution_campaign_closure_reverifies_all_66_external_artifacts(
     assert authorization["approvals"] == []
     assert receipt["evaluation"]["campaign_stage"] == "APPROVAL_COLLECTION"
     assert closure["status"] == "PREAPPROVAL_ASSEMBLED"
-    assert closure["external_artifact_count"] == 66
-    assert closure["captured_input_count"] == len(tracked) == 90
-    assert closure["reference_count"] == 135
+    assert closure["external_artifact_count"] == 71
+    assert closure["captured_input_count"] == len(tracked) == 95
+    assert closure["reference_count"] == 139
+    assert closure["execution_authorization"]["status"] == (
+        "AUTHORIZED_FOR_NAMED_PHASE_EXECUTION"
+    )
     assert closure["outputs"] == {}
 
     assert (
@@ -4770,15 +4973,15 @@ def test_execution_campaign_progress_is_incremental_non_authorizing_and_exact(
         "does_not_authorize_GA_or_target_mutation_or_evidence_PASS"
     )
     assert empty["counts"] == {
-        "planned_external_artifacts": 66,
+        "planned_external_artifacts": 71,
         "present_valid_artifacts": 0,
-        "missing_artifacts": 66,
+        "missing_artifacts": 71,
         "invalid_artifacts": 0,
         "present_size_bytes": 0,
-        "external_phases": 11,
+        "external_phases": 12,
         "ready_external_phases": 0,
     }
-    assert empty["next_action"]["phase_id"] == "release_provenance"
+    assert empty["next_action"]["phase_id"] == "execution_authorization"
     assert (
         execution_campaign_inspector.main(
             [
@@ -4852,17 +5055,42 @@ def test_execution_campaign_progress_is_incremental_non_authorizing_and_exact(
         )
     invalid_path.unlink()
 
-    _materialize_campaign_fixture(tmp_path, plan)
+    _materialize_campaign_fixture(tmp_path, plan, campaign_path)
+    operations_signature_path = Path(
+        plan["artifacts"]["execution_authorization_operations_signature"]
+    )
+    original_operations_signature = operations_signature_path.read_bytes()
+    operations_signature_path.write_bytes(
+        Path(
+            plan["artifacts"]["execution_authorization_security_signature"]
+        ).read_bytes()
+    )
+    invalid_authorization = execution_campaign_inspector.inspect(
+        campaign_path,
+        assembly_request_path,
+        now=now,
+    )
+    assert invalid_authorization["status"] == "INVALID_EXTERNAL_EVIDENCE"
+    assert invalid_authorization["artifact_progress"][
+        "execution_authorization_operations_signature"
+    ]["problems"] == ["dual_control_authorization_invalid"]
+    with pytest.raises(ValueError, match="invalid execution authorization signature"):
+        execution_campaign_closer.close(
+            campaign_path,
+            assembly_request_path,
+            now=now,
+        )
+    operations_signature_path.write_bytes(original_operations_signature)
     ready = execution_campaign_inspector.inspect(
         campaign_path,
         assembly_request_path,
         now=now,
     )
     assert ready["status"] == "READY_FOR_CLOSURE_ATTEMPT"
-    assert ready["counts"]["present_valid_artifacts"] == 66
+    assert ready["counts"]["present_valid_artifacts"] == 71
     assert ready["counts"]["missing_artifacts"] == 0
     assert ready["counts"]["invalid_artifacts"] == 0
-    assert ready["counts"]["ready_external_phases"] == 11
+    assert ready["counts"]["ready_external_phases"] == 12
     assert ready["closure"]["state"] == "MISSING"
     assert ready["next_action"] == {
         "code": "run_fail_closed_campaign_closure",

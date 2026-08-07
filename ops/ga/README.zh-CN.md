@@ -66,11 +66,15 @@ python backend/scripts/prepare_ga_execution_campaign.py \
 secrets 后执行，HA 必须依赖 network/state-services，破坏性恢复目标必须与 production
 target 不同。所有 phase 初始状态只能是 `PENDING_EXTERNAL_EVIDENCE`；
 `PLANNED_EXTERNAL_EXECUTION` 不批准目标变更，也不代表任何证据 PASS。发布机构审阅计划
-和逐步授权后，外部执行人才可按 phase 中的精确 acknowledgement 启动相应工具。
+后，必须在执行窗口开始前运行 `prepare_ga_execution_authorization.py`，再由 approval policy
+中的 Security 与 Operations 两个互斥身份分别运行 `sign_ga_execution_authorization.py`，
+最后用 `verify_ga_execution_authorization.py` 验证两份原始 statement/signature。该授权只覆盖
+manifest 列出的八个风险阶段，不授权 GA 或未列明 mutation，也不能替代安全评估委托。
+双签通过后，外部执行人才可按 phase 中的精确 acknowledgement 启动相应工具。
 
 `preapproval-assembly-request.example.json` 是证据接线输入，只包含 release/target 身份和
 九份最终 evidence 路径。正式 campaign 的真实采集完成后，必须用 closure 工具验证全部
-66 份外部产物（含 Security 签署的安全评估委托及其签名）及显式引用与计划完全一致，
+71 份外部产物（含五份双人执行授权工件及 Security 签署的安全评估委托/签名）及显式引用与计划完全一致，
 再由其调用底层组装器；禁止继续手工复制
 wrapper 字段和 SHA-256：
 

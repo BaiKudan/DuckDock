@@ -175,6 +175,16 @@ def verify(env_file: Path) -> dict[str, Any]:
     execution_campaign_preparer = REPO_ROOT / "backend/scripts/prepare_ga_execution_campaign.py"
     execution_campaign_inspector = REPO_ROOT / "backend/scripts/inspect_ga_execution_campaign.py"
     execution_campaign_closer = REPO_ROOT / "backend/scripts/close_ga_execution_campaign.py"
+    execution_authorization_core = REPO_ROOT / "backend/scripts/ga_execution_authorization.py"
+    execution_authorization_preparer = (
+        REPO_ROOT / "backend/scripts/prepare_ga_execution_authorization.py"
+    )
+    execution_authorization_signer = (
+        REPO_ROOT / "backend/scripts/sign_ga_execution_authorization.py"
+    )
+    execution_authorization_verifier = (
+        REPO_ROOT / "backend/scripts/verify_ga_execution_authorization.py"
+    )
     execution_campaign_request = REPO_ROOT / "ops/ga/execution-campaign-request.example.json"
     approval_freezer = REPO_ROOT / "backend/scripts/freeze_ga_approval_campaign.py"
     approval_signer = REPO_ROOT / "backend/scripts/sign_ga_approval.py"
@@ -208,6 +218,21 @@ def verify(env_file: Path) -> dict[str, Any]:
     execution_closure_text = (
         execution_campaign_closer.read_text(encoding="utf-8")
         if execution_campaign_closer.is_file()
+        else ""
+    )
+    execution_authorization_text = (
+        execution_authorization_core.read_text(encoding="utf-8")
+        if execution_authorization_core.is_file()
+        else ""
+    )
+    execution_authorization_preparer_text = (
+        execution_authorization_preparer.read_text(encoding="utf-8")
+        if execution_authorization_preparer.is_file()
+        else ""
+    )
+    execution_authorization_signer_text = (
+        execution_authorization_signer.read_text(encoding="utf-8")
+        if execution_authorization_signer.is_file()
         else ""
     )
     freezer_text = (
@@ -273,6 +298,23 @@ def verify(env_file: Path) -> dict[str, Any]:
         "operators share one dependency graph and generated preapproval request without claiming evidence PASS",
     )
     add(
+        "ga_execution_dual_authorization",
+        execution_authorization_verifier.is_file()
+        and "authorizes_only_named_campaign_phases_not_GA_or_unlisted_mutation"
+        in execution_authorization_text
+        and "execution authorization requires exact Security and Operations statements"
+        in execution_authorization_text
+        and "must be signed after preparation and before window start"
+        in execution_authorization_text
+        and "--prepared-at" not in execution_authorization_preparer_text
+        and "--signed-at" not in execution_authorization_signer_text
+        and '"execution_authorization"' in execution_campaign_text
+        and "verify_execution_authorization" in execution_progress_text
+        and "verify_execution_authorization" in execution_closure_text,
+        "campaign-bound Security and Operations signatures are reverified by progress, closure and archive paths",
+        "two distinct pre-window role signatures authorize only the named acknowledged execution phases",
+    )
+    add(
         "ga_execution_campaign_progress",
         "does_not_authorize_GA_or_target_mutation_or_evidence_PASS"
         in execution_progress_text
@@ -282,7 +324,7 @@ def verify(env_file: Path) -> dict[str, Any]:
         and "EXPIRED_INCOMPLETE" in execution_progress_text
         and "verify_persisted_closure" in execution_progress_text,
         "immutable non-authorizing checkpoints detect partial/missing/invalid evidence and exact next phase",
-        "external execution mistakes are visible before the final 66-artifact closure attempt",
+        "external execution mistakes are visible before the final 71-artifact closure attempt",
     )
     add(
         "ga_preapproval_assembly",
@@ -302,7 +344,7 @@ def verify(env_file: Path) -> dict[str, Any]:
         and "PREAPPROVAL_ASSEMBLED" in execution_closure_text
         and "campaign input changed before closure receipt emission"
         in execution_closure_text,
-        "exact 66-artifact/reference closure including signed security engagement plus transactional preapproval assembly",
+        "exact 71-artifact/reference closure including dual execution authorization and signed security engagement",
         "planned paths equal actual evidence before immutable non-authorizing closure",
     )
     add(

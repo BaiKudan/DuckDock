@@ -37,7 +37,7 @@ Runtime/Reporter
 | SLO | PASS | `HEALTHY`；142 个发布窗口请求、0 错误；ingest p95 7.729 ms、timeline p95 12.636 ms、policy p95 54.426 ms |
 | Readiness | PASS | `READY`；14 PASS / 0 WARN / 0 BLOCK |
 | 浏览器 | PASS | Playwright 3/3：未登录守卫、登录表单、审批→执行→回执→验证→完成；应用内浏览器复核 Operations/Release Control，console 0 warning/error |
-| 后端回归 | PASS | 1232 passed、19 skipped；核心覆盖率 81.04%（门槛 65%） |
+| 后端回归 | PASS | 1233 passed、19 skipped；核心覆盖率 81.04%（门槛 65%） |
 | Python 3.12 锁定环境 | PASS | hashed dev lock；runtime lock `pip-audit` 0 已知漏洞；Ruff/compile 通过 |
 | 真实 MySQL 测试 lane | PASS | 独立临时数据库 17/17；验证后数据库与用户均已删除 |
 | 前端 | PASS | npm audit 0；lint 0 warning；11 files / 56 tests；生产 build 最大入口块 569.69 kB（门槛 600 kB） |
@@ -48,13 +48,14 @@ Runtime/Reporter
 | 全局组织信任拓扑 | PASS（协议）/ PENDING（真实配置） | 九策略 manifest 和独立预检要求每个组织职责的 identity/公钥全局唯一；最终授权器从证据引用策略再次重算，跨策略复用停在 `FOUNDATION`；发布机构尚未提供真实策略、人员身份和公钥 |
 | 独立安全评估双签名协议 | PASS（协议）/ PENDING（真实执行） | campaign 创建后由 policy 授权的 Security identity 先签署 release/target/window/source/account/禁止动作/急停/数据删除委托，独立 assessor 再签署绑定委托、实际执行身份、数据处置、逐条 finding 和 PDF 的 v2 报告；v3 collector 与最终门禁重验双方签名和全部时序；真实委托、测试、整改复测和删除证明仍未发生 |
 | 真实验收执行编排 | PASS（协议）/ PENDING（外部执行） | 不可覆盖 campaign 绑定最终 release/target、九策略 topology、最长 14 天窗口和新 evidence root；全部 phase 初始为 `PENDING_EXTERNAL_EVIDENCE`，自动生成后续 assembly request，明确不授权目标变更或声称 PASS |
+| 外部执行双人授权 | PASS（协议）/ PENDING（真人执行） | campaign 落盘后、窗口开始前，由 topology 中互斥的 Security/Operations 身份分别签署同一工具派生 manifest，绑定八个 acknowledged 风险阶段；progress、closure 与离线 archive 重验两份原始签名；真实组织身份尚未签署最终 campaign |
 | 四方签字活动协议 | PASS（协议）/ PENDING（真人执行） | 发布机构先以不可覆盖、限时 freeze 绑定空 approvals base、policy 与 release digest；每位审批人重跑完整 preflight 并签署同一 campaign/freeze，finalizer 拒绝跨轮混签、过期与窗口外签字，四份 entry 只有让持久化文件达到 `GA_AUTHORIZED` 才能输出；真实 Product/Architecture/Security/Operations 决策仍未发生 |
 | 授权归档与独立复验协议 | PASS（协议）/ PENDING（真实 bundle） | manifest v2 记录原始路径到内容寻址成员的完整索引；只在当前时间和 bounded canonical time 均为 `GA_AUTHORIZED` 时生成确定性不可覆盖 tar.gz/manifest/SHA-256；接收方以外部摘要、严格无主机回退路径重映射复验全部成员/签名/授权；真实 bundle/digest 尚未产生和外部发布 |
 | 本地生产基础设施 | PASS | 隔离 Compose 10/10 healthy；TLS 1.2/1.3，拒绝 1.0/1.1；hostname/HSTS/告警 firing+resolved 通过，随后零残留清理 |
 | 容量工程基线 | PASS | 60 rps×900s + 120 rps×60s，61,200 Run/Audit/Outbox；持续 p95 8.023 ms，增长后 timeline p95 5.187 ms |
 | 本地 Kubernetes HA 演练 | PASS (local reference) | kind 1 control-plane + 3 zone workers；三类 3 副本、Beat 1；整区 taint/drain 后 30 秒恢复，7 个连续 health/API 样本 0 失败，故障域回归后各 ReplicaSet 恢复三域覆盖；状态服务/RWX/CNI 未授权 |
 | GA 生产授权 | BLOCKED | 真实目标 HTTPS 容量/HA/异地恢复/告警回执、独立安全评估与四方签名尚未提供，授权器必须拒绝 |
-| Compose/CI | PASS | dev/prod Compose config clean；CI action 固定 commit SHA；最终 tag 等完整四类 job 后才推镜像；生产静态基线 27/27 PASS |
+| Compose/CI | PASS | 四套 dev/profile/prod Compose config clean；CI action 固定 commit SHA；最终 tag 等完整四类 job 后才推镜像；生产静态基线 31/31 PASS |
 
 ## 3. 14 项实时门禁
 
@@ -99,7 +100,7 @@ Langfuse 保持可替换的 provider adapter：关闭或不可用时，依赖它
 ## 6. GA 前必须完成
 
 - 在任何真实目标压测、恢复或故障注入前，发布机构先定稿九份 trust policy/allowed-signers，填写 `trust-topology-manifest.example.json` 的精确路径与摘要并运行 `verify_ga_trust_topology.py`，只有不可覆盖的 PASS 回执才允许继续；
-- 使用真实 topology PASS 回执和 `execution-campaign-request.example.json` 运行 `prepare_ga_execution_campaign.py`，由发布机构审阅绑定 release/target/window、新 evidence root、独立恢复目标和 phase DAG 的不可覆盖计划，再逐阶段授权外部执行；
+- 使用真实 topology PASS 回执和 `execution-campaign-request.example.json` 运行 `prepare_ga_execution_campaign.py`，由发布机构审阅绑定 release/target/window、新 evidence root、独立恢复目标和 phase DAG 的不可覆盖计划；在窗口开始前由 policy 中互斥的 Security/Operations 身份分别签署 `prepare_ga_execution_authorization.py` 推导的同一 manifest，并通过独立 verifier 后再执行列明阶段；
 - 用真实生产密钥、域名和 TLS 部署 `ops/kubernetes/ha` 目标 overlay，替换所有占位镜像/域名/egress；
 - 从发布机构批准的公网 probe/vantage 运行 `probe_ga_target_tls.py`，由批准身份签署 v3 原始报告，再用 `collect_ga_target_tls.py` 生成最终 TLS evidence v3；
 - 从目标集群外运行 `collect_ga_target_network.py`，证明仅 443 公网开放、数据服务直连端口不可达，并实际执行受信/非受信 ingress 和批准/拒绝 egress；
@@ -109,7 +110,7 @@ Langfuse 保持可替换的 provider adapter：关闭或不可用时，依赖它
 - 用 `collect_ga_target_alerting.py` 触发和恢复目标告警，由 delivery 服务签署投递回执、实际值班人员签署 ack，并证明目标接收人与 on-call schedule；
 - 由组织策略授权的 Security 负责人先填写并签署 `security-assessment-engagement.example.json`，第三方在其窗口/来源/禁止动作边界内执行后，使用 `security-assessment-report.example.json` 交付并签署绑定委托的 v2 原始报告，再运行 `collect_ga_independent_security.py` 生成 v3 证据，关闭最终应用镜像和依赖中的全部 Critical/High 并交付删除证明；
 - 创建 GitHub 验证通过的签名 annotated `v2.0.0` tag，让受控 CI 在最终 commit 上重跑 backend/frontend/E2E/Compose 并推送带 BuildKit attestation 的 GHCR 镜像；按发布 provenance 策略由独立 builder 签署 tag/source/SLSA/SPDX/scan 原始报告，运行 `collect_ga_release_provenance.py`，将输出绑定到授权文件 `release.provenance`；
-- 真实采集后运行 `close_ga_execution_campaign.py`，只接受与已审阅 campaign 的 66 份外部产物（含 Security 签署的安全评估委托及其签名）、执行窗口和显式引用完全一致且落盘重验后的 `APPROVAL_COLLECTION` 空审批底稿、assembly receipt 与非授权 closure receipt；禁止直接用通用 assembler 绕过 campaign 对齐；
+- 真实采集后运行 `close_ga_execution_campaign.py`，只接受与已审阅 campaign 的 71 份外部产物（含五份双人执行授权工件及 Security 签署的安全评估委托/签名）、执行窗口和显式引用完全一致且落盘重验后的 `APPROVAL_COLLECTION` 空审批底稿、assembly receipt 与非授权 closure receipt；禁止直接用通用 assembler 绕过 campaign 对齐；
 - 由发布机构通过受控、内容寻址的组织策略固定共享信任库和角色身份；在四方签字前运行生产授权器 `--require-evidence-ready`，确认 `campaign_stage=APPROVAL_COLLECTION`、`evidence_ready_for_approval=true` 且 foundation/evidence 失败列表为空；
 - 运行 `freeze_ga_approval_campaign.py` 生成同一份不可覆盖、限时 campaign freeze，再由 Product、Architecture、Security、Operations 四个不同身份在窗口内签署同一 release/target/evidence/policy/campaign 摘要；
 - 用 finalizer 组装并重验，运行生产授权器取得唯一可接受结果 `GA_AUTHORIZED`，随后生成可搬运授权归档并通过独立渠道发布其摘要。

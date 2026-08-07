@@ -284,6 +284,11 @@ def _artifact_paths(root: Path) -> dict[str, str]:
         "frontend_scout_sarif": "frontend-scout.sarif.json",
         "frontend_vulnerability_scan": "frontend-vulnerability-scan.json",
         "release_provenance": "release-provenance.json",
+        "execution_authorization_manifest": "execution-authorization-manifest.json",
+        "execution_authorization_security_statement": "execution-authorization-security.json",
+        "execution_authorization_security_signature": "execution-authorization-security.json.sig",
+        "execution_authorization_operations_statement": "execution-authorization-operations.json",
+        "execution_authorization_operations_signature": "execution-authorization-operations.json.sig",
         "application_readiness": "target-readiness.json",
         "tls_probe_report": "target-tls-raw.json",
         "tls_probe_signature": "target-tls-raw.json.sig",
@@ -382,6 +387,27 @@ def _phases(
     ]
     return [
         _phase(
+            "execution_authorization",
+            risk_class="ORGANIZATIONAL_AUTHORIZATION",
+            depends_on=[],
+            tools=[
+                "prepare_ga_execution_authorization.py",
+                "sign_ga_execution_authorization.py",
+                "verify_ga_execution_authorization.py",
+            ],
+            outputs=[
+                "execution_authorization_manifest",
+                "execution_authorization_security_statement",
+                "execution_authorization_security_signature",
+                "execution_authorization_operations_statement",
+                "execution_authorization_operations_signature",
+            ],
+            policy_roles=[
+                "approval:approver/Security",
+                "approval:approver/Operations",
+            ],
+        ),
+        _phase(
             "release_provenance",
             risk_class="SIGNED_RELEASE_INPUT",
             depends_on=[],
@@ -424,7 +450,7 @@ def _phases(
         _phase(
             "tls",
             risk_class="READ_ONLY_EXTERNAL_VANTAGE",
-            depends_on=["release_provenance"],
+            depends_on=["execution_authorization", "release_provenance"],
             tools=["probe_ga_target_tls.py", "ssh-keygen -Y sign", "collect_ga_target_tls.py"],
             outputs=["tls_probe_report", "tls_probe_signature", "tls"],
             policy_roles=["tls:probe-operator"],
@@ -433,7 +459,7 @@ def _phases(
         _phase(
             "network",
             risk_class="READ_ONLY_AND_POLICY_PROBES",
-            depends_on=["release_provenance"],
+            depends_on=["execution_authorization", "release_provenance"],
             tools=[
                 "collect_ga_target_network.py",
                 "ssh-keygen -Y sign",
@@ -446,7 +472,7 @@ def _phases(
         _phase(
             "secrets",
             risk_class="MUTATING_TARGET",
-            depends_on=["application_readiness", "network"],
+            depends_on=["execution_authorization", "application_readiness", "network"],
             tools=["external provider/verifier receipts", "collect_ga_target_secrets.py"],
             outputs=[
                 "secret_rotation_receipt",
@@ -461,7 +487,12 @@ def _phases(
         _phase(
             "capacity",
             risk_class="MUTATING_TARGET",
-            depends_on=["application_readiness", "network", "secrets"],
+            depends_on=[
+                "execution_authorization",
+                "application_readiness",
+                "network",
+                "secrets",
+            ],
             tools=[
                 "g2_target_capacity_gate.py",
                 "external storage/cleanup receipts",
@@ -486,7 +517,7 @@ def _phases(
         _phase(
             "alerting",
             risk_class="MUTATING_TARGET",
-            depends_on=["application_readiness", "network"],
+            depends_on=["execution_authorization", "application_readiness", "network"],
             tools=["external delivery/on-call receipts", "collect_ga_target_alerting.py"],
             outputs=[
                 "alert_firing_receipt",
@@ -503,7 +534,7 @@ def _phases(
         _phase(
             "recovery",
             risk_class="DESTRUCTIVE_NON_PRODUCTION",
-            depends_on=["release_provenance"],
+            depends_on=["execution_authorization", "release_provenance"],
             tools=["external backup/restore/verifier receipts", "collect_ga_target_recovery.py"],
             outputs=[
                 "backup_manifest",
@@ -526,7 +557,7 @@ def _phases(
         _phase(
             "state_services",
             risk_class="PROVIDER_FAILOVER_OBSERVATION",
-            depends_on=["release_provenance"],
+            depends_on=["execution_authorization", "release_provenance"],
             tools=["external provider/verifier receipts", "collect_ga_state_services_ha.py"],
             outputs=[
                 "state_provider_receipt",
@@ -541,11 +572,17 @@ def _phases(
                 "state-services:verifier",
                 "approval:approver/Operations",
             ],
+            acknowledgement=target_id,
         ),
         _phase(
             "high_availability",
             risk_class="DISRUPTIVE_TARGET",
-            depends_on=["application_readiness", "network", "state_services"],
+            depends_on=[
+                "execution_authorization",
+                "application_readiness",
+                "network",
+                "state_services",
+            ],
             tools=["collect_ga_target_ha.py"],
             outputs=["high_availability"],
             acknowledgement=target_id,
@@ -572,7 +609,7 @@ def _phases(
         _phase(
             "preapproval_assembly",
             risk_class="READ_ONLY_ASSEMBLY",
-            depends_on=["release_provenance", *evidence_phases],
+            depends_on=["execution_authorization", "release_provenance", *evidence_phases],
             tools=["close_ga_execution_campaign.py"],
             outputs=[
                 "preapproval_authorization",
@@ -605,6 +642,7 @@ def _validate_phase_graph(
         "MUTATING_TARGET",
         "DESTRUCTIVE_NON_PRODUCTION",
         "DISRUPTIVE_TARGET",
+        "PROVIDER_FAILOVER_OBSERVATION",
     }
     for phase in phases:
         phase_id = str(phase["phase_id"])
@@ -630,6 +668,8 @@ def _validate_phase_graph(
             raise ValueError(f"execution phase graph is invalid at {phase_id}")
         if phase.get("risk_class") in acknowledgement_risks and not _meaningful(phase.get("required_acknowledgement")):
             raise ValueError(f"execution phase {phase_id} lacks an exact safety acknowledgement")
+        if phase.get("risk_class") in acknowledgement_risks and "execution_authorization" not in dependencies:
+            raise ValueError(f"execution phase {phase_id} is not dual-authorization gated")
         planned_outputs.extend(outputs)
         seen_phases.add(phase_id)
     if len(planned_outputs) != len(set(planned_outputs)) or set(planned_outputs) != set(artifacts):

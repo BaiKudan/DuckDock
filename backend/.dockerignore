@@ -37,6 +37,10 @@ scripts/ga_release_provenance.py
 scripts/assemble_ga_preapproval_authorization.py
 scripts/verify_ga_trust_topology.py
 scripts/prepare_ga_execution_campaign.py
+scripts/ga_execution_authorization.py
+scripts/prepare_ga_execution_authorization.py
+scripts/sign_ga_execution_authorization.py
+scripts/verify_ga_execution_authorization.py
 scripts/inspect_ga_execution_campaign.py
 scripts/close_ga_execution_campaign.py
 scripts/ga_approval_campaign.py

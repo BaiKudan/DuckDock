@@ -312,6 +312,9 @@ jobs:
           sh -n ops/tls-gateway/entrypoint.sh
           python3 backend/scripts/verify_ga_trust_topology.py --help >/dev/null
           python3 backend/scripts/prepare_ga_execution_campaign.py --help >/dev/null
+          python3 backend/scripts/prepare_ga_execution_authorization.py --help >/dev/null
+          python3 backend/scripts/sign_ga_execution_authorization.py --help >/dev/null
+          python3 backend/scripts/verify_ga_execution_authorization.py --help >/dev/null
           python3 backend/scripts/inspect_ga_execution_campaign.py --help >/dev/null
           python3 backend/scripts/close_ga_execution_campaign.py --help >/dev/null
           python3 backend/scripts/assemble_ga_preapproval_authorization.py --help >/dev/null

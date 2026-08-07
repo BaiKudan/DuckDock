@@ -22,6 +22,9 @@ try:
         _capture_reference_closure,
     )
     from scripts.assemble_ga_preapproval_authorization import assemble
+    from scripts.ga_execution_authorization import (
+        verify_authorization as verify_execution_authorization,
+    )
     from scripts.ga_path_resolution import ga_file_resolution_override
     from scripts.prepare_ga_execution_campaign import (
         PLAN_SCHEMA_VERSION,
@@ -37,6 +40,9 @@ except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
         _capture_reference_closure,
     )
     from assemble_ga_preapproval_authorization import assemble
+    from ga_execution_authorization import (
+        verify_authorization as verify_execution_authorization,
+    )
     from ga_path_resolution import ga_file_resolution_override
     from prepare_ga_execution_campaign import PLAN_SCHEMA_VERSION, _parse_time, prepare
     from verify_ga_production_authorization import evaluate
@@ -52,6 +58,7 @@ CLOSURE_KEYS = {
     "campaign",
     "assembly_request",
     "approval_policy",
+    "execution_authorization",
     "external_artifact_count",
     "external_artifacts",
     "captured_input_count",
@@ -283,6 +290,102 @@ def _validate_security_assessment_campaign_window(
         raise ValueError("security assessment window is outside the execution campaign")
 
 
+def _execution_authorization_verdict(value: dict[str, Any]) -> dict[str, Any]:
+    signers = value.get("signers")
+    if not isinstance(signers, dict):
+        raise ValueError("execution authorization verification has no signer records")
+    return {
+        "schema_version": value.get("schema_version"),
+        "status": value.get("status"),
+        "authorization_boundary": value.get("authorization_boundary"),
+        "authorization_id": value.get("authorization_id"),
+        "campaign_id": value.get("campaign_id"),
+        "manifest_sha256": (
+            value.get("manifest", {}).get("sha256")
+            if isinstance(value.get("manifest"), dict)
+            else None
+        ),
+        "approval_policy": {
+            "policy_id": (
+                value.get("approval_policy", {}).get("policy_id")
+                if isinstance(value.get("approval_policy"), dict)
+                else None
+            ),
+            "sha256": (
+                value.get("approval_policy", {}).get("sha256")
+                if isinstance(value.get("approval_policy"), dict)
+                else None
+            ),
+        },
+        "allowed_signers_sha256": (
+            value.get("allowed_signers", {}).get("sha256")
+            if isinstance(value.get("allowed_signers"), dict)
+            else None
+        ),
+        "authorized_phase_ids": value.get("authorized_phase_ids"),
+        "validity": value.get("validity"),
+        "signers": {
+            role: {
+                "identity": record.get("identity")
+                if isinstance(record, dict)
+                else None,
+                "signed_at": record.get("signed_at")
+                if isinstance(record, dict)
+                else None,
+                "statement_sha256": (
+                    record.get("statement", {}).get("sha256")
+                    if isinstance(record, dict)
+                    and isinstance(record.get("statement"), dict)
+                    else None
+                ),
+                "signature_sha256": (
+                    record.get("signature", {}).get("sha256")
+                    if isinstance(record, dict)
+                    and isinstance(record.get("signature"), dict)
+                    else None
+                ),
+            }
+            for role, record in sorted(signers.items())
+        },
+    }
+
+
+def _verify_campaign_execution_authorization(
+    campaign_path: Path,
+    artifacts: dict[str, Path],
+    *,
+    now: datetime,
+) -> dict[str, Any]:
+    required = {
+        "execution_authorization_manifest",
+        "execution_authorization_security_statement",
+        "execution_authorization_security_signature",
+        "execution_authorization_operations_statement",
+        "execution_authorization_operations_signature",
+    }
+    missing = required - set(artifacts)
+    if missing:
+        raise ValueError(
+            f"campaign execution authorization artifacts are missing: {sorted(missing)}"
+        )
+    verified = verify_execution_authorization(
+        campaign_path,
+        artifacts["execution_authorization_manifest"],
+        {
+            "Security": (
+                artifacts["execution_authorization_security_statement"],
+                artifacts["execution_authorization_security_signature"],
+            ),
+            "Operations": (
+                artifacts["execution_authorization_operations_statement"],
+                artifacts["execution_authorization_operations_signature"],
+            ),
+        },
+        now=now,
+    )
+    return _execution_authorization_verdict(verified)
+
+
 def _reference_ledger(
     references: Sequence[CapturedReference],
     labels: dict[Path, str],
@@ -411,6 +514,11 @@ def close(
     planned_inputs = {
         name: path for name, path in artifacts.items() if name not in CLOSURE_OUTPUT_KEYS
     }
+    execution_authorization = _verify_campaign_execution_authorization(
+        campaign_path,
+        planned_inputs,
+        now=current,
+    )
     _validate_observation_window(
         planned_inputs,
         starts_at=starts_at,
@@ -497,6 +605,7 @@ def close(
             "path": str(approval_policy_path),
             "sha256": topology_inputs[approval_policy_path],
         },
+        "execution_authorization": execution_authorization,
         "external_artifact_count": len(planned_inputs),
         "external_artifacts": artifact_ledger,
         "captured_input_count": len(captured),
@@ -631,6 +740,15 @@ def verify_persisted_closure(
     expires_at = _parse_time(campaign.get("window_expires_at"), "window_expires_at")
     if closed_at < starts_at or closed_at > expires_at:
         raise ValueError("execution closure was emitted outside the campaign window")
+    execution_authorization = _verify_campaign_execution_authorization(
+        campaign_path,
+        planned_inputs,
+        now=closed_at,
+    )
+    if closure.get("execution_authorization") != execution_authorization:
+        raise ValueError(
+            "execution closure dual-control authorization did not independently re-verify"
+        )
     _validate_observation_window(
         planned_inputs,
         starts_at=starts_at,

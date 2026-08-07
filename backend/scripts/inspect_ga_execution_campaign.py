@@ -23,6 +23,9 @@ try:
         _topology_inputs,
         verify_persisted_closure,
     )
+    from scripts.ga_execution_authorization import (
+        verify_authorization as verify_execution_authorization,
+    )
     from scripts.prepare_ga_execution_campaign import (
         PLAN_SCHEMA_VERSION,
         _atomic_write,
@@ -41,6 +44,9 @@ except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
         _checked_reference,
         _topology_inputs,
         verify_persisted_closure,
+    )
+    from ga_execution_authorization import (
+        verify_authorization as verify_execution_authorization,
     )
     from prepare_ga_execution_campaign import (
         PLAN_SCHEMA_VERSION,
@@ -494,6 +500,47 @@ def inspect(
         fixed_digests=fixed_digests,
         authorization_path=all_artifacts["preapproval_authorization"],
     )
+    execution_authorization_names = {
+        "execution_authorization_manifest",
+        "execution_authorization_security_statement",
+        "execution_authorization_security_signature",
+        "execution_authorization_operations_statement",
+        "execution_authorization_operations_signature",
+    }
+    if all(
+        records[name]["state"] == "PRESENT"
+        for name in execution_authorization_names
+    ):
+        try:
+            verify_execution_authorization(
+                campaign_path,
+                external_artifacts["execution_authorization_manifest"],
+                {
+                    "Security": (
+                        external_artifacts[
+                            "execution_authorization_security_statement"
+                        ],
+                        external_artifacts[
+                            "execution_authorization_security_signature"
+                        ],
+                    ),
+                    "Operations": (
+                        external_artifacts[
+                            "execution_authorization_operations_statement"
+                        ],
+                        external_artifacts[
+                            "execution_authorization_operations_signature"
+                        ],
+                    ),
+                },
+                now=current,
+            )
+        except (OSError, UnicodeError, ValueError):
+            for name in execution_authorization_names:
+                records[name]["state"] = "INVALID"
+                records[name]["problems"].append(
+                    "dual_control_authorization_invalid"
+                )
 
     total_present_bytes = sum(
         int(record["size_bytes"] or 0)
