@@ -200,6 +200,8 @@ def test_production_image_context_excludes_test_and_local_validation_artifacts()
         "scripts/verify_ga_trust_topology.py",
         "scripts/prepare_ga_execution_campaign.py",
         "scripts/ga_execution_authorization.py",
+        "scripts/ga_target_cluster_identity.py",
+        "scripts/collect_ga_target_cluster_identity.py",
         "scripts/prepare_ga_execution_authorization.py",
         "scripts/sign_ga_execution_authorization.py",
         "scripts/verify_ga_execution_authorization.py",
@@ -275,6 +277,10 @@ def test_ga_approval_tools_reverify_before_signing_and_before_final_output():
     execution_authorization_signer = _read(
         "backend/scripts/sign_ga_execution_authorization.py"
     )
+    target_cluster_identity = _read("backend/scripts/ga_target_cluster_identity.py")
+    target_cluster_identity_collector = _read(
+        "backend/scripts/collect_ga_target_cluster_identity.py"
+    )
     execution_progress = _read("backend/scripts/inspect_ga_execution_campaign.py")
     execution_closure = _read("backend/scripts/close_ga_execution_campaign.py")
     assembler = _read("backend/scripts/assemble_ga_preapproval_authorization.py")
@@ -304,7 +310,14 @@ def test_ga_approval_tools_reverify_before_signing_and_before_final_output():
     assert "READY_FOR_CLOSURE_ATTEMPT" in execution_progress
     assert "EXPIRED_INCOMPLETE" in execution_progress
     assert "verify_persisted_closure" in execution_progress
-    assert "duckdock-ga-execution-campaign-closure-v2" in execution_closure
+    assert "duckdock-ga-execution-campaign-closure-v3" in execution_closure
+    assert "duckdock-ga-target-cluster-identity-v1" in target_cluster_identity
+    assert '"auth", "whoami"' in target_cluster_identity
+    assert '"get", "namespace", "kube-system"' in target_cluster_identity
+    assert "live Kubernetes cluster UID or principal differs" in target_cluster_identity
+    assert "live Kubernetes cluster UID or principal changed" in target_cluster_identity
+    assert "--operations-identity" in target_cluster_identity_collector
+    assert "--observed-at" not in target_cluster_identity_collector
     phase_start = _read("backend/scripts/ga_execution_phase_start.py")
     phase_starter = _read("backend/scripts/start_ga_execution_phase.py")
     assert "duckdock-ga-execution-phase-start-v1" in phase_start
@@ -328,6 +341,11 @@ def test_ga_approval_tools_reverify_before_signing_and_before_final_output():
         assert "--execution-campaign" in runtime_entry
         assert "--phase-action-id" in runtime_entry
         assert runtime_entry.index("verify_runtime_entry(") < runtime_entry.index(effect)
+        if phase_id in {"network", "secrets", "high_availability"}:
+            assert "verify_live_target_cluster_identity(" in runtime_entry
+            assert runtime_entry.index("verify_runtime_entry(") < runtime_entry.index(
+                "verify_live_target_cluster_identity("
+            ) < runtime_entry.index(effect)
     assert "campaign evidence closure is not exact" in execution_closure
     assert "execution campaign can close only inside its bound execution window" in execution_closure
     assert "PREAPPROVAL_ASSEMBLED" in execution_closure
@@ -378,6 +396,7 @@ def test_ga_approval_tools_reverify_before_signing_and_before_final_output():
     assert "python3 backend/scripts/prepare_ga_execution_authorization.py --help" in workflow
     assert "python3 backend/scripts/sign_ga_execution_authorization.py --help" in workflow
     assert "python3 backend/scripts/verify_ga_execution_authorization.py --help" in workflow
+    assert "python3 backend/scripts/collect_ga_target_cluster_identity.py --help" in workflow
     assert "python3 backend/scripts/start_ga_execution_phase.py --help" in workflow
     for runtime_entrypoint in (
         "probe_ga_target_tls.py",

@@ -25,6 +25,7 @@ try:
     )
     from scripts.ga_release_identity import build_release_binding
     from scripts.ga_execution_phase_start import verify_runtime_entry
+    from scripts.ga_target_cluster_identity import verify_live_target_cluster_identity
 except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
     from ga_network_evidence import (
         EXERCISE_RE,
@@ -33,6 +34,7 @@ except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
     )
     from ga_release_identity import build_release_binding
     from ga_execution_phase_start import verify_runtime_entry
+    from ga_target_cluster_identity import verify_live_target_cluster_identity
 
 
 SCHEMA_VERSION = NETWORK_RAW_SCHEMA_VERSION
@@ -796,6 +798,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             kubernetes_context=args.context,
             namespace=args.namespace,
         )
+        verify_live_target_cluster_identity(args.execution_campaign)
         report = collect(args)
     except (ValueError, RuntimeError, json.JSONDecodeError) as exc:
         print(f"Target network probe failed: {exc}", file=sys.stderr)

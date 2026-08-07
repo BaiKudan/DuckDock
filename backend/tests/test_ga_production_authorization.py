@@ -24,6 +24,7 @@ import scripts.prepare_ga_execution_authorization as execution_authorization_pre
 import scripts.sign_ga_execution_authorization as execution_authorization_signer
 import scripts.ga_execution_authorization as execution_authorization
 import scripts.ga_execution_phase_start as execution_phase_start
+import scripts.ga_target_cluster_identity as target_cluster_identity
 import scripts.verify_ga_execution_authorization as execution_authorization_verifier
 import scripts.verify_ga_trust_topology as trust_topology_verifier
 from scripts.ga_approval_campaign import derive_campaign_id, validate_campaign_freeze
@@ -3808,7 +3809,9 @@ def _execution_campaign_fixture(
                 ).hexdigest(),
             },
             "evidence_root": str(evidence_root),
+            "kubernetes_cluster_uid": "11111111-1111-4111-8111-111111111111",
             "kubernetes_context": "customer-production-context",
+            "kubernetes_principal": "system:serviceaccount:duckdock:ga-operator",
             "namespace": "duckdock",
             "recovery_target_environment": "customer-recovery",
             "recovery_target_class": "recovery",
@@ -3971,6 +3974,15 @@ def test_execution_campaign_generates_pending_dependency_plan_and_assembly_reque
         "network",
         "state_services",
     ]
+    assert phases["target_cluster_identity"]["depends_on"] == [
+        "execution_authorization",
+        "release_provenance",
+    ]
+    assert phases["network"]["depends_on"] == [
+        "execution_authorization",
+        "release_provenance",
+        "target_cluster_identity",
+    ]
     assert phases["recovery"]["risk_class"] == "DESTRUCTIVE_NON_PRODUCTION"
     assert phases["recovery"]["required_acknowledgement"] == "customer-recovery"
     assert set(phases["preapproval_assembly"]["depends_on"]) == {
@@ -4003,7 +4015,7 @@ def test_execution_campaign_generates_pending_dependency_plan_and_assembly_reque
     assert plan["preapproval_assembly_request"]["sha256"] == hashlib.sha256(
         assembly_request_output.read_bytes()
     ).hexdigest()
-    assert len(plan["artifacts"]) == 90
+    assert len(plan["artifacts"]) == 92
     assert phases["preapproval_assembly"]["tools"] == [
         "close_ga_execution_campaign.py"
     ]
@@ -4036,6 +4048,44 @@ def test_execution_campaign_rejects_forged_topology_receipt(tmp_path: Path) -> N
     )
 
     with pytest.raises(ValueError, match="does not independently re-verify"):
+        execution_campaign_preparer.prepare(
+            request_path,
+            topology_receipt_path,
+            tmp_path / "preapproval-request.json",
+            now=now,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected"),
+    [
+        (
+            "kubernetes_cluster_uid",
+            "11111111-1111-1111-1111-111111111111",
+            "lowercase RFC 4122 UUID",
+        ),
+        (
+            "kubernetes_principal",
+            "system:serviceaccount:duckdock:*",
+            "one exact safe principal",
+        ),
+    ],
+)
+def test_execution_campaign_rejects_ambiguous_target_cluster_identity(
+    tmp_path: Path,
+    field: str,
+    value: str,
+    expected: str,
+) -> None:
+    now = datetime.now(timezone.utc)
+    _, request_path, topology_receipt_path, _ = _execution_campaign_fixture(
+        tmp_path, now
+    )
+    request = json.loads(request_path.read_text(encoding="utf-8"))
+    request["execution"][field] = value
+    request_path.write_text(json.dumps(request, sort_keys=True) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=expected):
         execution_campaign_preparer.prepare(
             request_path,
             topology_receipt_path,
@@ -4524,6 +4574,18 @@ def _materialize_campaign_fixture(
         signature_path.write_bytes(
             execution_authorization.sign_payload(payload, key=tmp_path / key_name)
         )
+    target_cluster_identity.persist_target_cluster_identity(
+        campaign_path,
+        operations_identity="operations@example.com",
+        key=tmp_path / "operations_key",
+        observer=lambda context, namespace: {
+            "context": context,
+            "namespace": namespace,
+            "cluster_uid": plan["execution"]["kubernetes_cluster_uid"],
+            "principal": plan["execution"]["kubernetes_principal"],
+        },
+        now=campaign_starts_at + timedelta(seconds=4),
+    )
     assessment_started_at = campaign_starts_at + timedelta(seconds=1)
     assessment_deleted_at = campaign_starts_at + timedelta(seconds=2)
     assessment_completed_at = campaign_starts_at + timedelta(seconds=3)
@@ -4864,7 +4926,7 @@ def test_execution_phase_start_interlocks_are_signed_ordered_and_fail_closed(
         )
 
 
-def test_execution_campaign_closure_reverifies_all_87_external_artifacts(
+def test_execution_campaign_closure_reverifies_all_89_external_artifacts(
     tmp_path: Path,
 ) -> None:
     if shutil.which("ssh-keygen") is None:
@@ -4905,12 +4967,22 @@ def test_execution_campaign_closure_reverifies_all_87_external_artifacts(
     assert authorization["approvals"] == []
     assert receipt["evaluation"]["campaign_stage"] == "APPROVAL_COLLECTION"
     assert closure["status"] == "PREAPPROVAL_ASSEMBLED"
-    assert closure["external_artifact_count"] == 87
-    assert closure["captured_input_count"] == len(tracked) == 111
-    assert closure["reference_count"] == 290
+    assert closure["external_artifact_count"] == 89
+    assert closure["captured_input_count"] == len(tracked) == 113
+    assert closure["reference_count"] == 292
     assert closure["execution_authorization"]["status"] == (
         "AUTHORIZED_FOR_NAMED_PHASE_EXECUTION"
     )
+    assert closure["target_cluster_identity"]["status"] == (
+        "TARGET_CLUSTER_IDENTITY_VERIFIED"
+    )
+    assert closure["target_cluster_identity"]["kubernetes"] == {
+        "context": plan["execution"]["kubernetes_context"],
+        "namespace": plan["execution"]["namespace"],
+        "cluster_uid": plan["execution"]["kubernetes_cluster_uid"],
+        "principal": plan["execution"]["kubernetes_principal"],
+    }
+    assert "path" not in closure["target_cluster_identity"]
     assert set(closure["phase_starts"]) == set(execution_phase_start.RISKY_PHASE_IDS)
     assert all(
         verdict["status"] == "PHASE_START_AUTHORIZED"
@@ -5228,12 +5300,12 @@ def test_execution_campaign_progress_is_incremental_non_authorizing_and_exact(
         "does_not_authorize_GA_or_target_mutation_or_evidence_PASS"
     )
     assert empty["counts"] == {
-        "planned_external_artifacts": 87,
+        "planned_external_artifacts": 89,
         "present_valid_artifacts": 0,
-        "missing_artifacts": 87,
+        "missing_artifacts": 89,
         "invalid_artifacts": 0,
         "present_size_bytes": 0,
-        "external_phases": 12,
+        "external_phases": 13,
         "ready_external_phases": 0,
     }
     assert empty["next_action"]["phase_id"] == "execution_authorization"
@@ -5311,6 +5383,69 @@ def test_execution_campaign_progress_is_incremental_non_authorizing_and_exact(
     invalid_path.unlink()
 
     _materialize_campaign_fixture(tmp_path, plan, campaign_path)
+    expected_cluster_identity = {
+        "context": plan["execution"]["kubernetes_context"],
+        "namespace": plan["execution"]["namespace"],
+        "cluster_uid": plan["execution"]["kubernetes_cluster_uid"],
+        "principal": plan["execution"]["kubernetes_principal"],
+    }
+    verified_cluster_identity = target_cluster_identity.verify_target_cluster_identity(
+        campaign_path,
+        now=now,
+    )
+    assert verified_cluster_identity["status"] == "TARGET_CLUSTER_IDENTITY_VERIFIED"
+    assert verified_cluster_identity["kubernetes"] == expected_cluster_identity
+    live_cluster_identity = target_cluster_identity.verify_live_target_cluster_identity(
+        campaign_path,
+        observer=lambda _context, _namespace: dict(expected_cluster_identity),
+        now=now,
+    )
+    assert live_cluster_identity["status"] == "LIVE_TARGET_CLUSTER_IDENTITY_VERIFIED"
+    for changed_field in ("cluster_uid", "principal"):
+        changed_identity = dict(expected_cluster_identity)
+        changed_identity[changed_field] += "-changed"
+        with pytest.raises(ValueError, match="changed after the signed identity receipt"):
+            target_cluster_identity.verify_live_target_cluster_identity(
+                campaign_path,
+                observer=lambda _context, _namespace, value=changed_identity: dict(
+                    value
+                ),
+                now=now,
+            )
+    with pytest.raises(ValueError, match="exact Operations authorizer"):
+        target_cluster_identity.prepare_target_cluster_identity(
+            campaign_path,
+            operations_identity="security@example.com",
+            observer=lambda _context, _namespace: dict(expected_cluster_identity),
+            now=now,
+        )
+
+    target_identity_report_path = Path(
+        plan["artifacts"]["target_cluster_identity_report"]
+    )
+    original_target_identity_report = target_identity_report_path.read_bytes()
+    target_identity_report_path.write_bytes(original_target_identity_report + b"\n")
+    invalid_target_identity = execution_campaign_inspector.inspect(
+        campaign_path,
+        assembly_request_path,
+        now=now,
+    )
+    assert invalid_target_identity["status"] == "INVALID_EXTERNAL_EVIDENCE"
+    for artifact_name in (
+        "target_cluster_identity_report",
+        "target_cluster_identity_signature",
+    ):
+        assert invalid_target_identity["artifact_progress"][artifact_name][
+            "problems"
+        ] == ["signed_target_cluster_identity_invalid"]
+    with pytest.raises(ValueError, match="invalid target cluster identity signature"):
+        execution_campaign_closer.close(
+            campaign_path,
+            assembly_request_path,
+            now=now,
+        )
+    target_identity_report_path.write_bytes(original_target_identity_report)
+
     operations_signature_path = Path(
         plan["artifacts"]["execution_authorization_operations_signature"]
     )
@@ -5342,10 +5477,10 @@ def test_execution_campaign_progress_is_incremental_non_authorizing_and_exact(
         now=now,
     )
     assert ready["status"] == "READY_FOR_CLOSURE_ATTEMPT"
-    assert ready["counts"]["present_valid_artifacts"] == 87
+    assert ready["counts"]["present_valid_artifacts"] == 89
     assert ready["counts"]["missing_artifacts"] == 0
     assert ready["counts"]["invalid_artifacts"] == 0
-    assert ready["counts"]["ready_external_phases"] == 12
+    assert ready["counts"]["ready_external_phases"] == 13
     assert ready["closure"]["state"] == "MISSING"
     assert ready["next_action"] == {
         "code": "run_fail_closed_campaign_closure",

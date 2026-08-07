@@ -112,7 +112,8 @@ Langfuse 保持可替换的 provider adapter：关闭或不可用时，依赖它
 - 用 `collect_ga_target_alerting.py` 触发和恢复目标告警，由 delivery 服务签署投递回执、实际值班人员签署 ack，并证明目标接收人与 on-call schedule；
 - 由组织策略授权的 Security 负责人先填写并签署 `security-assessment-engagement.example.json`，第三方在其窗口/来源/禁止动作边界内执行后，使用 `security-assessment-report.example.json` 交付并签署绑定委托的 v2 原始报告，再运行 `collect_ga_independent_security.py` 生成 v3 证据，关闭最终应用镜像和依赖中的全部 Critical/High 并交付删除证明；
 - 创建 GitHub 验证通过的签名 annotated `v2.0.0` tag，让受控 CI 在最终 commit 上重跑 backend/frontend/E2E/Compose 并推送带 BuildKit attestation 的 GHCR 镜像；按发布 provenance 策略由独立 builder 签署 tag/source/SLSA/SPDX/scan 原始报告，运行 `collect_ga_release_provenance.py`，将输出绑定到授权文件 `release.provenance`；
-- 真实采集后运行 `close_ga_execution_campaign.py`，只接受与已审阅 campaign 的 87 份外部产物（含五份双人执行授权工件、八对阶段启动声明/签名及 Security 签署的安全评估委托/签名）、执行窗口、阶段许可时序和显式引用完全一致且落盘重验后的 `APPROVAL_COLLECTION` 空审批底稿、assembly receipt 与非授权 closure receipt；禁止直接用通用 assembler 绕过 campaign 对齐；
+- 活动窗口内由原 Operations 授权身份运行 `collect_ga_target_cluster_identity.py`，签署 `kube-system` UID 与当前认证 principal；network/secrets/HA 正式入口在 permit 后、目标效果前再次实时核对，真实 IAM/RBAC 最小权限和平台外管理员路径仍由发布机构控制；
+- 真实采集后运行 `close_ga_execution_campaign.py`，只接受与已审阅 campaign 的 89 份外部产物（含五份双人执行授权工件、一对目标集群身份工件、八对阶段启动声明/签名及 Security 签署的安全评估委托/签名）、执行窗口、阶段许可时序和显式引用完全一致且落盘重验后的 `APPROVAL_COLLECTION` 空审批底稿、assembly receipt 与非授权 closure receipt；禁止直接用通用 assembler 绕过 campaign 对齐；
 - 由发布机构通过受控、内容寻址的组织策略固定共享信任库和角色身份；在四方签字前运行生产授权器 `--require-evidence-ready`，确认 `campaign_stage=APPROVAL_COLLECTION`、`evidence_ready_for_approval=true` 且 foundation/evidence 失败列表为空；
 - 运行 `freeze_ga_approval_campaign.py` 生成同一份不可覆盖、限时 campaign freeze，再由 Product、Architecture、Security、Operations 四个不同身份在窗口内签署同一 release/target/evidence/policy/campaign 摘要；
 - 用 finalizer 组装并重验，运行生产授权器取得唯一可接受结果 `GA_AUTHORIZED`，随后生成可搬运授权归档并通过独立渠道发布其摘要。

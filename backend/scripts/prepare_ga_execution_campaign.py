@@ -34,8 +34,8 @@ except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
     )
 
 
-REQUEST_SCHEMA_VERSION = "duckdock-ga-execution-campaign-request-v2"
-PLAN_SCHEMA_VERSION = "duckdock-ga-execution-campaign-v2"
+REQUEST_SCHEMA_VERSION = "duckdock-ga-execution-campaign-request-v3"
+PLAN_SCHEMA_VERSION = "duckdock-ga-execution-campaign-v3"
 CAMPAIGN_ID_RE = re.compile(r"^gaexec_[0-9a-f]{64}$")
 DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -64,6 +64,8 @@ EXECUTION_KEYS = {
     "evidence_root",
     "backup_allowed_signers",
     "kubernetes_context",
+    "kubernetes_cluster_uid",
+    "kubernetes_principal",
     "namespace",
     "recovery_target_environment",
     "recovery_target_class",
@@ -188,9 +190,26 @@ def _validate_execution(
 ) -> tuple[dict[str, Any], Path, datetime, datetime]:
     if not isinstance(execution, dict) or set(execution) != EXECUTION_KEYS:
         raise ValueError("execution must contain the exact campaign execution controls")
-    for key in ("kubernetes_context", "namespace", "recovery_target_environment"):
+    for key in (
+        "kubernetes_context",
+        "kubernetes_cluster_uid",
+        "kubernetes_principal",
+        "namespace",
+        "recovery_target_environment",
+    ):
         if not _meaningful(execution.get(key)):
             raise ValueError(f"execution {key} must be a non-placeholder string")
+    cluster_uid = str(execution["kubernetes_cluster_uid"])
+    if re.fullmatch(
+        r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+        cluster_uid,
+    ) is None:
+        raise ValueError("execution kubernetes_cluster_uid must be a lowercase RFC 4122 UUID")
+    principal = str(execution["kubernetes_principal"])
+    if not 3 <= len(principal) <= 256 or not principal.isprintable() or any(
+        character.isspace() or character in "*?!<>" for character in principal
+    ):
+        raise ValueError("execution kubernetes_principal must be one exact safe principal")
     recovery_target = str(execution["recovery_target_environment"])
     if recovery_target == target_id:
         raise ValueError("destructive recovery target must differ from the production target")
@@ -289,6 +308,8 @@ def _artifact_paths(root: Path) -> dict[str, str]:
         "execution_authorization_security_signature": "execution-authorization-security.json.sig",
         "execution_authorization_operations_statement": "execution-authorization-operations.json",
         "execution_authorization_operations_signature": "execution-authorization-operations.json.sig",
+        "target_cluster_identity_report": "target-cluster-identity.json",
+        "target_cluster_identity_signature": "target-cluster-identity.json.sig",
         "phase_start_tls_statement": "phase-start-tls.json",
         "phase_start_tls_signature": "phase-start-tls.json.sig",
         "phase_start_network_statement": "phase-start-network.json",
@@ -464,6 +485,17 @@ def _phases(
             outputs=["application_readiness"],
         ),
         _phase(
+            "target_cluster_identity",
+            risk_class="READ_ONLY_TARGET_IDENTITY",
+            depends_on=["execution_authorization", "release_provenance"],
+            tools=["collect_ga_target_cluster_identity.py"],
+            outputs=[
+                "target_cluster_identity_report",
+                "target_cluster_identity_signature",
+            ],
+            policy_roles=["approval:approver/Operations"],
+        ),
+        _phase(
             "tls",
             risk_class="READ_ONLY_EXTERNAL_VANTAGE",
             depends_on=["execution_authorization", "release_provenance"],
@@ -486,7 +518,11 @@ def _phases(
         _phase(
             "network",
             risk_class="READ_ONLY_AND_POLICY_PROBES",
-            depends_on=["execution_authorization", "release_provenance"],
+            depends_on=[
+                "execution_authorization",
+                "release_provenance",
+                "target_cluster_identity",
+            ],
             tools=[
                 "start_ga_execution_phase.py",
                 "collect_ga_target_network.py",

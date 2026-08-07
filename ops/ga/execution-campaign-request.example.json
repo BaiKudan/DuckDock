@@ -5,7 +5,9 @@
       "sha256": "__CHANGE_ME_64_HEX__"
     },
     "evidence_root": "/secure/duckdock-2.0.0/ga-execution-__CHANGE_ME_CAMPAIGN__",
+    "kubernetes_cluster_uid": "__CHANGE_ME_PRODUCTION_KUBE_SYSTEM_NAMESPACE_UID__",
     "kubernetes_context": "__CHANGE_ME_PRODUCTION_KUBE_CONTEXT__",
+    "kubernetes_principal": "__CHANGE_ME_EXACT_KUBERNETES_PRINCIPAL__",
     "namespace": "duckdock",
     "recovery_target_class": "staging",
     "recovery_target_environment": "__CHANGE_ME_RECOVERY_TARGET__",
@@ -19,7 +21,7 @@
     "git_commit": "__CHANGE_ME_40_HEX_COMMIT__",
     "version": "2.0.0"
   },
-  "schema_version": "duckdock-ga-execution-campaign-request-v2",
+  "schema_version": "duckdock-ga-execution-campaign-request-v3",
   "target": {
     "deployment_mode": "kubernetes-ha",
     "environment": "production",

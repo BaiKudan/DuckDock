@@ -119,10 +119,22 @@ python backend/scripts/verify_ga_trust_topology.py \
    trust store 重算 `organizational_trust_separation`，所以不能通过省略预检回执绕过。
 
    随后复制 `ops/ga/execution-campaign-request.example.json`，只填写最终 release/target、
-   精确 Kubernetes context/Namespace、与 production 不同的 recovery/staging target、
+   精确 Kubernetes context/Namespace、`kube-system` Namespace UID、当前认证 principal、
+   与 production 不同的 recovery/staging target、
    备份签名专用 allowed-signers 的绝对路径及 SHA-256、最长 14 天窗口，以及一个尚不
    存在的专用 evidence root。发布机构使用刚才的独立
    topology PASS 回执生成计划：
+
+```bash
+kubectl --context customer-production-context \
+  get namespace kube-system -o jsonpath='{.metadata.uid}{"\\n"}'
+kubectl --context customer-production-context \
+  auth whoami -o jsonpath='{.status.userInfo.username}{"\\n"}'
+```
+
+   将两条输出分别写入 `kubernetes_cluster_uid` 和 `kubernetes_principal`；UID 必须是小写
+   RFC 4122 UUID，principal 必须是无通配符的精确身份。两项都进入不可变 campaign，后续
+   不能靠修改本地 kubeconfig context 指向来替换目标。
 
 ```bash
 python backend/scripts/prepare_ga_execution_campaign.py \
@@ -186,6 +198,23 @@ python backend/scripts/verify_ga_execution_authorization.py \
    签署后改动、跨 campaign/target 复用或在窗口开始后补签都会失败。closure 和离线归档
    verifier 会再次验证原始两份 statement/signature，不能只保留命令输出。
 
+   活动窗口开始且 release provenance 已齐备后，先由上述同一 Operations 授权身份采集并
+   签署真实目标集群身份。工具自行运行 `kubectl auth whoami` 与
+   `kubectl get namespace kube-system`，调用方不能传入观测值或回填时间：
+
+```bash
+python backend/scripts/collect_ga_target_cluster_identity.py \
+  --campaign /release-authority/duckdock-2.0.0-execution-campaign.json \
+  --operations-identity operations-release-authorizer@corp.example \
+  --key /secure/keys/operations-release-authorizer
+```
+
+   只有实时 context/Namespace/cluster UID/principal 与 campaign 完全相同才写入不可覆盖的
+   `target-cluster-identity.json` 及签名。network phase 明确依赖这两份摘要；正式 network、
+   secrets、HA CLI 在 phase permit 通过后、目标 I/O 或 mutation 前还会重新查询 UID 与
+   principal。该证明不等于 least privilege，真实 IAM/RBAC、云审计与 change-management
+   仍须发布机构独立验证。
+
    进入活动窗口后，每个 acknowledged phase 必须在任何实际动作前单独开启。以下以 TLS
    为例；其他 phase 使用 campaign 中的 `network`、`secrets`、`capacity`、`alerting`、
    `recovery`、`state_services` 或 `high_availability`。动作说明必须单行且不含 token、命令
@@ -214,7 +243,7 @@ python backend/scripts/start_ga_execution_phase.py \
    target 以及适用的 Kubernetes context/Namespace 或 recovery target 任一不一致都会在
    副作用前退出。`local-validation` TLS/容量路径仍可不带生产 campaign，但不能作为 GA 证据。
 
-   外部执行期间不要等到第 87 份产物才发现早期错误。可随时运行非授权增量检查器：
+   外部执行期间不要等到第 89 份产物才发现早期错误。可随时运行非授权增量检查器：
 
 ```bash
 python backend/scripts/inspect_ga_execution_campaign.py \
@@ -223,7 +252,7 @@ python backend/scripts/inspect_ga_execution_campaign.py \
 ```
 
    它会独立重验 campaign/request/topology/九份 policy/trust store，按原始 lexical 计划路径
-   检查 87 份外部产物的 missing/regular-file/symlink/size/JSON/private-key marker，并验证
+   检查 89 份外部产物的 missing/regular-file/symlink/size/JSON/private-key marker，并验证
    所有已出现 `path+sha256`、manifest、allowed-signers 和 signature 引用只能指向计划产物
    或内容寻址的发布机构输入。输出的 `duckdock-ga-execution-campaign-progress-v1` 按 phase
    区分 `PENDING`、`PARTIAL`、`INVALID`、`BLOCKED_BY_DEPENDENCIES` 与
@@ -864,7 +893,7 @@ python backend/scripts/close_ga_execution_campaign.py \
   --assembly-request /release-authority/duckdock-2.0.0-preapproval-request.json
 ```
 
-闭环工具按 campaign 预分配路径要求 87 份外部产物全部存在，拒绝 symlink、缺失、摘要
+闭环工具按 campaign 预分配路径要求 89 份外部产物全部存在，拒绝 symlink、缺失、摘要
 冲突和任何指向未计划路径的 `path+sha256`、`path+manifest_sha256`、allowed-signers 或
 signature 引用；十份最终 wrapper 的 `observed_at` 必须位于执行窗口内，八个风险 phase
 必须存在有效启动签名且真实动作不得早于许可。它重新生成并逐字
@@ -907,7 +936,7 @@ next_action=collect_organizational_approvals
 `campaign_stage=FOUNDATION`。这两种状态都禁止继续签字。
 
 预签字门禁通过后，先冻结一次有时限的审批活动。正式 freeze v2 先独立重验 persisted
-execution closure 的 campaign/request/topology、87 份外部产物、111 个闭包输入、290 条
+execution closure 的 campaign/request/topology、89 份外部产物、113 个闭包输入、292 条
 引用和预审批评估，再把 closure、空 `approvals` 授权文件、发布机构策略、release digest、
 冻结时间和审批截止时间共同内容寻址到不可覆盖的回执；窗口默认 24 小时，最大 72 小时：
 
@@ -983,7 +1012,7 @@ digest、错误密钥、签名缺失、base 已带审批、证据变化和非同
 回执的 path/SHA-256/campaign ID；权威授权器会重新打开 freeze 和其绑定的原始空
 approvals base，核对最终文件除审批与该引用外完全一致。因此即使绕过 finalizer 手工
 拼 JSON，也不能用虚构或缺失的 freeze 得到 `GA_AUTHORIZED`。v2 freeze 摘要又进入每份
-签名 statement，因此 closure、87 份计划外部产物、空 base、策略或窗口中任一项变化都会使
+签名 statement，因此 closure、89 份计划外部产物、空 base、策略或窗口中任一项变化都会使
 四份签名同时失效。
 
 最后仍需以独立命令对持久化授权文件执行同一权威门禁：
@@ -1020,7 +1049,7 @@ python backend/scripts/archive_ga_authorized_bundle.py \
 它不会扫描目录，只沿 JSON 中显式的 `path+sha256`、`path+manifest_sha256`、
 `allowed_signers_path+allowed_signers_sha256`、`signature_path` 引用闭包，并加入明确
 传入的 supplemental receipt/result。正式 v2 campaign freeze 已内容寻址 execution closure；
-closure 又显式引用 campaign/request/topology、87 份外部产物和 preapproval outputs，因此
+closure 又显式引用 campaign/request/topology、89 份外部产物和 preapproval outputs，因此
 完整“计划→实际证据”图会自动进入 portable archive，不再需要把 closure 作为 supplemental
 重复传入。campaign freeze 及其空 base 同样由最终授权中的内容寻址引用自动进入闭包。
 因此同目录审批私钥、builder 私钥和未引用文件不会进入归档；即使显式引用，常见

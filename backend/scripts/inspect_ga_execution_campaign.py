@@ -31,6 +31,7 @@ try:
         artifact_keys as phase_start_artifact_keys,
         verify_phase_start,
     )
+    from scripts.ga_target_cluster_identity import verify_target_cluster_identity
     from scripts.prepare_ga_execution_campaign import (
         PLAN_SCHEMA_VERSION,
         _atomic_write,
@@ -58,6 +59,7 @@ except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
         artifact_keys as phase_start_artifact_keys,
         verify_phase_start,
     )
+    from ga_target_cluster_identity import verify_target_cluster_identity
     from prepare_ga_execution_campaign import (
         PLAN_SCHEMA_VERSION,
         _atomic_write,
@@ -550,6 +552,23 @@ def inspect(
                 records[name]["state"] = "INVALID"
                 records[name]["problems"].append(
                     "dual_control_authorization_invalid"
+                )
+
+    target_cluster_identity_names = {
+        "target_cluster_identity_report",
+        "target_cluster_identity_signature",
+    }
+    if all(
+        records[name]["state"] == "PRESENT"
+        for name in target_cluster_identity_names
+    ):
+        try:
+            verify_target_cluster_identity(campaign_path, now=current)
+        except (OSError, UnicodeError, ValueError):
+            for name in target_cluster_identity_names:
+                records[name]["state"] = "INVALID"
+                records[name]["problems"].append(
+                    "signed_target_cluster_identity_invalid"
                 )
 
     for phase_id in RISKY_PHASE_IDS:
