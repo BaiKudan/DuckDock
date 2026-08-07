@@ -39,7 +39,7 @@ Runtime/Reporter
 | SLO | PASS | `HEALTHY`；142 个发布窗口请求、0 错误；ingest p95 7.729 ms、timeline p95 12.636 ms、policy p95 54.426 ms |
 | Readiness | PASS | `READY`；14 PASS / 0 WARN / 0 BLOCK |
 | 浏览器 | PASS | Playwright 3/3：未登录守卫、登录表单、审批→执行→回执→验证→完成；应用内浏览器复核 Operations/Fleet，真实 Hermes Runtime 可见，console 0 warning/error |
-| 后端回归 | PASS | 1245 passed、19 skipped；最近一次覆盖率门禁为核心覆盖率 81.04%（门槛 65%） |
+| 后端回归 | PASS | 1253 passed、19 skipped；核心覆盖率 81.04%（门槛 65%） |
 | Python 3.12 锁定环境 | PASS | hashed dev lock；runtime lock `pip-audit` 0 已知漏洞；Ruff/compile 通过 |
 | 真实 MySQL 测试 lane | PASS | 独立临时数据库 17/17；验证后数据库与用户均已删除 |
 | 前端 | PASS | npm audit 0；lint 0 warning；11 files / 56 tests；生产 build 最大入口块 569.69 kB（门槛 600 kB） |
@@ -58,7 +58,8 @@ Runtime/Reporter
 | 容量工程基线 | PASS | 60 rps×900s + 120 rps×60s，61,200 Run/Audit/Outbox；持续 p95 8.023 ms，增长后 timeline p95 5.187 ms |
 | 本地 Kubernetes HA 演练 | PASS (local reference) | kind 1 control-plane + 3 zone workers；三类 3 副本、Beat 1；整区 taint/drain 后 30 秒恢复，7 个连续 health/API 样本 0 失败，故障域回归后各 ReplicaSet 恢复三域覆盖；状态服务/RWX/CNI 未授权 |
 | GA 生产授权 | BLOCKED | 真实目标 HTTPS 容量/HA/异地恢复/告警回执、独立安全评估与四方签名尚未提供，授权器必须拒绝 |
-| Compose/CI | PASS | 四套 dev/profile/prod Compose config clean；CI action 固定 commit SHA；最终 tag 等完整四类 job 后才推镜像；生产静态基线 35/35 PASS |
+| Compose/CI | PASS | 四套 dev/profile/prod Compose config clean；CI action 固定 commit SHA；最终 tag 等完整四类 job 后才推镜像；生产静态基线 36/36 PASS |
+| 一键 GA 本地预检 | PASS（非授权） | 干净 commit `b50ea653` 上 integrated profile 73/73 PASS、74 个附属产物内容寻址、回执/权限/敏感模式复验通过；仍固定保留 6 项 `PENDING_EXTERNAL` |
 | 当前清库开发环境实时门禁 | BLOCKED（预期） | Hermes 接入后 7 PASS / 0 WARN / 7 BLOCK；缺少已清理的 Package、release receipt、signed handover、offboarding、key rotation、recovery 与 SLO 测试证据，不影响 fail-closed 正确性，但不能拿当前开发库声称 READY |
 
 ## 3. 14 项实时门禁
