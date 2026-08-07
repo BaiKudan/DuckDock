@@ -301,6 +301,9 @@ def verify(env_file: Path) -> dict[str, Any]:
     execution_campaign_preparer = REPO_ROOT / "backend/scripts/prepare_ga_execution_campaign.py"
     execution_campaign_inspector = REPO_ROOT / "backend/scripts/inspect_ga_execution_campaign.py"
     execution_campaign_closer = REPO_ROOT / "backend/scripts/close_ga_execution_campaign.py"
+    ga_authorization_spec = (
+        REPO_ROOT / "specs/016-ga-production-authorization/spec.md"
+    )
     execution_authorization_core = REPO_ROOT / "backend/scripts/ga_execution_authorization.py"
     execution_authorization_preparer = (
         REPO_ROOT / "backend/scripts/prepare_ga_execution_authorization.py"
@@ -368,6 +371,11 @@ def verify(env_file: Path) -> dict[str, Any]:
     execution_closure_text = (
         execution_campaign_closer.read_text(encoding="utf-8")
         if execution_campaign_closer.is_file()
+        else ""
+    )
+    ga_authorization_spec_text = (
+        ga_authorization_spec.read_text(encoding="utf-8")
+        if ga_authorization_spec.is_file()
         else ""
     )
     execution_authorization_text = (
@@ -484,6 +492,48 @@ def verify(env_file: Path) -> dict[str, Any]:
         and "persisted execution campaign did not independently re-verify" in execution_campaign_text,
         "content-addressed release/target/topology plan with fresh evidence root and pending external phases",
         "operators share one dependency graph and generated preapproval request without claiming evidence PASS",
+    )
+    stale_campaign_spec_markers = (
+        "duckdock-ga-execution-campaign-request-v4",
+        "duckdock-ga-execution-campaign-v4",
+        "duckdock-ga-execution-campaign-closure-v4",
+        "all 91 externally produced artifacts",
+        "14 external phases",
+        "The eight statement/signature pairs",
+        "eight guarded production CLIs",
+        "campaign/closure v4",
+        "campaign v4 binds",
+        "three Kubernetes-facing entrypoints",
+        "eight named phases",
+    )
+    add(
+        "ga_campaign_spec_alignment",
+        ga_authorization_spec.is_file()
+        and all(
+            marker in ga_authorization_spec_text
+            for marker in (
+                "duckdock-ga-execution-campaign-request-v5",
+                "duckdock-ga-execution-campaign-v5",
+                "duckdock-ga-execution-campaign-closure-v5",
+                "all 102 externally produced artifacts",
+                "15 external phases",
+                "The nine statement/signature pairs",
+                "nine guarded production CLIs",
+                "four live-identity-guarded Kubernetes CLIs",
+                "four live-access-guarded Kubernetes CLIs",
+                "| PGA-20 |",
+                "| PGA-21 |",
+                "duckdock-kubernetes-ha-target-bundle-v2",
+                "duckdock-kubernetes-ha-target-preflight-v2",
+                "duckdock-kubernetes-ha-target-deployment-v2",
+            )
+        )
+        and not any(
+            marker in ga_authorization_spec_text
+            for marker in stale_campaign_spec_markers
+        ),
+        "campaign v5; 102 external artifacts; 15 external phases; nine guarded starts/CLIs; PGA-20/PGA-21",
+        "the authoritative GA acceptance contract matches the implemented campaign and target-deployment schemas",
     )
     add(
         "ga_execution_dual_authorization",

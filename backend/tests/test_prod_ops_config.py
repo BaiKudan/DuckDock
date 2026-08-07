@@ -270,6 +270,43 @@ def test_final_tag_reruns_full_gate_and_publishes_attested_images():
         assert f"ghcr.io/baikudan/{image}" in workflow
 
 
+def test_ga_authorization_spec_tracks_campaign_v5_and_target_deployment():
+    spec = _read("specs/016-ga-production-authorization/spec.md")
+
+    for marker in (
+        "duckdock-ga-execution-campaign-request-v5",
+        "duckdock-ga-execution-campaign-v5",
+        "duckdock-ga-execution-campaign-closure-v5",
+        "all 102 externally produced artifacts",
+        "15 external phases",
+        "The nine statement/signature pairs",
+        "nine guarded production CLIs",
+        "four live-identity-guarded Kubernetes CLIs",
+        "four live-access-guarded Kubernetes CLIs",
+        "| PGA-20 |",
+        "| PGA-21 |",
+        "duckdock-kubernetes-ha-target-bundle-v2",
+        "duckdock-kubernetes-ha-target-preflight-v2",
+        "duckdock-kubernetes-ha-target-deployment-v2",
+    ):
+        assert marker in spec
+
+    for stale_marker in (
+        "duckdock-ga-execution-campaign-request-v4",
+        "duckdock-ga-execution-campaign-v4",
+        "duckdock-ga-execution-campaign-closure-v4",
+        "all 91 externally produced artifacts",
+        "14 external phases",
+        "The eight statement/signature pairs",
+        "eight guarded production CLIs",
+        "campaign/closure v4",
+        "campaign v4 binds",
+        "three Kubernetes-facing entrypoints",
+        "eight named phases",
+    ):
+        assert stale_marker not in spec
+
+
 def test_ga_approval_tools_reverify_before_signing_and_before_final_output():
     trust_topology = _read("backend/scripts/verify_ga_trust_topology.py")
     execution_campaign = _read("backend/scripts/prepare_ga_execution_campaign.py")
