@@ -46,10 +46,12 @@ backend/.venv/bin/python scripts/run_security_preaudit.py \
 ```
 
 该预审覆盖后端与前端依赖审计、高置信 SAST、安全负向用例、当前 tracked 非测试源码
-的凭据启发式扫描，以及 backend、frontend、TLS gateway、Alertmanager 四个一方镜像
-的当前源码重建和 Critical/High Docker Scout 门禁。回执会绑定 Git commit/tree、镜像
-ID、日志和 SARIF 摘要，但它明确不是独立第三方评估，不能替代目标环境测试、修复复测、
-评估数据删除证明或 GA 授权。
+的凭据启发式扫描、固定 OCI 摘要的 Gitleaks 全 Git 历史扫描，以及 backend、frontend、
+TLS gateway、Alertmanager 四个一方镜像的当前源码重建和 Critical/High Docker Scout
+门禁。回执会绑定 Git commit/tree、镜像 ID、日志、redact Gitleaks 报告和 SARIF 摘要，
+但它明确不是独立第三方评估，不能替代目标环境测试、修复复测、评估数据删除证明或
+GA 授权。Gitleaks 精确假阳性基线及处置规则见
+[`security-secret-scanning.zh-CN.md`](./security-secret-scanning.zh-CN.md)。
 
 ## 执行顺序
 

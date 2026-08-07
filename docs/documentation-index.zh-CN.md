@@ -48,6 +48,10 @@
    - 面向 Reporter skill 维护者。
    - 说明采集范围、隐私边界、上报包格式和运行时侧部署原则。
 
+12. [Git 全历史秘密扫描](./security-secret-scanning.zh-CN.md)
+   - 面向 Security 与 Release Engineering。
+   - 说明固定 Gitleaks 供应链、精确 fingerprint 基线、CI 门禁和泄露处置边界。
+
 ## 工程规格与历史验收材料
 
 - [DuckDock 2 Foundation 规格](../specs/008-duckdock-2-foundation/spec.md)

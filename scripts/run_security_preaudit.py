@@ -391,6 +391,16 @@ def main() -> int:
             output_dir=output_dir,
         ),
         tracked_secret_scan(output_dir),
+        run_command(
+            key="gitleaks_full_history",
+            command=[
+                "bash",
+                "scripts/run-gitleaks.sh",
+                str(output_dir / "gitleaks-report.json"),
+            ],
+            cwd=REPO_ROOT,
+            output_dir=output_dir,
+        ),
     ]
 
     images: list[dict[str, object]] = []

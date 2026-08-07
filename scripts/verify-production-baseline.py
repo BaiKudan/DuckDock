@@ -155,6 +155,22 @@ def verify(env_file: Path) -> dict[str, Any]:
         if security_preaudit_path.is_file()
         else ""
     )
+    gitleaks_runner_path = REPO_ROOT / "scripts/run-gitleaks.sh"
+    gitleaks_runner_text = (
+        gitleaks_runner_path.read_text(encoding="utf-8")
+        if gitleaks_runner_path.is_file()
+        else ""
+    )
+    gitleaks_baseline_path = REPO_ROOT / ".gitleaksignore"
+    gitleaks_fingerprints = (
+        [
+            line
+            for line in gitleaks_baseline_path.read_text(encoding="utf-8").splitlines()
+            if line
+        ]
+        if gitleaks_baseline_path.is_file()
+        else []
+    )
     provenance_components = (
         REPO_ROOT / "backend/scripts/ga_release_provenance.py",
         REPO_ROOT / "backend/scripts/collect_ga_release_provenance.py",
@@ -199,11 +215,21 @@ def verify(env_file: Path) -> dict[str, Any]:
         and "not an independent security assessment" in security_preaudit_text
         and "PENDING_EXTERNAL" in security_preaudit_text
         and "tracked_secret_heuristic" in security_preaudit_text
+        and 'key="gitleaks_full_history"' in security_preaudit_text
         and "critical,high" in security_preaudit_text
         and "possibly stale tag" in security_preaudit_text
+        and "v8.30.1@sha256:c00b6bd0" in gitleaks_runner_text
+        and "--redact=100" in gitleaks_runner_text
+        and "--network none" in gitleaks_runner_text
+        and "--read-only" in gitleaks_runner_text
+        and len(gitleaks_fingerprints) == 33
+        and len(set(gitleaks_fingerprints)) == 33
+        and "Scan full Git history for secrets" in ci_workflow
+        and "fetch-depth: 0" in ci_workflow
+        and "Retain redacted Gitleaks report" in ci_workflow
         and "run_security_preaudit.py --help" in ci_workflow
         and "High-confidence security static gate" in ci_workflow,
-        "clean source; dependency/SAST/negative/secret/image gates; content-addressed non-independent receipt",
+        "clean source; dependency/SAST/negative/full-history-secret/image gates; content-addressed non-independent receipt",
         "internal pre-audit reduces assessor rework without replacing independent testing or GA authorization",
     )
     preapproval_assembler = REPO_ROOT / "backend/scripts/assemble_ga_preapproval_authorization.py"
