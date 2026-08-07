@@ -149,6 +149,12 @@ def verify(env_file: Path) -> dict[str, Any]:
     local_preflight_text = (
         local_preflight_path.read_text(encoding="utf-8") if local_preflight_path.is_file() else ""
     )
+    security_preaudit_path = REPO_ROOT / "scripts/run_security_preaudit.py"
+    security_preaudit_text = (
+        security_preaudit_path.read_text(encoding="utf-8")
+        if security_preaudit_path.is_file()
+        else ""
+    )
     provenance_components = (
         REPO_ROOT / "backend/scripts/ga_release_provenance.py",
         REPO_ROOT / "backend/scripts/collect_ga_release_provenance.py",
@@ -184,6 +190,21 @@ def verify(env_file: Path) -> dict[str, Any]:
         and "run_ga_local_preflight.py --help" in ci_workflow,
         "clean source; repository/integrated gates; content-addressed receipt; six external requirements stay pending",
         "one local command gives release operators a reproducible handoff without claiming GA authorization",
+    )
+    add(
+        "ga_internal_security_preaudit",
+        "duckdock-security-preaudit-v1" in security_preaudit_text
+        and "working tree must be clean before the security pre-audit"
+        in security_preaudit_text
+        and "not an independent security assessment" in security_preaudit_text
+        and "PENDING_EXTERNAL" in security_preaudit_text
+        and "tracked_secret_heuristic" in security_preaudit_text
+        and "critical,high" in security_preaudit_text
+        and "possibly stale tag" in security_preaudit_text
+        and "run_security_preaudit.py --help" in ci_workflow
+        and "High-confidence security static gate" in ci_workflow,
+        "clean source; dependency/SAST/negative/secret/image gates; content-addressed non-independent receipt",
+        "internal pre-audit reduces assessor rework without replacing independent testing or GA authorization",
     )
     preapproval_assembler = REPO_ROOT / "backend/scripts/assemble_ga_preapproval_authorization.py"
     trust_topology_verifier = REPO_ROOT / "backend/scripts/verify_ga_trust_topology.py"

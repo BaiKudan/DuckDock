@@ -39,12 +39,12 @@ Runtime/Reporter
 | SLO | PASS | `HEALTHY`；142 个发布窗口请求、0 错误；ingest p95 7.729 ms、timeline p95 12.636 ms、policy p95 54.426 ms |
 | Readiness | PASS | `READY`；14 PASS / 0 WARN / 0 BLOCK |
 | 浏览器 | PASS | Playwright 3/3：未登录守卫、登录表单、审批→执行→回执→验证→完成；应用内浏览器复核 Operations/Fleet，真实 Hermes Runtime 可见，console 0 warning/error |
-| 后端回归 | PASS | 1253 passed、19 skipped；核心覆盖率 81.04%（门槛 65%） |
+| 后端回归 | PASS | 当前安全加固提交 1260 passed、19 skipped；最近 integrated preflight 核心覆盖率 81.04%（门槛 65%） |
 | Python 3.12 锁定环境 | PASS | hashed dev lock；runtime lock `pip-audit` 0 已知漏洞；Ruff/compile 通过 |
 | 真实 MySQL 测试 lane | PASS | 独立临时数据库 17/17；验证后数据库与用户均已删除 |
 | 前端 | PASS | npm audit 0；lint 0 warning；11 files / 56 tests；生产 build 最大入口块 569.69 kB（门槛 600 kB） |
 | 类型基线 | PASS with debt | mypy 81 errors，未超过 ratchet ceiling 82；这不是“类型全清零” |
-| 自有生产镜像 | PASS | backend/frontend/TLS gateway/Alertmanager 非 root；Docker Scout 均为 0 Critical / 0 High |
+| 自有生产镜像 | PASS | commit `17039993` 当前源码重建 backend/frontend/TLS gateway/Alertmanager；Docker Scout SARIF 均为 0 Critical / 0 High |
 | 最终发布供应链协议 | PASS（协议）/ PENDING（真实执行） | `v2.0.0` tag 将重跑 backend/frontend/E2E/Compose，四镜像 commit 候选均通过扫描、原始 SARIF 留存且最终 tag 不存在后才晋升；builder 签名报告绑定 tag/source/SLSA v1/SPDX/SARIF/scan，最终授权器独立复验并作为 FOUNDATION；真实 tag、registry digest 和签名 bundle 尚未产生 |
 | 目标证据组装协议 | PASS（协议）/ PENDING（真实输入） | 组装器从 release provenance 和九份目标 wrapper 自动投影审批空底稿，approval policy 仅能从独立 CLI 参数选择，落盘前后均要求 `APPROVAL_COLLECTION` 且 foundation/evidence 无失败；真实目标证据仍未产生 |
 | 全局组织信任拓扑 | PASS（协议）/ PENDING（真实配置） | 九策略 manifest 和独立预检要求每个组织职责的 identity/公钥全局唯一；最终授权器从证据引用策略再次重算，跨策略复用停在 `FOUNDATION`；发布机构尚未提供真实策略、人员身份和公钥 |
@@ -58,8 +58,9 @@ Runtime/Reporter
 | 容量工程基线 | PASS | 60 rps×900s + 120 rps×60s，61,200 Run/Audit/Outbox；持续 p95 8.023 ms，增长后 timeline p95 5.187 ms |
 | 本地 Kubernetes HA 演练 | PASS (local reference) | kind 1 control-plane + 3 zone workers；三类 3 副本、Beat 1；整区 taint/drain 后 30 秒恢复，7 个连续 health/API 样本 0 失败，故障域回归后各 ReplicaSet 恢复三域覆盖；状态服务/RWX/CNI 未授权 |
 | GA 生产授权 | BLOCKED | 真实目标 HTTPS 容量/HA/异地恢复/告警回执、独立安全评估与四方签名尚未提供，授权器必须拒绝 |
-| Compose/CI | PASS | 四套 dev/profile/prod Compose config clean；CI action 固定 commit SHA；最终 tag 等完整四类 job 后才推镜像；生产静态基线 36/36 PASS |
+| Compose/CI | PASS | 四套 dev/profile/prod Compose config clean；CI action 固定 commit SHA；最终 tag 等完整四类 job 后才推镜像；生产静态基线 37/37 PASS |
 | 一键 GA 本地预检 | PASS（非授权） | 干净 commit `b50ea653` 上 integrated profile 73/73 PASS、74 个附属产物内容寻址、回执/权限/敏感模式复验通过；仍固定保留 6 项 `PENDING_EXTERNAL` |
+| 内部安全预审 | PASS（非独立/非授权） | 干净 commit `17039993` 上 13/13 PASS：Python/npm 0 已知漏洞，高置信 SAST 0，安全负向用例 198 passed/2 skipped，744 个 tracked 非测试文本凭据启发式 0 finding，四个一方镜像 Critical/High 均为 0；独立第三方评估仍为 `PENDING_EXTERNAL` |
 | 当前清库开发环境实时门禁 | BLOCKED（预期） | Hermes 接入后 7 PASS / 0 WARN / 7 BLOCK；缺少已清理的 Package、release receipt、signed handover、offboarding、key rotation、recovery 与 SLO 测试证据，不影响 fail-closed 正确性，但不能拿当前开发库声称 READY |
 
 ## 3. 14 项实时门禁
@@ -91,7 +92,7 @@ Langfuse 保持可替换的 provider adapter：关闭或不可用时，依赖它
 
 ## 5. RC 后仍存在的风险
 
-1. **独立安全审计尚未由第三方执行。** 仓库现提供测试前/后双签名 v3 门禁：组织策略预先固定 Security 与独立评估方 identity/公钥；Security 先签署绑定最终 release/target、最长 30 天窗口、来源 CIDR、测试账号、禁止动作、急停和数据处置的委托，评估方再签署逐条 finding、绑定委托与最终 PDF 的 v2 报告。门禁独立重验双方签名、窗口、边界、摘要和严重度统计，拒绝自选信任根、放宽禁止动作、越窗、替换委托、隐藏 High、投影篡改或签名后改 PDF。但真实委托仍须由真实 Security 负责人签署，第三方也仍须实际执行测试并交付报告/删除证明。
+1. **独立安全审计尚未由第三方执行。** commit `17039993` 的内部预审已完成依赖审计、高置信 SAST、198 项安全负向用例、tracked 源码凭据启发式与四个一方镜像 Critical/High 扫描，并关闭 production `assert`、静默异常和不安全 XML 解析问题；这只能降低送审风险，不能满足独立性。仓库现提供测试前/后双签名 v3 门禁：组织策略预先固定 Security 与独立评估方 identity/公钥；Security 先签署绑定最终 release/target、最长 30 天窗口、来源 CIDR、测试账号、禁止动作、急停和数据处置的委托，评估方再签署逐条 finding、绑定委托与最终 PDF 的 v2 报告。门禁独立重验双方签名、窗口、边界、摘要和严重度统计，拒绝自选信任根、放宽禁止动作、越窗、替换委托、隐藏 High、投影篡改或签名后改 PDF。但真实委托仍须由真实 Security 负责人签署，第三方也仍须实际执行测试并交付报告/删除证明。
 2. **目标 TLS 与网络隔离尚未取得真实回执。** TLS 已升级为 v3 双层证据：发布机构策略固定外部 probe identity/key、probe/vantage ID 与全球可路由来源 CIDR，探测者签署含证书指纹、有效期、HSTS header 和旧协议 OpenSSL 原始输出的报告，组合器与最终门禁重新验签并重算；它能拒绝 wrapper 投影篡改、签名后改报告、伪造 legacy 摘要和未批准来源，但尚未从真实外部探测点运行。网络也已升级为 v3 双层证据：发布机构策略额外固定精确 kube context、Namespace 与 CNI，外部执行者签署含 1–65535 TCP、三个数据端口 nmap 原始 XML、CNI/Namespace/Pod/NetworkPolicy 身份和 ingress/egress 正反例的报告；组合器和最终门禁重新验签、验证来源/cluster 身份并重算原始字段，能拒绝签名后篡改、未批准观测点、wrapper 投影和伪造扫描摘要。但该执行器同样尚未在真实目标网络/CNI 上运行。
 3. **HA 已完成本机真实 Kubernetes 无状态演练，但未完成目标环境承诺。** `ops/kubernetes/ha` 的受限镜像、PDB/HPA、严格且 taint-aware/revision-aware 的拓扑分散已经在三模拟 zone 中执行节点/整区 drain、Beat 迁移与恢复后再均衡；仓库现提供 fail-closed 的目标 v2 执行器，可校验精确 context/镜像、整区节点、持续公网 HTTPS、自动清理和网络证据。托管 MySQL/Redis/S3/RWX 也已升级为多方 v2：发布策略固定 provider/verifier 身份与公钥，provider 签署自动跨域切换事件，独立 verifier 签署故障前后数据摘要与写后读结果，Operations 只签署组合 wrapper，最终门禁重验三层签名；但尚未在真实目标集群和服务商上运行。本地单节点 MySQL/Redis/MinIO、`emptyDir` 和未证明 enforcement 的 kindnet 不代表托管 MySQL/Redis/S3/RWX/CNI。
 4. **目标容量尚未证明。** 本地真实 MySQL 工程基线通过，300 rps 边界探针也能 fail closed；仓库现提供容量 v3 闭环：负载执行人签署 G2 原始报告，存储观察人签署压测前后 MySQL 行数/bytes/outbox/lag，独立清理验证人签署 Namespace 删除、凭证撤销与残留归零，组合器和最终门禁重算三份原始证据。它能拒绝只靠 HTTP 201、篡改汇总、合法重签但增长不足或清理不完整的报告，但尚未在真实目标 HTTPS、负载均衡器和托管数据服务上执行。
