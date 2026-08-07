@@ -326,9 +326,14 @@ python backend/scripts/inspect_ga_execution_campaign.py \
    `bootstrap.yaml`、commit-bound `migration.yaml`、`applications.yaml` 和
    `PREPARED_NOT_AUTHORIZED` 内容寻址回执。参数必须使用发布镜像摘要、真实域名、
    外部 Secret/RWX StorageClass 和批准的 egress CIDR；再执行 `verify`，分别做三份
-   文件的 server-side dry-run，按 bootstrap → 等待 migration 完成 → applications
-   顺序部署。完整命令见 `ops/kubernetes/ha/README.zh-CN.md`。生成器不会把目标
-   Secret/TLS、状态服务/RWX 冗余或故障演练标成通过。
+   文件的 server-side dry-run。使用 `deploy-kubernetes-ha-target.py preflight` 把
+   真实 kube-system UID/principal、三 zone、metrics、Secret/TLS 元数据、RWX
+   StorageClass、Namespace 标签和固定部署 RBAC 绑定到一小时内有效的回执；再用精确
+   change request 和内容寻址确认串执行 `deploy`。执行器按 bootstrap → PVC Bound →
+   等待 migration 完成 → applications/rollout 顺序部署，成功或部分失败均留下不可覆盖
+   的非授权回执。完整命令见 `ops/kubernetes/ha/README.zh-CN.md`。这些回执不会把
+   provenance、Secret 值/轮换、TLS/NetworkPolicy enforcement、状态服务/RWX 冗余、
+   容量、恢复/值班、故障演练、独立评估或四方签字标成通过。
    然后用独立、短期、专用管理员 token 通过真实目标 HTTPS 仅调用只读 readiness
    endpoint（token 只放环境变量，报告不会保留）：
 

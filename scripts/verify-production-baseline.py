@@ -178,6 +178,15 @@ def verify(env_file: Path) -> dict[str, Any]:
         else ""
     )
     ha_target_bundle_tests = REPO_ROOT / "backend/tests/test_kubernetes_ha_target_bundle.py"
+    ha_target_deployer_path = REPO_ROOT / "scripts/deploy-kubernetes-ha-target.py"
+    ha_target_deployer_text = (
+        ha_target_deployer_path.read_text(encoding="utf-8")
+        if ha_target_deployer_path.is_file()
+        else ""
+    )
+    ha_target_deployer_tests = (
+        REPO_ROOT / "backend/tests/test_kubernetes_ha_target_deployment.py"
+    )
     provenance_components = (
         REPO_ROOT / "backend/scripts/ga_release_provenance.py",
         REPO_ROOT / "backend/scripts/collect_ga_release_provenance.py",
@@ -259,6 +268,30 @@ def verify(env_file: Path) -> dict[str, Any]:
         and "Validate Kubernetes HA target bundle CLI" in ci_workflow,
         "clean source and immutable images; exact three-phase target manifests; target values and pending external duties are tamper checked",
         "one generated bundle separates bootstrap, commit-bound migration and application rollout without claiming target authorization",
+    )
+    add(
+        "ha_target_deployment_execution",
+        ha_target_deployer_path.is_file()
+        and os.access(ha_target_deployer_path, os.X_OK)
+        and ha_target_deployer_tests.is_file()
+        and "duckdock-kubernetes-ha-target-preflight-v1" in ha_target_deployer_text
+        and "duckdock-kubernetes-ha-target-deployment-v1" in ha_target_deployer_text
+        and "TARGET_HA_PREFLIGHT_PASSED_NOT_GA_AUTHORIZED"
+        in ha_target_deployer_text
+        and "TARGET_HA_DEPLOYMENT_COMPLETED_NOT_GA_AUTHORIZED"
+        in ha_target_deployer_text
+        and "TARGET_HA_DEPLOYMENT_INCOMPLETE_NOT_GA_AUTHORIZED"
+        in ha_target_deployer_text
+        and "target requires at least three Ready schedulable nodes across three zones"
+        in ha_target_deployer_text
+        and "--dry-run=server" in ha_target_deployer_text
+        and "APPLY_DUCKDOCK_HA_TARGET:" in ha_target_deployer_text
+        and "network_policy_enforcement" in ha_target_deployer_text
+        and "independent_security_assessment" in ha_target_deployer_text
+        and "four_role_ga_approvals" in ha_target_deployer_text
+        and "deploy-kubernetes-ha-target.py --help" in ci_workflow,
+        "live UID/principal, three zones, Secret/TLS metadata, metrics, exact allow/deny RBAC and three server dry-runs; explicit content-addressed mutation confirmation; success/failure receipts",
+        "target deployment is machine-sequenced and auditable while provenance, enforcement, capacity, HA, assessment and approvals remain external",
     )
     preapproval_assembler = REPO_ROOT / "backend/scripts/assemble_ga_preapproval_authorization.py"
     trust_topology_verifier = REPO_ROOT / "backend/scripts/verify_ga_trust_topology.py"

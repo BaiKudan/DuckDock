@@ -8,7 +8,8 @@ TLS Ingress。Celery Beat 保持一个逻辑实例并由 Deployment 自动重建
 
 目标环境必须提供：
 
-- Kubernetes 1.27 或更高版本、至少两个故障域和可工作的 metrics-server；
+- Kubernetes 1.27 或更高版本、至少三个 Ready 可调度节点分布在三个 zone，且
+  metrics-server 能报告全部节点；
 - 多可用区托管 MySQL、Redis、S3 兼容对象存储；
 - 名为 `duckdock-repos-rwx` 的跨节点 RWX 持久卷，且存储本身具备冗余；
 - 名为 `duckdock-runtime-secrets` 的 Secret，由 External Secrets、SOPS 或同等
@@ -45,27 +46,70 @@ backend/.venv/bin/python scripts/prepare-kubernetes-ha-target.py verify \
 2. `migration.yaml`：名称绑定 commit 的唯一 Alembic Job；
 3. `applications.yaml`：四个 Deployment、内部 Service、TLS Ingress、PDB 和 HPA。
 
-必须按回执顺序逐阶段执行，不能把三份文件一次性 apply：
+目标 Namespace 必须先由集群管理员建立，并带 `restricted` 的 enforce/audit/warn
+Pod Security 标签；Runtime/TLS Secret 必须由 Secret Manager 预先注入。部署身份应是
+变更窗口专用身份，只允许在该 Namespace 创建/patch 应用资源、读取两个精确 Secret
+的元数据，并明确不能修改 Secret、RBAC、其他 Namespace 或删除工作负载/PVC。
+
+先取得目标 `kube-system` UID 和 `kubectl auth whoami` principal，由变更单审阅者确认后
+作为固定参数运行只读预检。回执目录必须预先使用 `0700` 权限建立，且不能位于仓库或
+目标包目录内：
 
 ```bash
-for phase in bootstrap migration applications; do
-  kubectl apply --server-side --dry-run=server \
-    -f "/secure/release/duckdock-ha-target/${phase}.yaml"
-done
-kubectl apply -f /secure/release/duckdock-ha-target/bootstrap.yaml
-# 先独立确认 runtime/TLS Secret、Ingress/monitoring Namespace 标签及 RWX 已就绪。
-kubectl apply -f /secure/release/duckdock-ha-target/migration.yaml
-kubectl -n duckdock wait --for=condition=complete \
-  job/duckdock-migrate-<commit前12位> --timeout=10m
-kubectl apply -f /secure/release/duckdock-ha-target/applications.yaml
-for deployment in backend frontend worker beat; do
-  kubectl -n duckdock rollout status "deployment/${deployment}" --timeout=10m
-done
+install -d -m 0700 /secure/evidence/duckdock-ha
+backend/.venv/bin/python scripts/deploy-kubernetes-ha-target.py preflight \
+  --bundle-dir /secure/release/duckdock-ha-target \
+  --context company-prod \
+  --expected-cluster-uid '<reviewed-kube-system-uid>' \
+  --expected-principal '<reviewed-kubernetes-principal>' \
+  --output /secure/evidence/duckdock-ha/preflight.json
+
+backend/.venv/bin/python scripts/deploy-kubernetes-ha-target.py verify-preflight \
+  --receipt /secure/evidence/duckdock-ha/preflight.json \
+  --bundle-dir /secure/release/duckdock-ha-target
 ```
+
+预检会重新验证 bundle，检查 Kubernetes 版本、三 zone、metrics-server、RWX
+StorageClass、两个 Secret 的类型/键名、Ingress/monitoring Namespace 标签和固定
+allow/deny RBAC 矩阵，并分别执行三份清单的真实 server-side dry-run。它不读取或记录
+Secret 值，也不持久化任何 Kubernetes 资源。预检超过一小时后不得用于写入。
+
+正式执行必须提供变更单和精确确认串：
+
+```text
+APPLY_DUCKDOCK_HA_TARGET:<context>:<namespace>:<bundle receipt_sha256>
+```
+
+```bash
+backend/.venv/bin/python scripts/deploy-kubernetes-ha-target.py deploy \
+  --bundle-dir /secure/release/duckdock-ha-target \
+  --preflight-receipt /secure/evidence/duckdock-ha/preflight.json \
+  --context company-prod \
+  --expected-cluster-uid '<reviewed-kube-system-uid>' \
+  --expected-principal '<reviewed-kubernetes-principal>' \
+  --change-request-id CHG-20260807-001 \
+  --confirm-target-mutation \
+    'APPLY_DUCKDOCK_HA_TARGET:company-prod:duckdock:<bundle-receipt-sha256>' \
+  --output /secure/evidence/duckdock-ha/deployment.json
+
+backend/.venv/bin/python scripts/deploy-kubernetes-ha-target.py verify-deployment \
+  --receipt /secure/evidence/duckdock-ha/deployment.json
+```
+
+执行器会在写入前重跑全部预检并拒绝任何 resourceVersion/身份/RBAC/拓扑漂移，随后
+严格执行 bootstrap → PVC Bound → migration Complete → applications → 四个 rollout。
+成功回执为 `TARGET_HA_DEPLOYMENT_COMPLETED_NOT_GA_AUTHORIZED`；一旦目标写入已开始，
+任何失败都会写出 `TARGET_HA_DEPLOYMENT_INCOMPLETE_NOT_GA_AUTHORIZED`，列明已完成阶段，
+不得自动重跑或删除，必须进入变更事故处置。执行器不会自动回滚数据库迁移。
 
 `receipt.json` 的状态固定为 `PREPARED_NOT_AUTHORIZED`；即使本地验证成功，也仍把
 发布镜像 provenance、server-side dry-run、Secret/TLS、状态服务、RWX 冗余和故障域
 演练保留为外部待办。
+
+部署成功回执仍不是 GA 证据：Secret 值/轮换、TLS 外部握手、NetworkPolicy 实际
+enforcement、状态服务与 RWX 冗余、目标容量/增长、异地恢复/值班、故障域演练、独立
+安全评估和四方签字都继续标记为 `PENDING_EXTERNAL`，由正式 campaign collectors
+分别生成签名证据。
 
 正式承诺必须用目标集群的真实报告证明：驱逐一个 backend/worker 节点和一个
 zone 后 API 仍满足 SLO，Beat 在约定 RTO 内恢复，MySQL/Redis/S3/RWX 存储均未

@@ -304,6 +304,7 @@ Langfuse v4 导出使用独立 `telemetry-langfuse` profile，默认栈均不启
 - [ ] 替换 `.env.prod` 全部默认 secret（`SECRET_KEY` · `MYSQL_*` · `MINIO_ROOT_PASSWORD` · `DUCKDOCK_CREDENTIAL_KEY` · Langfuse 三件套）
 - [ ] MySQL / Redis / S3 / RWX 仓库存储使用目标故障域内的 HA 服务，并收紧默认拒绝 NetworkPolicy 的 egress
 - [ ] 用 `scripts/prepare-kubernetes-ha-target.py` 生成并复验三阶段目标包；server dry-run 后等待 commit-bound migration 成功再滚应用
+- [ ] 用 `scripts/deploy-kubernetes-ha-target.py` 绑定目标 UID/principal、三 zone、Secret/TLS/RWX/RBAC，凭变更单和精确确认串部署并保存成功/不完整回执
 - [ ] TLS 证书覆盖 application/object 两个域名；公网扫描确认只有 443，关 `DEBUG`
 - [ ] Alertmanager firing/resolved 均送达真实 on-call；异地 age 加密、签名、object-lock 备份完成破坏性恢复
 - [ ] 至少 900 秒、声明 RPS 以上且 50,000+ Run 的容量/数据增长门禁通过

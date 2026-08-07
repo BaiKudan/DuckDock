@@ -43,12 +43,19 @@ outside the repository and emits exact `bootstrap.yaml`, `migration.yaml` and
 `applications.yaml` phases plus a content-addressed receipt.
 
 Run `verify` again at the deployment boundary, server-side dry-run all three
-files, apply bootstrap, independently verify Secrets/TLS/RWX, apply and wait for
-the commit-named migration Job, and only then apply/roll out the four
-Deployments. The receipt deliberately remains `PREPARED_NOT_AUTHORIZED`; target
-release-image provenance, state-service evidence, fault injection, independent
-assessment and four-role authorization are still required. Exact commands are in
-`ops/kubernetes/ha/README.zh-CN.md`.
+files, and then use `scripts/deploy-kubernetes-ha-target.py`: its preflight binds
+the reviewed kube-system UID and authenticated principal, requires three Ready
+zones, checks the exact Secret metadata/RWX/metrics/RBAC profile, and performs
+all three server dry-runs. A fresh preflight plus an exact content-addressed
+mutation confirmation is required before the executor applies bootstrap, waits
+for RWX, waits for the commit-named migration, and rolls out all four workloads.
+Success and partial failure both create immutable non-authorizing receipts.
+
+The receipts deliberately remain outside GA authorization. Release provenance,
+Secret values/rotation, external TLS and network enforcement, managed-state/RWX
+redundancy, target capacity, recovery/on-call, fault injection, independent
+assessment and four-role authorization are still required. Exact commands are
+in `ops/kubernetes/ha/README.zh-CN.md`.
 
 ## Secrets
 
