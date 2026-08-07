@@ -186,7 +186,29 @@ python backend/scripts/verify_ga_execution_authorization.py \
    签署后改动、跨 campaign/target 复用或在窗口开始后补签都会失败。closure 和离线归档
    verifier 会再次验证原始两份 statement/signature，不能只保留命令输出。
 
-   外部执行期间不要等到第 71 份产物才发现早期错误。可随时运行非授权增量检查器：
+   进入活动窗口后，每个 acknowledged phase 必须在任何实际动作前单独开启。以下以 TLS
+   为例；其他 phase 使用 campaign 中的 `network`、`secrets`、`capacity`、`alerting`、
+   `recovery`、`state_services` 或 `high_availability`。动作说明必须单行且不含 token、命令
+   参数中的 secret 或个人数据，摘要由工具自行计算，调用方不能传入伪造摘要：
+
+```bash
+python backend/scripts/start_ga_execution_phase.py \
+  --campaign /release-authority/duckdock-2.0.0-execution-campaign.json \
+  --phase-id tls \
+  --action-id CHG-2026-001/tls-probe \
+  --action-description 'Run approved external TLS probe from the named vantage' \
+  --operations-identity operations-release-authorizer@corp.example \
+  --key /secure/keys/operations-release-authorizer
+```
+
+   工具重验原始 Security/Operations 双签、活动窗口、完整 phase projection 和所有依赖 phase
+   的最终产物及摘要，然后只在 campaign 预分配路径写入不可覆盖的
+   `duckdock-ga-execution-phase-start-v1` statement/signature。每个 phase 必须各运行一次；
+   statement/signature 不能跨 phase 或 campaign 复用。closure 会把许可时间与 TLS/network
+   raw report、secret/provider receipt、capacity load、alert exercise、restore receipt、
+   state provider observation 和 HA fault-injection 的最早执行时间逐项比较。
+
+   外部执行期间不要等到第 87 份产物才发现早期错误。可随时运行非授权增量检查器：
 
 ```bash
 python backend/scripts/inspect_ga_execution_campaign.py \
@@ -195,7 +217,7 @@ python backend/scripts/inspect_ga_execution_campaign.py \
 ```
 
    它会独立重验 campaign/request/topology/九份 policy/trust store，按原始 lexical 计划路径
-   检查 71 份外部产物的 missing/regular-file/symlink/size/JSON/private-key marker，并验证
+   检查 87 份外部产物的 missing/regular-file/symlink/size/JSON/private-key marker，并验证
    所有已出现 `path+sha256`、manifest、allowed-signers 和 signature 引用只能指向计划产物
    或内容寻址的发布机构输入。输出的 `duckdock-ga-execution-campaign-progress-v1` 按 phase
    区分 `PENDING`、`PARTIAL`、`INVALID`、`BLOCKED_BY_DEPENDENCIES` 与
@@ -820,9 +842,10 @@ python backend/scripts/close_ga_execution_campaign.py \
   --assembly-request /release-authority/duckdock-2.0.0-preapproval-request.json
 ```
 
-闭环工具按 campaign 预分配路径要求 71 份外部产物全部存在，拒绝 symlink、缺失、摘要
+闭环工具按 campaign 预分配路径要求 87 份外部产物全部存在，拒绝 symlink、缺失、摘要
 冲突和任何指向未计划路径的 `path+sha256`、`path+manifest_sha256`、allowed-signers 或
-signature 引用；十份最终 wrapper 的 `observed_at` 必须位于执行窗口内。它重新生成并逐字
+signature 引用；十份最终 wrapper 的 `observed_at` 必须位于执行窗口内，八个风险 phase
+必须存在有效启动签名且真实动作不得早于许可。它重新生成并逐字
 比较 campaign/request、重验 topology/九份 policy/trust store 和单独内容寻址的 backup
 allowed-signers，然后调用同一 assembler 与权威授权器。只有结果精确为
 `APPROVAL_COLLECTION` 时才原子写出计划内的 `preapproval-authorization.json`、
@@ -862,7 +885,7 @@ next_action=collect_organizational_approvals
 `campaign_stage=FOUNDATION`。这两种状态都禁止继续签字。
 
 预签字门禁通过后，先冻结一次有时限的审批活动。正式 freeze v2 先独立重验 persisted
-execution closure 的 campaign/request/topology、71 份外部产物、95 个闭包输入、139 条
+execution closure 的 campaign/request/topology、87 份外部产物、111 个闭包输入、290 条
 引用和预审批评估，再把 closure、空 `approvals` 授权文件、发布机构策略、release digest、
 冻结时间和审批截止时间共同内容寻址到不可覆盖的回执；窗口默认 24 小时，最大 72 小时：
 
@@ -975,7 +998,7 @@ python backend/scripts/archive_ga_authorized_bundle.py \
 它不会扫描目录，只沿 JSON 中显式的 `path+sha256`、`path+manifest_sha256`、
 `allowed_signers_path+allowed_signers_sha256`、`signature_path` 引用闭包，并加入明确
 传入的 supplemental receipt/result。正式 v2 campaign freeze 已内容寻址 execution closure；
-closure 又显式引用 campaign/request/topology、71 份外部产物和 preapproval outputs，因此
+closure 又显式引用 campaign/request/topology、87 份外部产物和 preapproval outputs，因此
 完整“计划→实际证据”图会自动进入 portable archive，不再需要把 closure 作为 supplemental
 重复传入。campaign freeze 及其空 base 同样由最终授权中的内容寻址引用自动进入闭包。
 因此同目录审批私钥、builder 私钥和未引用文件不会进入归档；即使显式引用，常见

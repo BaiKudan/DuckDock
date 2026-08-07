@@ -23,6 +23,7 @@ import scripts.prepare_ga_execution_campaign as execution_campaign_preparer
 import scripts.prepare_ga_execution_authorization as execution_authorization_preparer
 import scripts.sign_ga_execution_authorization as execution_authorization_signer
 import scripts.ga_execution_authorization as execution_authorization
+import scripts.ga_execution_phase_start as execution_phase_start
 import scripts.verify_ga_execution_authorization as execution_authorization_verifier
 import scripts.verify_ga_trust_topology as trust_topology_verifier
 from scripts.ga_approval_campaign import derive_campaign_id, validate_campaign_freeze
@@ -4001,7 +4002,7 @@ def test_execution_campaign_generates_pending_dependency_plan_and_assembly_reque
     assert plan["preapproval_assembly_request"]["sha256"] == hashlib.sha256(
         assembly_request_output.read_bytes()
     ).hexdigest()
-    assert len(plan["artifacts"]) == 74
+    assert len(plan["artifacts"]) == 90
     assert phases["preapproval_assembly"]["tools"] == [
         "close_ga_execution_campaign.py"
     ]
@@ -4574,6 +4575,16 @@ def _materialize_campaign_fixture(
         "security_assessment",
     ):
         rewrite(artifacts[name])
+    high_availability = json.loads(
+        artifacts["high_availability"].read_text(encoding="utf-8")
+    )
+    high_availability["fault_injection"]["started_at"] = (
+        campaign_starts_at + timedelta(seconds=30)
+    ).isoformat()
+    artifacts["high_availability"].write_text(
+        json.dumps(high_availability, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
 
     provenance = rewrite(artifacts["release_provenance"])
     build_signed_reference = provenance["signed_build_report"]["signed_evidence"]
@@ -4613,9 +4624,170 @@ def _materialize_campaign_fixture(
         json.dumps(security, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+    for offset, phase_id in enumerate(
+        execution_phase_start.RISKY_PHASE_IDS,
+        start=10,
+    ):
+        action = f"fixture-reviewed-action:{phase_id}"
+        execution_phase_start.persist_phase_start(
+            campaign_path,
+            phase_id=phase_id,
+            action_id=f"fixture/{phase_id}/001",
+            action_description=action,
+            operations_identity="operations@example.com",
+            key=tmp_path / "operations_key",
+            now=campaign_starts_at + timedelta(seconds=offset),
+        )
 
 
-def test_execution_campaign_closure_reverifies_all_66_external_artifacts(
+def test_execution_phase_start_interlocks_are_signed_ordered_and_fail_closed(
+    tmp_path: Path,
+) -> None:
+    if shutil.which("ssh-keygen") is None:
+        pytest.skip("ssh-keygen is required for signed phase-start verification")
+    now = datetime.now(timezone.utc)
+    _, request_path, topology_receipt_path, evidence_root = (
+        _execution_campaign_fixture(tmp_path, now)
+    )
+    request = json.loads(request_path.read_text(encoding="utf-8"))
+    request["execution"]["window_starts_at"] = (now - timedelta(hours=1)).isoformat()
+    request["execution"]["window_expires_at"] = (now + timedelta(days=1)).isoformat()
+    request_path.write_text(json.dumps(request, sort_keys=True) + "\n", encoding="utf-8")
+    campaign_path = tmp_path / "phase-interlock-campaign.json"
+    assembly_request_path = tmp_path / "phase-interlock-preapproval-request.json"
+    plan, assembly_request = execution_campaign_preparer.prepare(
+        request_path,
+        topology_receipt_path,
+        assembly_request_path,
+        now=now - timedelta(minutes=70),
+    )
+    assembly_request_path.write_text(
+        json.dumps(assembly_request, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    campaign_path.write_text(
+        json.dumps(plan, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    evidence_root.mkdir()
+    _materialize_campaign_fixture(tmp_path, plan, campaign_path)
+    artifacts = {name: Path(path) for name, path in plan["artifacts"].items()}
+
+    for phase_id in execution_phase_start.RISKY_PHASE_IDS:
+        verified = execution_phase_start.verify_phase_start(
+            campaign_path,
+            phase_id=phase_id,
+            now=now,
+        )
+        assert verified["status"] == "PHASE_START_AUTHORIZED"
+        assert verified["operator"] == {
+            "role": "Operations",
+            "identity": "operations@example.com",
+        }
+        assert verified["action"]["sha256"] == hashlib.sha256(
+            verified["action"]["description"].encode("utf-8")
+        ).hexdigest()
+
+    with pytest.raises(ValueError, match="exact Operations authorizer"):
+        execution_phase_start.prepare_phase_start(
+            campaign_path,
+            phase_id="tls",
+            action_id="wrong-operator/001",
+            action_description="reviewed TLS probe action",
+            operations_identity="security@example.com",
+            now=now,
+        )
+    with pytest.raises(ValueError, match="inside the active campaign window"):
+        execution_phase_start.prepare_phase_start(
+            campaign_path,
+            phase_id="tls",
+            action_id="outside-window/001",
+            action_description="reviewed TLS probe action",
+            operations_identity="operations@example.com",
+            now=datetime.fromisoformat(plan["window_starts_at"]) - timedelta(microseconds=1),
+        )
+
+    tls_statement_path = artifacts["phase_start_tls_statement"]
+    original_tls_statement = tls_statement_path.read_bytes()
+    tls_statement = json.loads(original_tls_statement)
+    tls_statement["action"]["description"] = "tampered action description"
+    tls_statement_path.write_text(
+        json.dumps(tls_statement, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="phase-start statement is invalid"):
+        execution_phase_start.verify_phase_start(
+            campaign_path,
+            phase_id="tls",
+            now=now,
+        )
+    invalid_progress = execution_campaign_inspector.inspect(
+        campaign_path,
+        assembly_request_path,
+        now=now,
+    )
+    assert invalid_progress["artifact_progress"]["phase_start_tls_statement"][
+        "problems"
+    ] == ["signed_phase_start_interlock_invalid"]
+    tls_statement_path.write_bytes(original_tls_statement)
+
+    network_signature_path = artifacts["phase_start_network_signature"]
+    original_network_signature = network_signature_path.read_bytes()
+    network_signature_path.write_bytes(artifacts["phase_start_tls_signature"].read_bytes())
+    with pytest.raises(ValueError, match="invalid GA phase-start signature"):
+        execution_phase_start.verify_phase_start(
+            campaign_path,
+            phase_id="network",
+            now=now,
+        )
+    network_signature_path.write_bytes(original_network_signature)
+
+    provenance_path = artifacts["release_provenance"]
+    original_provenance = provenance_path.read_bytes()
+    provenance_path.write_bytes(original_provenance + b" ")
+    with pytest.raises(ValueError, match="phase-start statement is invalid"):
+        execution_phase_start.verify_phase_start(
+            campaign_path,
+            phase_id="tls",
+            now=now,
+        )
+    provenance_path.write_bytes(original_provenance)
+
+    high_availability_path = artifacts["high_availability"]
+    original_high_availability = high_availability_path.read_bytes()
+    high_availability = json.loads(original_high_availability)
+    high_availability["fault_injection"]["started_at"] = (
+        datetime.fromisoformat(
+            json.loads(
+                artifacts["phase_start_high_availability_statement"].read_text(
+                    encoding="utf-8"
+                )
+            )["started_at"]
+        )
+        - timedelta(microseconds=1)
+    ).isoformat()
+    high_availability_path.write_text(
+        json.dumps(high_availability, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="started before its signed phase interlock"):
+        execution_campaign_closer._verify_phase_start_interlocks(
+            campaign_path,
+            artifacts,
+            now=now,
+        )
+    high_availability_path.write_bytes(original_high_availability)
+
+    with pytest.raises(ValueError, match="campaign has expired"):
+        execution_phase_start.verify_phase_start(
+            campaign_path,
+            phase_id="tls",
+            now=datetime.fromisoformat(plan["window_expires_at"])
+            + timedelta(microseconds=1),
+        )
+
+
+def test_execution_campaign_closure_reverifies_all_87_external_artifacts(
     tmp_path: Path,
 ) -> None:
     if shutil.which("ssh-keygen") is None:
@@ -4625,7 +4797,7 @@ def test_execution_campaign_closure_reverifies_all_66_external_artifacts(
         _execution_campaign_fixture(tmp_path, now)
     )
     request = json.loads(request_path.read_text(encoding="utf-8"))
-    request["execution"]["window_starts_at"] = (now - timedelta(minutes=5)).isoformat()
+    request["execution"]["window_starts_at"] = (now - timedelta(hours=1)).isoformat()
     request["execution"]["window_expires_at"] = (now + timedelta(days=1)).isoformat()
     request_path.write_text(json.dumps(request, sort_keys=True) + "\n", encoding="utf-8")
     campaign_path = tmp_path / "execution-campaign.json"
@@ -4634,7 +4806,7 @@ def test_execution_campaign_closure_reverifies_all_66_external_artifacts(
         request_path,
         topology_receipt_path,
         assembly_request_path,
-        now=now - timedelta(minutes=10),
+        now=now - timedelta(minutes=70),
     )
     assembly_request_path.write_text(
         json.dumps(assembly_request, indent=2, sort_keys=True) + "\n",
@@ -4656,11 +4828,17 @@ def test_execution_campaign_closure_reverifies_all_66_external_artifacts(
     assert authorization["approvals"] == []
     assert receipt["evaluation"]["campaign_stage"] == "APPROVAL_COLLECTION"
     assert closure["status"] == "PREAPPROVAL_ASSEMBLED"
-    assert closure["external_artifact_count"] == 71
-    assert closure["captured_input_count"] == len(tracked) == 95
-    assert closure["reference_count"] == 139
+    assert closure["external_artifact_count"] == 87
+    assert closure["captured_input_count"] == len(tracked) == 111
+    assert closure["reference_count"] == 290
     assert closure["execution_authorization"]["status"] == (
         "AUTHORIZED_FOR_NAMED_PHASE_EXECUTION"
+    )
+    assert set(closure["phase_starts"]) == set(execution_phase_start.RISKY_PHASE_IDS)
+    assert all(
+        verdict["status"] == "PHASE_START_AUTHORIZED"
+        and verdict["permitted_at"] <= verdict["execution_started_at"]
+        for verdict in closure["phase_starts"].values()
     )
     assert closure["outputs"] == {}
 
@@ -4942,7 +5120,7 @@ def test_execution_campaign_progress_is_incremental_non_authorizing_and_exact(
         _execution_campaign_fixture(tmp_path, now)
     )
     request = json.loads(request_path.read_text(encoding="utf-8"))
-    request["execution"]["window_starts_at"] = (now - timedelta(minutes=5)).isoformat()
+    request["execution"]["window_starts_at"] = (now - timedelta(hours=1)).isoformat()
     request["execution"]["window_expires_at"] = (now + timedelta(days=1)).isoformat()
     request_path.write_text(json.dumps(request, sort_keys=True) + "\n", encoding="utf-8")
     campaign_path = tmp_path / "progress-execution-campaign.json"
@@ -4951,7 +5129,7 @@ def test_execution_campaign_progress_is_incremental_non_authorizing_and_exact(
         request_path,
         topology_receipt_path,
         assembly_request_path,
-        now=now - timedelta(minutes=10),
+        now=now - timedelta(minutes=70),
     )
     assembly_request_path.write_text(
         json.dumps(assembly_request, indent=2, sort_keys=True) + "\n",
@@ -4973,9 +5151,9 @@ def test_execution_campaign_progress_is_incremental_non_authorizing_and_exact(
         "does_not_authorize_GA_or_target_mutation_or_evidence_PASS"
     )
     assert empty["counts"] == {
-        "planned_external_artifacts": 71,
+        "planned_external_artifacts": 87,
         "present_valid_artifacts": 0,
-        "missing_artifacts": 71,
+        "missing_artifacts": 87,
         "invalid_artifacts": 0,
         "present_size_bytes": 0,
         "external_phases": 12,
@@ -5087,7 +5265,7 @@ def test_execution_campaign_progress_is_incremental_non_authorizing_and_exact(
         now=now,
     )
     assert ready["status"] == "READY_FOR_CLOSURE_ATTEMPT"
-    assert ready["counts"]["present_valid_artifacts"] == 71
+    assert ready["counts"]["present_valid_artifacts"] == 87
     assert ready["counts"]["missing_artifacts"] == 0
     assert ready["counts"]["invalid_artifacts"] == 0
     assert ready["counts"]["ready_external_phases"] == 12
@@ -5104,7 +5282,7 @@ def test_execution_campaign_progress_is_incremental_non_authorizing_and_exact(
     prewindow = execution_campaign_inspector.inspect(
         campaign_path,
         assembly_request_path,
-        now=now - timedelta(minutes=6),
+        now=now - timedelta(minutes=61),
     )
     assert prewindow["status"] == "WAITING_FOR_EXECUTION_WINDOW"
     assert prewindow["next_action"]["code"] == "wait_for_execution_window"

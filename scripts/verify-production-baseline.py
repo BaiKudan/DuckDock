@@ -185,6 +185,8 @@ def verify(env_file: Path) -> dict[str, Any]:
     execution_authorization_verifier = (
         REPO_ROOT / "backend/scripts/verify_ga_execution_authorization.py"
     )
+    execution_phase_start_core = REPO_ROOT / "backend/scripts/ga_execution_phase_start.py"
+    execution_phase_starter = REPO_ROOT / "backend/scripts/start_ga_execution_phase.py"
     execution_campaign_request = REPO_ROOT / "ops/ga/execution-campaign-request.example.json"
     approval_freezer = REPO_ROOT / "backend/scripts/freeze_ga_approval_campaign.py"
     approval_signer = REPO_ROOT / "backend/scripts/sign_ga_approval.py"
@@ -233,6 +235,16 @@ def verify(env_file: Path) -> dict[str, Any]:
     execution_authorization_signer_text = (
         execution_authorization_signer.read_text(encoding="utf-8")
         if execution_authorization_signer.is_file()
+        else ""
+    )
+    execution_phase_start_text = (
+        execution_phase_start_core.read_text(encoding="utf-8")
+        if execution_phase_start_core.is_file()
+        else ""
+    )
+    execution_phase_starter_text = (
+        execution_phase_starter.read_text(encoding="utf-8")
+        if execution_phase_starter.is_file()
         else ""
     )
     freezer_text = (
@@ -324,7 +336,24 @@ def verify(env_file: Path) -> dict[str, Any]:
         and "EXPIRED_INCOMPLETE" in execution_progress_text
         and "verify_persisted_closure" in execution_progress_text,
         "immutable non-authorizing checkpoints detect partial/missing/invalid evidence and exact next phase",
-        "external execution mistakes are visible before the final 71-artifact closure attempt",
+        "external execution mistakes are visible before the final 87-artifact closure attempt",
+    )
+    add(
+        "ga_execution_phase_interlocks",
+        execution_phase_starter.is_file()
+        and "duckdock-ga-execution-phase-start-v1" in execution_phase_start_text
+        and "authorizes_only_one_named_campaign_phase_start_not_GA_or_unlisted_mutation"
+        in execution_phase_start_text
+        and "phase start identity must be the exact Operations authorizer"
+        in execution_phase_start_text
+        and "completed dependency artifact" in execution_phase_start_text
+        and "started before its signed phase interlock" in execution_closure_text
+        and "signed_phase_start_interlock_invalid" in execution_progress_text
+        and "--action-description" in execution_phase_starter_text
+        and "--action-sha256" not in execution_phase_starter_text
+        and "--started-at" not in execution_phase_starter_text,
+        "eight immutable Operations-signed starts bind the campaign, phase, dependencies and reviewed action",
+        "risky evidence is rejected when execution predates its signed interlock or reuses/tampers with a permit",
     )
     add(
         "ga_preapproval_assembly",
@@ -337,14 +366,14 @@ def verify(env_file: Path) -> dict[str, Any]:
     )
     add(
         "ga_execution_campaign_closure",
-        "duckdock-ga-execution-campaign-closure-v1" in execution_closure_text
+        "duckdock-ga-execution-campaign-closure-v2" in execution_closure_text
         and "campaign evidence closure is not exact" in execution_closure_text
         and "execution campaign can close only inside its bound execution window"
         in execution_closure_text
         and "PREAPPROVAL_ASSEMBLED" in execution_closure_text
         and "campaign input changed before closure receipt emission"
         in execution_closure_text,
-        "exact 71-artifact/reference closure including dual execution authorization and signed security engagement",
+        "exact 87-artifact/reference closure including dual authorization, eight signed phase starts and security engagement",
         "planned paths equal actual evidence before immutable non-authorizing closure",
     )
     add(

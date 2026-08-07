@@ -25,6 +25,10 @@ try:
     from scripts.ga_execution_authorization import (
         verify_authorization as verify_execution_authorization,
     )
+    from scripts.ga_execution_phase_start import (
+        RISKY_PHASE_IDS,
+        verify_phase_start,
+    )
     from scripts.ga_path_resolution import ga_file_resolution_override
     from scripts.prepare_ga_execution_campaign import (
         PLAN_SCHEMA_VERSION,
@@ -43,12 +47,13 @@ except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
     from ga_execution_authorization import (
         verify_authorization as verify_execution_authorization,
     )
+    from ga_execution_phase_start import RISKY_PHASE_IDS, verify_phase_start
     from ga_path_resolution import ga_file_resolution_override
     from prepare_ga_execution_campaign import PLAN_SCHEMA_VERSION, _parse_time, prepare
     from verify_ga_production_authorization import evaluate
 
 
-CLOSURE_SCHEMA_VERSION = "duckdock-ga-execution-campaign-closure-v1"
+CLOSURE_SCHEMA_VERSION = "duckdock-ga-execution-campaign-closure-v2"
 CLOSURE_KEYS = {
     "schema_version",
     "status",
@@ -59,6 +64,7 @@ CLOSURE_KEYS = {
     "assembly_request",
     "approval_policy",
     "execution_authorization",
+    "phase_starts",
     "external_artifact_count",
     "external_artifacts",
     "captured_input_count",
@@ -88,6 +94,16 @@ FINAL_EVIDENCE_KEYS = (
     "high_availability",
     "security_assessment",
 )
+PHASE_START_TIMESTAMPS = {
+    "tls": ("tls_probe_report", ("observed_at",)),
+    "network": ("network_probe_report", ("observed_at",)),
+    "secrets": ("secret_rotation_receipt", ("started_at",)),
+    "capacity": ("capacity_load_report", ("started_at",)),
+    "alerting": ("alerting", ("alert_exercise", "started_at")),
+    "recovery": ("restore_execution_receipt", ("started_at",)),
+    "state_services": ("state_provider_receipt", ("observed_at",)),
+    "high_availability": ("high_availability", ("fault_injection", "started_at")),
+}
 
 
 def _load_object(path: Path, label: str) -> dict[str, Any]:
@@ -288,6 +304,56 @@ def _validate_security_assessment_campaign_window(
         and engagement_expires_at <= campaign_expires_at
     ):
         raise ValueError("security assessment window is outside the execution campaign")
+
+
+def _nested_value(value: Any, keys: Sequence[str], *, label: str) -> Any:
+    current = value
+    for key in keys:
+        if not isinstance(current, dict) or key not in current:
+            raise ValueError(f"{label} has no {'.'.join(keys)} timestamp")
+        current = current[key]
+    return current
+
+
+def _verify_phase_start_interlocks(
+    campaign_path: Path,
+    artifacts: dict[str, Path],
+    *,
+    now: datetime,
+) -> dict[str, dict[str, Any]]:
+    if set(PHASE_START_TIMESTAMPS) != set(RISKY_PHASE_IDS):
+        raise ValueError("phase-start timestamp rules do not cover every risky phase")
+    verdicts: dict[str, dict[str, Any]] = {}
+    for phase_id in RISKY_PHASE_IDS:
+        verified = verify_phase_start(campaign_path, phase_id=phase_id, now=now)
+        artifact_name, timestamp_path = PHASE_START_TIMESTAMPS[phase_id]
+        evidence_path = artifacts.get(artifact_name)
+        if evidence_path is None:
+            raise ValueError(f"campaign has no phase-start evidence source: {artifact_name}")
+        evidence = _load_object(evidence_path, f"{phase_id} execution evidence source")
+        execution_started_at = _parse_time(
+            _nested_value(evidence, timestamp_path, label=phase_id),
+            f"{phase_id} execution started_at",
+        )
+        permitted_at = _parse_time(
+            verified.get("started_at"), f"{phase_id} phase permitted_at"
+        )
+        if execution_started_at < permitted_at:
+            raise ValueError(
+                f"{phase_id} execution started before its signed phase interlock"
+            )
+        verdicts[phase_id] = {
+            "status": verified["status"],
+            "authorization_id": verified["authorization_id"],
+            "action": verified["action"],
+            "operator": verified["operator"],
+            "permitted_at": permitted_at.isoformat(),
+            "execution_started_at": execution_started_at.isoformat(),
+            "statement_sha256": verified["statement"]["sha256"],
+            "signature_sha256": verified["signature"]["sha256"],
+            "dependency_artifact_count": verified["dependency_artifact_count"],
+        }
+    return verdicts
 
 
 def _execution_authorization_verdict(value: dict[str, Any]) -> dict[str, Any]:
@@ -519,6 +585,11 @@ def close(
         planned_inputs,
         now=current,
     )
+    phase_starts = _verify_phase_start_interlocks(
+        campaign_path,
+        planned_inputs,
+        now=current,
+    )
     _validate_observation_window(
         planned_inputs,
         starts_at=starts_at,
@@ -606,6 +677,7 @@ def close(
             "sha256": topology_inputs[approval_policy_path],
         },
         "execution_authorization": execution_authorization,
+        "phase_starts": phase_starts,
         "external_artifact_count": len(planned_inputs),
         "external_artifacts": artifact_ledger,
         "captured_input_count": len(captured),
@@ -748,6 +820,15 @@ def verify_persisted_closure(
     if closure.get("execution_authorization") != execution_authorization:
         raise ValueError(
             "execution closure dual-control authorization did not independently re-verify"
+        )
+    phase_starts = _verify_phase_start_interlocks(
+        campaign_path,
+        planned_inputs,
+        now=closed_at,
+    )
+    if closure.get("phase_starts") != phase_starts:
+        raise ValueError(
+            "execution closure phase-start interlocks did not independently re-verify"
         )
     _validate_observation_window(
         planned_inputs,

@@ -26,6 +26,11 @@ try:
     from scripts.ga_execution_authorization import (
         verify_authorization as verify_execution_authorization,
     )
+    from scripts.ga_execution_phase_start import (
+        RISKY_PHASE_IDS,
+        artifact_keys as phase_start_artifact_keys,
+        verify_phase_start,
+    )
     from scripts.prepare_ga_execution_campaign import (
         PLAN_SCHEMA_VERSION,
         _atomic_write,
@@ -47,6 +52,11 @@ except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
     )
     from ga_execution_authorization import (
         verify_authorization as verify_execution_authorization,
+    )
+    from ga_execution_phase_start import (
+        RISKY_PHASE_IDS,
+        artifact_keys as phase_start_artifact_keys,
+        verify_phase_start,
     )
     from prepare_ga_execution_campaign import (
         PLAN_SCHEMA_VERSION,
@@ -541,6 +551,19 @@ def inspect(
                 records[name]["problems"].append(
                     "dual_control_authorization_invalid"
                 )
+
+    for phase_id in RISKY_PHASE_IDS:
+        statement_name, signature_name = phase_start_artifact_keys(phase_id)
+        phase_start_names = {statement_name, signature_name}
+        if all(records[name]["state"] == "PRESENT" for name in phase_start_names):
+            try:
+                verify_phase_start(campaign_path, phase_id=phase_id, now=current)
+            except (OSError, UnicodeError, ValueError):
+                for name in phase_start_names:
+                    records[name]["state"] = "INVALID"
+                    records[name]["problems"].append(
+                        "signed_phase_start_interlock_invalid"
+                    )
 
     total_present_bytes = sum(
         int(record["size_bytes"] or 0)

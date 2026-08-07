@@ -307,6 +307,7 @@ Langfuse v4 导出使用独立 `telemetry-langfuse` profile，默认栈均不启
 - [ ] Alertmanager firing/resolved 均送达真实 on-call；异地 age 加密、签名、object-lock 备份完成破坏性恢复
 - [ ] 至少 900 秒、声明 RPS 以上且 50,000+ Run 的容量/数据增长门禁通过
 - [ ] 九份 GA trust policy/公钥通过全局职责分离预检；发布机构审阅绑定 release/target、独立恢复目标、新 evidence root 和 12-phase DAG 的不可覆盖执行 campaign
+- [ ] 八个风险 phase 均由原 Operations 授权 identity 在活动窗口、依赖完成后签署独立 start interlock；动作/回执时间不早于许可
 - [ ] 至少一个 Celery worker 常驻;`alembic upgrade head` 对齐 schema
 - [ ] 第一个注册账号用企业管理员邮箱（自动成 admin）
 - [ ] 核心栈启动后在 `/analysis` 创建 Worker token，填入 `.env.prod.enc`，再 `bash scripts/prod.sh worker`

@@ -304,7 +304,14 @@ def test_ga_approval_tools_reverify_before_signing_and_before_final_output():
     assert "READY_FOR_CLOSURE_ATTEMPT" in execution_progress
     assert "EXPIRED_INCOMPLETE" in execution_progress
     assert "verify_persisted_closure" in execution_progress
-    assert "duckdock-ga-execution-campaign-closure-v1" in execution_closure
+    assert "duckdock-ga-execution-campaign-closure-v2" in execution_closure
+    phase_start = _read("backend/scripts/ga_execution_phase_start.py")
+    phase_starter = _read("backend/scripts/start_ga_execution_phase.py")
+    assert "duckdock-ga-execution-phase-start-v1" in phase_start
+    assert "phase start identity must be the exact Operations authorizer" in phase_start
+    assert "--action-description" in phase_starter
+    assert "--action-sha256" not in phase_starter
+    assert "--started-at" not in phase_starter
     assert "campaign evidence closure is not exact" in execution_closure
     assert "execution campaign can close only inside its bound execution window" in execution_closure
     assert "PREAPPROVAL_ASSEMBLED" in execution_closure

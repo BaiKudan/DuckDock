@@ -70,11 +70,15 @@ target 不同。所有 phase 初始状态只能是 `PENDING_EXTERNAL_EVIDENCE`�
 中的 Security 与 Operations 两个互斥身份分别运行 `sign_ga_execution_authorization.py`，
 最后用 `verify_ga_execution_authorization.py` 验证两份原始 statement/signature。该授权只覆盖
 manifest 列出的八个风险阶段，不授权 GA 或未列明 mutation，也不能替代安全评估委托。
-双签通过后，外部执行人才可按 phase 中的精确 acknowledgement 启动相应工具。
+双签通过后，每个风险 phase 仍须先运行 `start_ga_execution_phase.py`。工具只在活动窗口、
+全部上游产物已存在且原 Operations 授权 identity 再次签署 campaign/phase/ack/无密动作说明时
+生成该 phase 唯一的一对启动声明/签名；probe、轮换、负载、告警、恢复或故障注入不得早于
+该启动时间。底层工具仍可能被拥有目标权限的人直接调用，但这类旁路结果不能进入正式 closure；
+目标 IAM/RBAC 和 change-management 仍须独立阻止越权操作。
 
 `preapproval-assembly-request.example.json` 是证据接线输入，只包含 release/target 身份和
 九份最终 evidence 路径。正式 campaign 的真实采集完成后，必须用 closure 工具验证全部
-71 份外部产物（含五份双人执行授权工件及 Security 签署的安全评估委托/签名）及显式引用与计划完全一致，
+87 份外部产物（含五份双人执行授权工件、八对 phase-start 工件及 Security 签署的安全评估委托/签名）及显式引用与计划完全一致，
 再由其调用底层组装器；禁止继续手工复制
 wrapper 字段和 SHA-256：
 
