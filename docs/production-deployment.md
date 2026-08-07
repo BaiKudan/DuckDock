@@ -33,6 +33,23 @@ Ordered path for a from-zero deploy; each step links to its detailed section bel
 10. **Analysis worker** (optional) — create a token in `/analysis`, set `DUCKDOCK_ANALYSIS_WORKER_TOKEN`, then run `bash scripts/prod.sh worker` (see [Analysis Worker](#analysis-worker)).
 11. **Backup + restore drill** — run `bash scripts/prod.sh backup`; this age-encrypts, signs and uploads the matched set to the configured offsite S3 URI. Rehearse secure bundle restore in staging before production use.
 
+## Kubernetes HA target bundle
+
+Do not directly edit and apply the HA reference as one document. From a clean
+release commit, use `scripts/prepare-kubernetes-ha-target.py` with the immutable
+backend/frontend registry digests, production DNS name, externally managed
+Secret names, RWX StorageClass and approved provider CIDRs. The command writes
+outside the repository and emits exact `bootstrap.yaml`, `migration.yaml` and
+`applications.yaml` phases plus a content-addressed receipt.
+
+Run `verify` again at the deployment boundary, server-side dry-run all three
+files, apply bootstrap, independently verify Secrets/TLS/RWX, apply and wait for
+the commit-named migration Job, and only then apply/roll out the four
+Deployments. The receipt deliberately remains `PREPARED_NOT_AUTHORIZED`; target
+release-image provenance, state-service evidence, fault injection, independent
+assessment and four-role authorization are still required. Exact commands are in
+`ops/kubernetes/ha/README.zh-CN.md`.
+
 ## Secrets
 
 Production must not use a plaintext `.env.prod` checked into git or left as the source of truth. Keep only `.env.prod.enc` in the repo or deployment bundle.

@@ -171,6 +171,13 @@ def verify(env_file: Path) -> dict[str, Any]:
         if gitleaks_baseline_path.is_file()
         else []
     )
+    ha_target_bundle_path = REPO_ROOT / "scripts/prepare-kubernetes-ha-target.py"
+    ha_target_bundle_text = (
+        ha_target_bundle_path.read_text(encoding="utf-8")
+        if ha_target_bundle_path.is_file()
+        else ""
+    )
+    ha_target_bundle_tests = REPO_ROOT / "backend/tests/test_kubernetes_ha_target_bundle.py"
     provenance_components = (
         REPO_ROOT / "backend/scripts/ga_release_provenance.py",
         REPO_ROOT / "backend/scripts/collect_ga_release_provenance.py",
@@ -231,6 +238,27 @@ def verify(env_file: Path) -> dict[str, Any]:
         and "High-confidence security static gate" in ci_workflow,
         "clean source; dependency/SAST/negative/full-history-secret/image gates; content-addressed non-independent receipt",
         "internal pre-audit reduces assessor rework without replacing independent testing or GA authorization",
+    )
+    add(
+        "ha_target_bundle_preparation",
+        ha_target_bundle_path.is_file()
+        and os.access(ha_target_bundle_path, os.X_OK)
+        and ha_target_bundle_tests.is_file()
+        and "duckdock-kubernetes-ha-target-bundle-v1" in ha_target_bundle_text
+        and "working tree must be clean before preparing a target HA bundle"
+        in ha_target_bundle_text
+        and "PREPARED_NOT_AUTHORIZED" in ha_target_bundle_text
+        and all(name in ha_target_bundle_text for name in ("bootstrap.yaml", "migration.yaml", "applications.yaml"))
+        and "must be a lowercase registry image pinned by @sha256"
+        in ha_target_bundle_text
+        and "bundle directory has missing or unexpected entries"
+        in ha_target_bundle_text
+        and "bundle external requirements changed" in ha_target_bundle_text
+        and "server-side dry-run bootstrap.yaml, migration.yaml and applications.yaml"
+        in ha_target_bundle_text
+        and "Validate Kubernetes HA target bundle CLI" in ci_workflow,
+        "clean source and immutable images; exact three-phase target manifests; target values and pending external duties are tamper checked",
+        "one generated bundle separates bootstrap, commit-bound migration and application rollout without claiming target authorization",
     )
     preapproval_assembler = REPO_ROOT / "backend/scripts/assemble_ga_preapproval_authorization.py"
     trust_topology_verifier = REPO_ROOT / "backend/scripts/verify_ga_trust_topology.py"

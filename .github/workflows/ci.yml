@@ -120,6 +120,9 @@ jobs:
         working-directory: backend
         run: python -m compileall app alembic scripts
 
+      - name: Validate Kubernetes HA target bundle CLI
+        run: python scripts/prepare-kubernetes-ha-target.py --help >/dev/null
+
       - name: Run backend tests (+ core-module coverage gate)
         working-directory: backend
         run: >-

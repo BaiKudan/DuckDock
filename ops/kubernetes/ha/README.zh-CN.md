@@ -19,16 +19,53 @@ TLS Ingress。Celery Beat 保持一个逻辑实例并由 Deployment 自动重建
 - 将 `controlled-external-egress` 的 `0.0.0.0/0` 替换为批准的目标 CIDR，或用
   Cilium 等 FQDN egress policy 取代。未收紧不得通过 GA 门禁。
 
-部署前把 `kustomization.yaml` 中两个镜像改为发布流水线产生的不可变
-`@sha256` 摘要，并把 Ingress 域名改为真实域名。每个发布先单独运行并等待
-`duckdock-migrate` Job 成功，再应用 Deployment。验证命令：
+不要直接编辑并整体应用参考清单。使用目标包生成器把干净 Git commit、发布流水线
+产生的两个不可变 `@sha256` 镜像、真实域名、外部 Secret、RWX StorageClass 与
+批准的出口 CIDR 固化成内容寻址的三阶段部署包。输出目录必须位于仓库外且不能
+预先存在：
 
 ```bash
-kubectl kustomize ops/kubernetes/ha > /tmp/duckdock-ha.yaml
-kubectl apply --server-side --dry-run=server -f /tmp/duckdock-ha.yaml
-kubectl -n duckdock wait --for=condition=complete job/duckdock-migrate --timeout=10m
-kubectl -n duckdock rollout status deployment/backend --timeout=10m
+backend/.venv/bin/python scripts/prepare-kubernetes-ha-target.py prepare \
+  --output-dir /secure/release/duckdock-ha-target \
+  --backend-image 'registry.company.cn/duckdock/backend@sha256:<64-hex-digest>' \
+  --frontend-image 'registry.company.cn/duckdock/frontend@sha256:<64-hex-digest>' \
+  --public-host duckdock.company.cn \
+  --rwx-storage-class cephfs-rwx \
+  --egress-cidr 10.20.0.0/16 \
+  --egress-cidr 172.20.0.0/16
+
+backend/.venv/bin/python scripts/prepare-kubernetes-ha-target.py verify \
+  --bundle-dir /secure/release/duckdock-ha-target
 ```
+
+生成器会拒绝脏工作树、可变/占位镜像、保留域名、`0.0.0.0/0` 等过宽出口、
+小于 10Gi 的 RWX 卷、目录符号链接、额外文件或回执篡改。它生成：
+
+1. `bootstrap.yaml`：Namespace、ServiceAccount、RWX PVC 和 NetworkPolicy；
+2. `migration.yaml`：名称绑定 commit 的唯一 Alembic Job；
+3. `applications.yaml`：四个 Deployment、内部 Service、TLS Ingress、PDB 和 HPA。
+
+必须按回执顺序逐阶段执行，不能把三份文件一次性 apply：
+
+```bash
+for phase in bootstrap migration applications; do
+  kubectl apply --server-side --dry-run=server \
+    -f "/secure/release/duckdock-ha-target/${phase}.yaml"
+done
+kubectl apply -f /secure/release/duckdock-ha-target/bootstrap.yaml
+# 先独立确认 runtime/TLS Secret、Ingress/monitoring Namespace 标签及 RWX 已就绪。
+kubectl apply -f /secure/release/duckdock-ha-target/migration.yaml
+kubectl -n duckdock wait --for=condition=complete \
+  job/duckdock-migrate-<commit前12位> --timeout=10m
+kubectl apply -f /secure/release/duckdock-ha-target/applications.yaml
+for deployment in backend frontend worker beat; do
+  kubectl -n duckdock rollout status "deployment/${deployment}" --timeout=10m
+done
+```
+
+`receipt.json` 的状态固定为 `PREPARED_NOT_AUTHORIZED`；即使本地验证成功，也仍把
+发布镜像 provenance、server-side dry-run、Secret/TLS、状态服务、RWX 冗余和故障域
+演练保留为外部待办。
 
 正式承诺必须用目标集群的真实报告证明：驱逐一个 backend/worker 节点和一个
 zone 后 API 仍满足 SLO，Beat 在约定 RTO 内恢复，MySQL/Redis/S3/RWX 存储均未

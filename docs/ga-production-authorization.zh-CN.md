@@ -321,8 +321,14 @@ python backend/scripts/inspect_ga_execution_campaign.py \
    也不授权执行目标 mutation。需要保存 checkpoint 时使用新的、不可覆盖且位于 evidence
    root 之外的 `--output` 路径。
 
-4. 运行 `python3 scripts/verify-production-baseline.py`，保留 JSON；在目标
-   Kubernetes overlay 中替换镜像、域名以及宽泛 egress，并做 server dry-run。
+4. 运行 `python3 scripts/verify-production-baseline.py`，保留 JSON；然后用
+   `scripts/prepare-kubernetes-ha-target.py prepare` 从干净 commit 生成仓库外的
+   `bootstrap.yaml`、commit-bound `migration.yaml`、`applications.yaml` 和
+   `PREPARED_NOT_AUTHORIZED` 内容寻址回执。参数必须使用发布镜像摘要、真实域名、
+   外部 Secret/RWX StorageClass 和批准的 egress CIDR；再执行 `verify`，分别做三份
+   文件的 server-side dry-run，按 bootstrap → 等待 migration 完成 → applications
+   顺序部署。完整命令见 `ops/kubernetes/ha/README.zh-CN.md`。生成器不会把目标
+   Secret/TLS、状态服务/RWX 冗余或故障演练标成通过。
    然后用独立、短期、专用管理员 token 通过真实目标 HTTPS 仅调用只读 readiness
    endpoint（token 只放环境变量，报告不会保留）：
 
