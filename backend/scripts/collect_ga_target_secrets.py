@@ -22,8 +22,10 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 try:
+    from scripts.ga_execution_phase_start import verify_runtime_entry
     from scripts.ga_release_identity import build_release_binding
 except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
+    from ga_execution_phase_start import verify_runtime_entry
     from ga_release_identity import build_release_binding
 
 
@@ -887,6 +889,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--context", required=True, help="exact kubeconfig context")
     parser.add_argument("--namespace", default="duckdock")
     parser.add_argument("--target-environment", required=True)
+    parser.add_argument("--execution-campaign", type=Path, required=True)
+    parser.add_argument("--phase-action-id", required=True)
     parser.add_argument("--acknowledge-target-rotation", required=True)
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--backend-image", required=True)
@@ -947,6 +951,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     try:
+        verify_runtime_entry(
+            args.execution_campaign,
+            phase_id="secrets",
+            action_id=args.phase_action_id,
+            release_binding=args.release_binding,
+            target_environment=args.target_environment,
+            kubernetes_context=args.context,
+            namespace=args.namespace,
+        )
         report = collect(args)
     except (OSError, UnicodeError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
         print(f"Target secrets collection failed: {exc}", file=sys.stderr)

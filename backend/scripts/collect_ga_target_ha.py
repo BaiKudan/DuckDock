@@ -27,6 +27,7 @@ from urllib import request as urllib_request
 from urllib.parse import urlparse
 
 try:
+    from scripts.ga_execution_phase_start import verify_runtime_entry
     from scripts.ga_network_evidence import NETWORK_EVIDENCE_SCHEMA_VERSION
     from scripts.ga_release_identity import build_release_binding
     from scripts.ga_state_services_evidence import (
@@ -36,6 +37,7 @@ try:
         contains_secret_material_key as state_contains_secret_material_key,
     )
 except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
+    from ga_execution_phase_start import verify_runtime_entry
     from ga_network_evidence import NETWORK_EVIDENCE_SCHEMA_VERSION
     from ga_release_identity import build_release_binding
     from ga_state_services_evidence import (
@@ -997,6 +999,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--context", required=True, help="exact kubeconfig context")
     parser.add_argument("--namespace", default="duckdock")
     parser.add_argument("--target-environment", required=True)
+    parser.add_argument("--execution-campaign", type=Path, required=True)
+    parser.add_argument("--phase-action-id", required=True)
     parser.add_argument("--acknowledge-target-disruption", required=True)
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--backend-image", required=True)
@@ -1044,6 +1048,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     try:
+        verify_runtime_entry(
+            args.execution_campaign,
+            phase_id="high_availability",
+            action_id=args.phase_action_id,
+            release_binding=args.release_binding,
+            target_environment=args.target_environment,
+            kubernetes_context=args.context,
+            namespace=args.namespace,
+        )
         report = execute(args)
     except (ValueError, RuntimeError, json.JSONDecodeError, subprocess.TimeoutExpired) as exc:
         print(f"Target HA collection failed before a report could be completed: {exc}", file=sys.stderr)

@@ -187,6 +187,19 @@ def verify(env_file: Path) -> dict[str, Any]:
     )
     execution_phase_start_core = REPO_ROOT / "backend/scripts/ga_execution_phase_start.py"
     execution_phase_starter = REPO_ROOT / "backend/scripts/start_ga_execution_phase.py"
+    execution_runtime_entrypoints = tuple(
+        (REPO_ROOT / relative, phase_id, effect)
+        for relative, phase_id, effect in (
+            ("backend/scripts/probe_ga_target_tls.py", "tls", "result = probe(args)"),
+            ("backend/scripts/collect_ga_target_network.py", "network", "report = collect(args)"),
+            ("backend/scripts/collect_ga_target_secrets.py", "secrets", "report = collect(args)"),
+            ("backend/scripts/g2_target_capacity_gate.py", "capacity", "await run_gate(args)"),
+            ("backend/scripts/collect_ga_target_alerting.py", "alerting", "report = collect(args)"),
+            ("backend/scripts/collect_ga_target_recovery.py", "recovery", "report = collect(args)"),
+            ("backend/scripts/collect_ga_state_services_ha.py", "state_services", "report = collect(args)"),
+            ("backend/scripts/collect_ga_target_ha.py", "high_availability", "report = execute(args)"),
+        )
+    )
     execution_campaign_request = REPO_ROOT / "ops/ga/execution-campaign-request.example.json"
     approval_freezer = REPO_ROOT / "backend/scripts/freeze_ga_approval_campaign.py"
     approval_signer = REPO_ROOT / "backend/scripts/sign_ga_approval.py"
@@ -246,6 +259,14 @@ def verify(env_file: Path) -> dict[str, Any]:
         execution_phase_starter.read_text(encoding="utf-8")
         if execution_phase_starter.is_file()
         else ""
+    )
+    execution_runtime_entrypoint_texts = tuple(
+        (
+            path.read_text(encoding="utf-8") if path.is_file() else "",
+            phase_id,
+            effect,
+        )
+        for path, phase_id, effect in execution_runtime_entrypoints
     )
     freezer_text = (
         approval_freezer.read_text(encoding="utf-8") if approval_freezer.is_file() else ""
@@ -354,6 +375,24 @@ def verify(env_file: Path) -> dict[str, Any]:
         and "--started-at" not in execution_phase_starter_text,
         "eight immutable Operations-signed starts bind the campaign, phase, dependencies and reviewed action",
         "risky evidence is rejected when execution predates its signed interlock or reuses/tampers with a permit",
+    )
+    add(
+        "ga_execution_runtime_entry_interlocks",
+        "duckdock-ga-execution-runtime-entry-v1" in execution_phase_start_text
+        and "RUNTIME_ENTRY_AUTHORIZED" in execution_phase_start_text
+        and "runtime entry does not match the signed phase action" in execution_phase_start_text
+        and len(execution_runtime_entrypoint_texts) == 8
+        and all(
+            "verify_runtime_entry(" in text
+            and f'phase_id="{phase_id}"' in text
+            and "--execution-campaign" in text
+            and "--phase-action-id" in text
+            and effect in text
+            and text.index("verify_runtime_entry(") < text.index(effect)
+            for text, phase_id, effect in execution_runtime_entrypoint_texts
+        ),
+        "all eight official target CLIs reverify the signed permit before probing or mutating the target",
+        "campaign, phase action, release images, target and relevant execution context must match at process entry",
     )
     add(
         "ga_preapproval_assembly",

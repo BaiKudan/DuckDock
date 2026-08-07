@@ -312,6 +312,22 @@ def test_ga_approval_tools_reverify_before_signing_and_before_final_output():
     assert "--action-description" in phase_starter
     assert "--action-sha256" not in phase_starter
     assert "--started-at" not in phase_starter
+    for runtime_entrypoint, phase_id, effect in (
+        ("backend/scripts/probe_ga_target_tls.py", "tls", "result = probe(args)"),
+        ("backend/scripts/collect_ga_target_network.py", "network", "report = collect(args)"),
+        ("backend/scripts/collect_ga_target_secrets.py", "secrets", "report = collect(args)"),
+        ("backend/scripts/g2_target_capacity_gate.py", "capacity", "await run_gate(args)"),
+        ("backend/scripts/collect_ga_target_alerting.py", "alerting", "report = collect(args)"),
+        ("backend/scripts/collect_ga_target_recovery.py", "recovery", "report = collect(args)"),
+        ("backend/scripts/collect_ga_state_services_ha.py", "state_services", "report = collect(args)"),
+        ("backend/scripts/collect_ga_target_ha.py", "high_availability", "report = execute(args)"),
+    ):
+        runtime_entry = _read(runtime_entrypoint)
+        assert "verify_runtime_entry(" in runtime_entry
+        assert f'phase_id="{phase_id}"' in runtime_entry
+        assert "--execution-campaign" in runtime_entry
+        assert "--phase-action-id" in runtime_entry
+        assert runtime_entry.index("verify_runtime_entry(") < runtime_entry.index(effect)
     assert "campaign evidence closure is not exact" in execution_closure
     assert "execution campaign can close only inside its bound execution window" in execution_closure
     assert "PREAPPROVAL_ASSEMBLED" in execution_closure
@@ -362,6 +378,18 @@ def test_ga_approval_tools_reverify_before_signing_and_before_final_output():
     assert "python3 backend/scripts/prepare_ga_execution_authorization.py --help" in workflow
     assert "python3 backend/scripts/sign_ga_execution_authorization.py --help" in workflow
     assert "python3 backend/scripts/verify_ga_execution_authorization.py --help" in workflow
+    assert "python3 backend/scripts/start_ga_execution_phase.py --help" in workflow
+    for runtime_entrypoint in (
+        "probe_ga_target_tls.py",
+        "collect_ga_target_network.py",
+        "collect_ga_target_secrets.py",
+        "g2_target_capacity_gate.py",
+        "collect_ga_target_alerting.py",
+        "collect_ga_target_recovery.py",
+        "collect_ga_state_services_ha.py",
+        "collect_ga_target_ha.py",
+    ):
+        assert f"python3 backend/scripts/{runtime_entrypoint} --help" in workflow
     assert "python3 backend/scripts/inspect_ga_execution_campaign.py --help" in workflow
     assert "python3 backend/scripts/close_ga_execution_campaign.py --help" in workflow
     assert "python3 backend/scripts/assemble_ga_preapproval_authorization.py --help" in workflow

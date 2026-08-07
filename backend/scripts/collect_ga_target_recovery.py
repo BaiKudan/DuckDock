@@ -25,8 +25,10 @@ from typing import Any, Callable, Sequence
 from urllib.parse import urlparse
 
 try:
+    from scripts.ga_execution_phase_start import verify_runtime_entry
     from scripts.ga_release_identity import build_release_binding
 except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
+    from ga_execution_phase_start import verify_runtime_entry
     from ga_release_identity import build_release_binding
 
 
@@ -817,6 +819,8 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target-environment", required=True)
+    parser.add_argument("--execution-campaign", type=Path, required=True)
+    parser.add_argument("--phase-action-id", required=True)
     parser.add_argument("--restore-target-environment", required=True)
     parser.add_argument("--acknowledge-destructive-restore", required=True)
     parser.add_argument("--source-commit", required=True)
@@ -905,6 +909,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     try:
+        verify_runtime_entry(
+            args.execution_campaign,
+            phase_id="recovery",
+            action_id=args.phase_action_id,
+            release_binding=args.release_binding,
+            target_environment=args.target_environment,
+            recovery_target_environment=args.restore_target_environment,
+        )
         report = collect(args)
     except (OSError, UnicodeError, ValueError, RuntimeError) as exc:
         print(f"Target recovery collection failed: {exc}", file=sys.stderr)

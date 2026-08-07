@@ -24,6 +24,7 @@ try:
         contains_secret_material_key,
     )
     from scripts.ga_release_identity import build_release_binding
+    from scripts.ga_execution_phase_start import verify_runtime_entry
 except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
     from ga_network_evidence import (
         EXERCISE_RE,
@@ -31,6 +32,7 @@ except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
         contains_secret_material_key,
     )
     from ga_release_identity import build_release_binding
+    from ga_execution_phase_start import verify_runtime_entry
 
 
 SCHEMA_VERSION = NETWORK_RAW_SCHEMA_VERSION
@@ -669,6 +671,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--context", required=True)
     parser.add_argument("--namespace", default="duckdock")
     parser.add_argument("--target-environment", required=True)
+    parser.add_argument("--execution-campaign", type=Path, required=True)
+    parser.add_argument("--phase-action-id", required=True)
     parser.add_argument("--acknowledge-external-vantage", required=True)
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--backend-image", required=True)
@@ -783,6 +787,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     try:
+        verify_runtime_entry(
+            args.execution_campaign,
+            phase_id="network",
+            action_id=args.phase_action_id,
+            release_binding=args.release_binding,
+            target_environment=args.target_environment,
+            kubernetes_context=args.context,
+            namespace=args.namespace,
+        )
         report = collect(args)
     except (ValueError, RuntimeError, json.JSONDecodeError) as exc:
         print(f"Target network probe failed: {exc}", file=sys.stderr)

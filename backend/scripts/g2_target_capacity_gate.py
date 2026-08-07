@@ -25,9 +25,11 @@ import httpx
 try:
     from scripts.g1_run_control_load_gate import LoadPhase, build_run_start_request, run_load_phase
     from scripts.ga_release_identity import EVIDENCE_SCOPES, build_release_binding
+    from scripts.ga_execution_phase_start import verify_runtime_entry
 except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
     from g1_run_control_load_gate import LoadPhase, build_run_start_request, run_load_phase
     from ga_release_identity import EVIDENCE_SCOPES, build_release_binding
+    from ga_execution_phase_start import verify_runtime_entry
 
 
 EXERCISE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{7,63}$")
@@ -223,6 +225,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--target-environment", required=True)
+    parser.add_argument("--execution-campaign", type=Path)
+    parser.add_argument("--phase-action-id")
     parser.add_argument("--scope", choices=sorted(EVIDENCE_SCOPES), default="target-production")
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--backend-image", required=True)
@@ -278,6 +282,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 async def async_main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.scope == "target-production":
+        if args.execution_campaign is None or not args.phase_action_id:
+            raise ValueError(
+                "target-production capacity gates require --execution-campaign and --phase-action-id"
+            )
+        verify_runtime_entry(
+            args.execution_campaign,
+            phase_id="capacity",
+            action_id=args.phase_action_id,
+            release_binding=args.release_binding,
+            target_environment=args.target_environment,
+        )
     exit_code, payload = await run_gate(args)
     encoded = json.dumps(payload, indent=2, sort_keys=True) + "\n"
     if args.output:

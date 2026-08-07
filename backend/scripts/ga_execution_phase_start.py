@@ -429,6 +429,7 @@ def verify_phase_start(
         "authorization_boundary": AUTHORIZATION_BOUNDARY,
         "authorization_id": authorization["authorization_id"],
         "campaign_id": campaign["campaign_id"],
+        "campaign_sha256": tracked[campaign_path],
         "phase_id": phase_id,
         "action": action,
         "operator": operator,
@@ -436,6 +437,74 @@ def verify_phase_start(
         "statement": {"path": str(statement_path), "sha256": tracked[statement_path]},
         "signature": {"path": str(signature_path), "sha256": tracked[signature_path]},
         "dependency_artifact_count": len(expected_dependencies),
+        "verified_at": current.isoformat(),
+    }
+
+
+def verify_runtime_entry(
+    campaign_path: Path,
+    *,
+    phase_id: str,
+    action_id: str,
+    release_binding: Mapping[str, Any],
+    target_environment: str,
+    kubernetes_context: str | None = None,
+    namespace: str | None = None,
+    recovery_target_environment: str | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    verified = verify_phase_start(campaign_path, phase_id=phase_id, now=current)
+    campaign_path = campaign_path.resolve()
+    campaign = validate_campaign(campaign_path)
+    release = campaign.get("release")
+    target = campaign.get("target")
+    execution = campaign.get("execution")
+    images = release_binding.get("images")
+    backend = images.get("backend") if isinstance(images, dict) else None
+    frontend = images.get("frontend") if isinstance(images, dict) else None
+    release_matches = (
+        isinstance(release, dict)
+        and release_binding.get("scope") == "target-production"
+        and release_binding.get("target_environment") == target_environment
+        and release.get("git_commit") == release_binding.get("source_commit")
+        and isinstance(backend, dict)
+        and release.get("backend_image") == backend.get("name")
+        and isinstance(frontend, dict)
+        and release.get("frontend_image") == frontend.get("name")
+    )
+    target_matches = isinstance(target, dict) and target.get("target_id") == target_environment
+    execution_matches = isinstance(execution, dict)
+    if kubernetes_context is not None:
+        execution_matches = execution_matches and execution.get("kubernetes_context") == kubernetes_context
+    if namespace is not None:
+        execution_matches = execution_matches and execution.get("namespace") == namespace
+    if recovery_target_environment is not None:
+        execution_matches = (
+            execution_matches
+            and execution.get("recovery_target_environment") == recovery_target_environment
+        )
+    if not (
+        verified.get("campaign_sha256") == sha256(campaign_path)
+        and verified.get("campaign_id") == campaign.get("campaign_id")
+        and verified.get("action", {}).get("action_id") == action_id
+        and release_matches
+        and target_matches
+        and execution_matches
+    ):
+        raise ValueError(
+            "runtime entry does not match the signed phase action, release, target or execution controls"
+        )
+    return {
+        "schema_version": "duckdock-ga-execution-runtime-entry-v1",
+        "status": "RUNTIME_ENTRY_AUTHORIZED",
+        "campaign_id": campaign["campaign_id"],
+        "authorization_id": verified["authorization_id"],
+        "phase_id": phase_id,
+        "action_id": action_id,
+        "target_environment": target_environment,
+        "source_commit": release_binding["source_commit"],
+        "phase_started_at": verified["started_at"],
         "verified_at": current.isoformat(),
     }
 

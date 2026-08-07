@@ -73,8 +73,11 @@ manifest 列出的八个风险阶段，不授权 GA 或未列明 mutation，也�
 双签通过后，每个风险 phase 仍须先运行 `start_ga_execution_phase.py`。工具只在活动窗口、
 全部上游产物已存在且原 Operations 授权 identity 再次签署 campaign/phase/ack/无密动作说明时
 生成该 phase 唯一的一对启动声明/签名；probe、轮换、负载、告警、恢复或故障注入不得早于
-该启动时间。底层工具仍可能被拥有目标权限的人直接调用，但这类旁路结果不能进入正式 closure；
-目标 IAM/RBAC 和 change-management 仍须独立阻止越权操作。
+该启动时间。仓库提供的八个正式目标 CLI 都强制接收 `--execution-campaign` 与
+`--phase-action-id`，并在副作用前重验 campaign、phase action、release、target 和适用的
+context/Namespace/recovery target。直接导入内部函数、使用云厂商控制台或由高权限人员运行
+仓库外命令仍不受 Python CLI 控制；目标 IAM/RBAC 和 change-management 必须独立阻止这些
+平台外越权操作，且其结果不能进入正式 closure。
 
 `preapproval-assembly-request.example.json` 是证据接线输入，只包含 release/target 身份和
 九份最终 evidence 路径。正式 campaign 的真实采集完成后，必须用 closure 工具验证全部
@@ -142,7 +145,7 @@ manifest，以及从独立渠道取得的 `--digest` 或 `--expected-sha256`。m
 `allowed_signers_sha256` 内容寻址。
 
 真实 execution campaign 进行中使用 `backend/scripts/inspect_ga_execution_campaign.py`
-获取非授权的增量 checkpoint。它重验 campaign/topology，逐项检查 64 份计划产物、计划外
+获取非授权的增量 checkpoint。它重验 campaign/topology，逐项检查 87 份计划外部产物、计划外
 引用、摘要、symlink、大小、JSON 和私钥标记，并按依赖给出下一 phase；checkpoint 必须
 放在 exact evidence root 外。`ARTIFACTS_READY`/`READY_FOR_CLOSURE_ATTEMPT` 不是 PASS，
 只表示可以调用 `close_ga_execution_campaign.py` 让完整 assembler/evaluator 决定结果。

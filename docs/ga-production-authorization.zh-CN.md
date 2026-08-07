@@ -208,6 +208,12 @@ python backend/scripts/start_ga_execution_phase.py \
    raw report、secret/provider receipt、capacity load、alert exercise、restore receipt、
    state provider observation 和 HA fault-injection 的最早执行时间逐项比较。
 
+   八个正式目标入口还会在开始网络请求、轮换、负载、恢复或故障注入前重新验证该许可。
+   所有下列命令必须传入同一个 `--execution-campaign`，并将对应启动声明中的
+   `action.action_id` 原样作为 `--phase-action-id`；campaign、phase、commit、两个镜像、
+   target 以及适用的 Kubernetes context/Namespace 或 recovery target 任一不一致都会在
+   副作用前退出。`local-validation` TLS/容量路径仍可不带生产 campaign，但不能作为 GA 证据。
+
    外部执行期间不要等到第 87 份产物才发现早期错误。可随时运行非授权增量检查器：
 
 ```bash
@@ -259,6 +265,8 @@ python backend/scripts/probe_ga_target_tls.py \
   --app-url https://duckdock.example.com/health \
   --object-store-url https://objects.example.com/minio/health/live \
   --target-environment customer-production \
+  --execution-campaign /release-authority/duckdock-2.0.0-execution-campaign.json \
+  --phase-action-id CHG-2026-001/tls-probe \
   --source-commit "$DUCKDOCK_GA_SOURCE_COMMIT" \
   --backend-image "$DUCKDOCK_GA_BACKEND_IMAGE" \
   --frontend-image "$DUCKDOCK_GA_FRONTEND_IMAGE" \
@@ -317,6 +325,8 @@ export DUCKDOCK_CAPACITY_USER_TOKEN='<dedicated namespace member token>'
 python backend/scripts/g2_target_capacity_gate.py \
   --base-url https://duckdock.example.com \
   --target-environment customer-production \
+  --execution-campaign /release-authority/duckdock-2.0.0-execution-campaign.json \
+  --phase-action-id CHG-2026-001/capacity-load \
   --acknowledge-target-mutation customer-production \
   --source-commit "$DUCKDOCK_GA_SOURCE_COMMIT" \
   --backend-image "$DUCKDOCK_GA_BACKEND_IMAGE" \
@@ -427,6 +437,8 @@ ssh-keygen -Y sign \
 
 python backend/scripts/collect_ga_state_services_ha.py \
   --target-environment customer-production \
+  --execution-campaign /release-authority/duckdock-2.0.0-execution-campaign.json \
+  --phase-action-id CHG-2026-001/state-services \
   --source-commit "$DUCKDOCK_GA_SOURCE_COMMIT" \
   --backend-image "$DUCKDOCK_GA_BACKEND_IMAGE" \
   --frontend-image "$DUCKDOCK_GA_FRONTEND_IMAGE" \
@@ -465,6 +477,8 @@ python backend/scripts/collect_ga_target_ha.py \
   --context customer-production-admin \
   --namespace duckdock \
   --target-environment customer-production \
+  --execution-campaign /release-authority/duckdock-2.0.0-execution-campaign.json \
+  --phase-action-id CHG-2026-001/high-availability \
   --acknowledge-target-disruption customer-production \
   --source-commit "$DUCKDOCK_GA_SOURCE_COMMIT" \
   --backend-image "$DUCKDOCK_GA_BACKEND_IMAGE" \
@@ -522,6 +536,8 @@ python backend/scripts/collect_ga_target_secrets.py \
   --context customer-production-admin \
   --namespace duckdock \
   --target-environment customer-production \
+  --execution-campaign /release-authority/duckdock-2.0.0-execution-campaign.json \
+  --phase-action-id CHG-2026-001/secrets-rotation \
   --acknowledge-target-rotation customer-production \
   --source-commit "$DUCKDOCK_GA_SOURCE_COMMIT" \
   --backend-image "$DUCKDOCK_GA_BACKEND_IMAGE" \
@@ -562,6 +578,8 @@ python backend/scripts/collect_ga_target_network.py \
   --context customer-production-admin \
   --namespace duckdock \
   --target-environment customer-production \
+  --execution-campaign /release-authority/duckdock-2.0.0-execution-campaign.json \
+  --phase-action-id CHG-2026-001/network-probe \
   --acknowledge-external-vantage customer-production \
   --source-commit "$DUCKDOCK_GA_SOURCE_COMMIT" \
   --backend-image "$DUCKDOCK_GA_BACKEND_IMAGE" \
@@ -648,6 +666,8 @@ ssh-keygen -Y sign -f /release-authority/recovery-verifier-key \
 ```bash
 python backend/scripts/collect_ga_target_recovery.py \
   --target-environment customer-production \
+  --execution-campaign /release-authority/duckdock-2.0.0-execution-campaign.json \
+  --phase-action-id CHG-2026-001/recovery-restore \
   --restore-target-environment customer-recovery-staging \
   --acknowledge-destructive-restore customer-recovery-staging \
   --source-commit "$DUCKDOCK_GA_SOURCE_COMMIT" \
@@ -710,6 +730,8 @@ ssh-keygen -Y sign \
 ```bash
 python backend/scripts/collect_ga_target_alerting.py \
   --target-environment customer-production \
+  --execution-campaign /release-authority/duckdock-2.0.0-execution-campaign.json \
+  --phase-action-id CHG-2026-001/alerting-exercise \
   --acknowledge-oncall-exercise customer-production \
   --source-commit "$DUCKDOCK_GA_SOURCE_COMMIT" \
   --backend-image "$DUCKDOCK_GA_BACKEND_IMAGE" \
@@ -961,7 +983,7 @@ digest、错误密钥、签名缺失、base 已带审批、证据变化和非同
 回执的 path/SHA-256/campaign ID；权威授权器会重新打开 freeze 和其绑定的原始空
 approvals base，核对最终文件除审批与该引用外完全一致。因此即使绕过 finalizer 手工
 拼 JSON，也不能用虚构或缺失的 freeze 得到 `GA_AUTHORIZED`。v2 freeze 摘要又进入每份
-签名 statement，因此 closure、64 份计划产物、空 base、策略或窗口中任一项变化都会使
+签名 statement，因此 closure、87 份计划外部产物、空 base、策略或窗口中任一项变化都会使
 四份签名同时失效。
 
 最后仍需以独立命令对持久化授权文件执行同一权威门禁：

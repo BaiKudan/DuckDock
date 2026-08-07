@@ -27,6 +27,7 @@ import scripts.ga_execution_phase_start as execution_phase_start
 import scripts.verify_ga_execution_authorization as execution_authorization_verifier
 import scripts.verify_ga_trust_topology as trust_topology_verifier
 from scripts.ga_approval_campaign import derive_campaign_id, validate_campaign_freeze
+from scripts.ga_release_identity import build_release_binding
 
 from scripts.verify_ga_production_authorization import (
     ALERTING_POLICY_SCHEMA_VERSION,
@@ -4672,6 +4673,13 @@ def test_execution_phase_start_interlocks_are_signed_ordered_and_fail_closed(
     evidence_root.mkdir()
     _materialize_campaign_fixture(tmp_path, plan, campaign_path)
     artifacts = {name: Path(path) for name, path in plan["artifacts"].items()}
+    release_binding = build_release_binding(
+        scope="target-production",
+        target_environment=plan["target"]["target_id"],
+        source_commit=plan["release"]["git_commit"],
+        backend_image=plan["release"]["backend_image"],
+        frontend_image=plan["release"]["frontend_image"],
+    )
 
     for phase_id in execution_phase_start.RISKY_PHASE_IDS:
         verified = execution_phase_start.verify_phase_start(
@@ -4687,6 +4695,75 @@ def test_execution_phase_start_interlocks_are_signed_ordered_and_fail_closed(
         assert verified["action"]["sha256"] == hashlib.sha256(
             verified["action"]["description"].encode("utf-8")
         ).hexdigest()
+
+    runtime_entry = execution_phase_start.verify_runtime_entry(
+        campaign_path,
+        phase_id="tls",
+        action_id="fixture/tls/001",
+        release_binding=release_binding,
+        target_environment=plan["target"]["target_id"],
+        kubernetes_context=plan["execution"]["kubernetes_context"],
+        namespace=plan["execution"]["namespace"],
+        now=now,
+    )
+    assert runtime_entry["status"] == "RUNTIME_ENTRY_AUTHORIZED"
+    assert runtime_entry["campaign_id"] == plan["campaign_id"]
+    assert runtime_entry["action_id"] == "fixture/tls/001"
+
+    with pytest.raises(ValueError, match="runtime entry does not match"):
+        execution_phase_start.verify_runtime_entry(
+            campaign_path,
+            phase_id="tls",
+            action_id="fixture/tls/wrong",
+            release_binding=release_binding,
+            target_environment=plan["target"]["target_id"],
+            now=now,
+        )
+    with pytest.raises(ValueError, match="runtime entry does not match"):
+        execution_phase_start.verify_runtime_entry(
+            campaign_path,
+            phase_id="tls",
+            action_id="fixture/tls/001",
+            release_binding=release_binding,
+            target_environment="wrong-production",
+            now=now,
+        )
+    with pytest.raises(ValueError, match="runtime entry does not match"):
+        execution_phase_start.verify_runtime_entry(
+            campaign_path,
+            phase_id="tls",
+            action_id="fixture/tls/001",
+            release_binding=build_release_binding(
+                scope="target-production",
+                target_environment=plan["target"]["target_id"],
+                source_commit="f" * 40,
+                backend_image=plan["release"]["backend_image"],
+                frontend_image=plan["release"]["frontend_image"],
+            ),
+            target_environment=plan["target"]["target_id"],
+            now=now,
+        )
+    with pytest.raises(ValueError, match="runtime entry does not match"):
+        execution_phase_start.verify_runtime_entry(
+            campaign_path,
+            phase_id="tls",
+            action_id="fixture/tls/001",
+            release_binding=release_binding,
+            target_environment=plan["target"]["target_id"],
+            kubernetes_context="wrong-context",
+            namespace=plan["execution"]["namespace"],
+            now=now,
+        )
+    with pytest.raises(ValueError, match="runtime entry does not match"):
+        execution_phase_start.verify_runtime_entry(
+            campaign_path,
+            phase_id="recovery",
+            action_id="fixture/recovery/001",
+            release_binding=release_binding,
+            target_environment=plan["target"]["target_id"],
+            recovery_target_environment="wrong-recovery",
+            now=now,
+        )
 
     with pytest.raises(ValueError, match="exact Operations authorizer"):
         execution_phase_start.prepare_phase_start(

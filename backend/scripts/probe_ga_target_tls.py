@@ -25,6 +25,7 @@ try:
         globally_routable_ip,
     )
     from scripts.ga_release_identity import EVIDENCE_SCOPES, build_release_binding
+    from scripts.ga_execution_phase_start import verify_runtime_entry
 except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
     from ga_tls_evidence import (
         EXERCISE_RE,
@@ -33,6 +34,7 @@ except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
         globally_routable_ip,
     )
     from ga_release_identity import EVIDENCE_SCOPES, build_release_binding
+    from ga_execution_phase_start import verify_runtime_entry
 
 
 HSTS_MAX_AGE_RE = re.compile(r"(?:^|;)\s*max-age=(\d+)", re.IGNORECASE)
@@ -279,6 +281,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--object-store-url", required=True, help="object-store health URL")
     parser.add_argument("--scope", choices=sorted(EVIDENCE_SCOPES), default="target-production")
     parser.add_argument("--target-environment", required=True)
+    parser.add_argument("--execution-campaign", type=Path)
+    parser.add_argument("--phase-action-id")
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--backend-image", required=True)
     parser.add_argument("--frontend-image", required=True)
@@ -319,6 +323,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     try:
+        if args.scope == "target-production":
+            if args.execution_campaign is None or not args.phase_action_id:
+                raise ValueError(
+                    "target-production TLS probes require --execution-campaign and --phase-action-id"
+                )
+            verify_runtime_entry(
+                args.execution_campaign,
+                phase_id="tls",
+                action_id=args.phase_action_id,
+                release_binding=args.release_binding,
+                target_environment=args.target_environment,
+            )
         result = probe(args)
     except ValueError as exc:
         print(f"TLS probe error: {exc}", file=sys.stderr)
