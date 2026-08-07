@@ -61,7 +61,7 @@ Runtime/Reporter
 | Kubernetes HA 目标部署闸门 | PASS（机制）/ PENDING（真实集群） | campaign v5 将部署纳入第九个风险 phase：预检/执行重验 Security+Operations 双签、release provenance、集群 UID/principal/access、三 Ready zone、Secret/TLS/RWX/egress 和最小 RBAC；只有一小时内预检、`target_deployment` permit、同一变更单和内容寻址确认串才能按 PVC→migration→四 workload 顺序写入，成功/部分失败回执进入 closure v5 与无主机回退 archive 复验。bundle/deployment 16 项通过；未连接或修改真实目标集群 |
 | GA 生产授权 | BLOCKED | 真实目标 HTTPS 容量/HA/异地恢复/告警回执、独立安全评估与四方签名尚未提供，授权器必须拒绝 |
 | Compose/CI | PASS | 四套 dev/profile/prod Compose config clean；CI action 固定 commit SHA；最终 tag 等完整四类 job 后才推镜像；生产静态基线 39/39 PASS |
-| 一键 GA 本地预检 | PASS（非授权） | 干净 commit `b50ea653` 上 integrated profile 73/73 PASS、74 个附属产物内容寻址、回执/权限/敏感模式复验通过；仍固定保留 6 项 `PENDING_EXTERNAL` |
+| 一键 GA 本地预检 | PASS（非授权） | 最新候选实现 commit `522f5a1` 上重新执行 integrated profile：73/73 PASS、74 个附属产物内容寻址，回执 SHA-256 `e627babb…3185f85`；独立复验全部摘要、源码绑定、0700/0600 权限与无 symlink，仍固定保留 6 项 `PENDING_EXTERNAL` |
 | 内部安全预审 | PASS（非独立/非授权） | 干净 commit `e1537117` 上 14/14 PASS：Python/npm 0 已知漏洞，高置信 SAST 0，安全负向用例 198 passed/2 skipped，744 个 tracked 非测试文本启发式 0 finding，Gitleaks 全历史 218 commits/19.72 MB 且精确基线外 0 finding，四个一方镜像 Critical/High 均为 0；独立第三方评估仍为 `PENDING_EXTERNAL` |
 | 当前清库开发环境实时门禁 | BLOCKED（预期） | Hermes 接入后 7 PASS / 0 WARN / 7 BLOCK；缺少已清理的 Package、release receipt、signed handover、offboarding、key rotation、recovery 与 SLO 测试证据，不影响 fail-closed 正确性，但不能拿当前开发库声称 READY |
 
