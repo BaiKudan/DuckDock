@@ -50,8 +50,9 @@ SHA-256。输出是不可覆盖的 `duckdock-ga-trust-topology-verification-v1` 
 `FOUNDATION`。缺任一策略时不得开始昂贵或有破坏性的目标演练。
 
 信任拓扑通过后，复制 `execution-campaign-request.example.json`，一次性填写最终
-release、production target、Kubernetes context/Namespace、`kube-system` Namespace UID、
-`kubectl auth whoami` 返回的精确 principal、独立 recovery target、备份签名专用
+release、production target、外部变更单号、Kubernetes context/Namespace、`kube-system`
+Namespace UID、`kubectl auth whoami` 返回的精确 principal、Secret/CNI/三组探针 Pod/HA zone
+精确范围、独立 recovery target、备份签名专用
 allowed-signers 路径/摘要、最长 14 天执行窗口和一个尚不存在的专用 evidence root。由发布机构在 evidence root 之外生成不可覆盖
 的执行计划和后续组装请求：
 
@@ -81,8 +82,21 @@ python backend/scripts/collect_ga_target_cluster_identity.py \
 ```
 
 该工具实时查询 cluster UID/principal 并生成不可覆盖的签名对，不能由调用方传入观测值或
-回填时间；network phase 依赖这两份摘要，network/secrets/HA 正式 CLI 在 permit 后、目标
-效果前再次查询并拒绝 context 指向或凭据漂移。该证明不替代真实 IAM/RBAC 最小权限审查。
+回填时间。随后由同一 Operations 身份运行：
+
+```bash
+python backend/scripts/collect_ga_target_cluster_access.py \
+  --campaign /release-authority/duckdock-2.0.0-execution-campaign.json \
+  --operations-identity operations-release-authorizer@corp.example \
+  --key /secure/keys/operations-release-authorizer
+```
+
+第二个工具重验身份并签署固定 `kubectl auth can-i` allow/deny 矩阵，绑定 campaign 的外部
+变更单号、Secret、CNI DaemonSet、三组探针 Namespace/Pod 和 HA drain zone。network phase
+依赖两对摘要；network/secrets/HA 正式 CLI 在 permit 后、目标效果前重查身份、完整权限矩阵
+和精确运行参数。phase action ID 也必须以 campaign 的变更单号加 `/` 开头。该证明不穷举
+Kubernetes 全部有效权限，也不验证外部工单批准；真实云 IAM、审计、工单和平台外管理员
+仍由发布机构控制。
 双签通过后，每个风险 phase 仍须先运行 `start_ga_execution_phase.py`。工具只在活动窗口、
 全部上游产物已存在且原 Operations 授权 identity 再次签署 campaign/phase/ack/无密动作说明时
 生成该 phase 唯一的一对启动声明/签名；probe、轮换、负载、告警、恢复或故障注入不得早于
@@ -94,7 +108,7 @@ context/Namespace/recovery target。直接导入内部函数、使用云厂商�
 
 `preapproval-assembly-request.example.json` 是证据接线输入，只包含 release/target 身份和
 九份最终 evidence 路径。正式 campaign 的真实采集完成后，必须用 closure 工具验证全部
-89 份外部产物（含五份双人执行授权工件、一对目标集群身份工件、八对 phase-start 工件及 Security 签署的安全评估委托/签名）及显式引用与计划完全一致，
+91 份外部产物（含五份双人执行授权工件、目标集群身份和访问两对工件、八对 phase-start 工件及 Security 签署的安全评估委托/签名）及显式引用与计划完全一致，
 再由其调用底层组装器；禁止继续手工复制
 wrapper 字段和 SHA-256：
 
@@ -158,7 +172,7 @@ manifest，以及从独立渠道取得的 `--digest` 或 `--expected-sha256`。m
 `allowed_signers_sha256` 内容寻址。
 
 真实 execution campaign 进行中使用 `backend/scripts/inspect_ga_execution_campaign.py`
-获取非授权的增量 checkpoint。它重验 campaign/topology，逐项检查 89 份计划外部产物、计划外
+获取非授权的增量 checkpoint。它重验 campaign/topology，逐项检查 91 份计划外部产物、计划外
 引用、摘要、symlink、大小、JSON 和私钥标记，并按依赖给出下一 phase；checkpoint 必须
 放在 exact evidence root 外。`ARTIFACTS_READY`/`READY_FOR_CLOSURE_ATTEMPT` 不是 PASS，
 只表示可以调用 `close_ga_execution_campaign.py` 让完整 assembler/evaluator 决定结果。

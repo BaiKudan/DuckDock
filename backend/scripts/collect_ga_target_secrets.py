@@ -24,11 +24,11 @@ from typing import Any, Callable, Sequence
 try:
     from scripts.ga_execution_phase_start import verify_runtime_entry
     from scripts.ga_release_identity import build_release_binding
-    from scripts.ga_target_cluster_identity import verify_live_target_cluster_identity
+    from scripts.ga_target_cluster_access import verify_live_target_cluster_access
 except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
     from ga_execution_phase_start import verify_runtime_entry
     from ga_release_identity import build_release_binding
-    from ga_target_cluster_identity import verify_live_target_cluster_identity
+    from ga_target_cluster_access import verify_live_target_cluster_access
 
 
 SCHEMA_VERSION = "duckdock-ga-secrets-evidence-v2"
@@ -962,7 +962,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             kubernetes_context=args.context,
             namespace=args.namespace,
         )
-        verify_live_target_cluster_identity(args.execution_campaign)
+        verify_live_target_cluster_access(
+            args.execution_campaign,
+            phase_id="secrets",
+            operational_scope={
+                "context": args.context,
+                "namespace": args.namespace,
+                "secret_name": args.secret_name,
+            },
+        )
         report = collect(args)
     except (OSError, UnicodeError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
         print(f"Target secrets collection failed: {exc}", file=sys.stderr)

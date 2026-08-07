@@ -316,6 +316,7 @@ jobs:
           python3 backend/scripts/sign_ga_execution_authorization.py --help >/dev/null
           python3 backend/scripts/verify_ga_execution_authorization.py --help >/dev/null
           python3 backend/scripts/collect_ga_target_cluster_identity.py --help >/dev/null
+          python3 backend/scripts/collect_ga_target_cluster_access.py --help >/dev/null
           python3 backend/scripts/start_ga_execution_phase.py --help >/dev/null
           python3 backend/scripts/probe_ga_target_tls.py --help >/dev/null
           python3 backend/scripts/collect_ga_target_network.py --help >/dev/null

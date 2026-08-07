@@ -32,6 +32,7 @@ try:
         verify_phase_start,
     )
     from scripts.ga_target_cluster_identity import verify_target_cluster_identity
+    from scripts.ga_target_cluster_access import verify_target_cluster_access
     from scripts.prepare_ga_execution_campaign import (
         PLAN_SCHEMA_VERSION,
         _atomic_write,
@@ -60,6 +61,7 @@ except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
         verify_phase_start,
     )
     from ga_target_cluster_identity import verify_target_cluster_identity
+    from ga_target_cluster_access import verify_target_cluster_access
     from prepare_ga_execution_campaign import (
         PLAN_SCHEMA_VERSION,
         _atomic_write,
@@ -569,6 +571,20 @@ def inspect(
                 records[name]["state"] = "INVALID"
                 records[name]["problems"].append(
                     "signed_target_cluster_identity_invalid"
+                )
+
+    target_cluster_access_names = {
+        "target_cluster_access_report",
+        "target_cluster_access_signature",
+    }
+    if all(records[name]["state"] == "PRESENT" for name in target_cluster_access_names):
+        try:
+            verify_target_cluster_access(campaign_path, now=current)
+        except (OSError, UnicodeError, ValueError):
+            for name in target_cluster_access_names:
+                records[name]["state"] = "INVALID"
+                records[name]["problems"].append(
+                    "signed_target_cluster_access_invalid"
                 )
 
     for phase_id in RISKY_PHASE_IDS:

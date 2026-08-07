@@ -189,6 +189,10 @@ def verify(env_file: Path) -> dict[str, Any]:
     target_cluster_identity_collector = (
         REPO_ROOT / "backend/scripts/collect_ga_target_cluster_identity.py"
     )
+    target_cluster_access_core = REPO_ROOT / "backend/scripts/ga_target_cluster_access.py"
+    target_cluster_access_collector = (
+        REPO_ROOT / "backend/scripts/collect_ga_target_cluster_access.py"
+    )
     execution_phase_start_core = REPO_ROOT / "backend/scripts/ga_execution_phase_start.py"
     execution_phase_starter = REPO_ROOT / "backend/scripts/start_ga_execution_phase.py"
     execution_runtime_entrypoints = tuple(
@@ -262,6 +266,16 @@ def verify(env_file: Path) -> dict[str, Any]:
     target_cluster_identity_collector_text = (
         target_cluster_identity_collector.read_text(encoding="utf-8")
         if target_cluster_identity_collector.is_file()
+        else ""
+    )
+    target_cluster_access_text = (
+        target_cluster_access_core.read_text(encoding="utf-8")
+        if target_cluster_access_core.is_file()
+        else ""
+    )
+    target_cluster_access_collector_text = (
+        target_cluster_access_collector.read_text(encoding="utf-8")
+        if target_cluster_access_collector.is_file()
         else ""
     )
     execution_phase_start_text = (
@@ -371,7 +385,7 @@ def verify(env_file: Path) -> dict[str, Any]:
         and "EXPIRED_INCOMPLETE" in execution_progress_text
         and "verify_persisted_closure" in execution_progress_text,
         "immutable non-authorizing checkpoints detect partial/missing/invalid evidence and exact next phase",
-        "external execution mistakes are visible before the final 89-artifact closure attempt",
+        "external execution mistakes are visible before the final 91-artifact closure attempt",
     )
     add(
         "ga_target_cluster_identity_binding",
@@ -386,17 +400,35 @@ def verify(env_file: Path) -> dict[str, Any]:
         and "verify_target_cluster_identity" in execution_progress_text
         and "verify_target_cluster_identity" in execution_closure_text
         and "--operations-identity" in target_cluster_identity_collector_text
-        and "--observed-at" not in target_cluster_identity_collector_text
+        and "--observed-at" not in target_cluster_identity_collector_text,
+        "signed Operations observation binds kube-system UID and authenticated principal",
+        "a context-name substitution or credential switch is detectable and signed",
+    )
+    add(
+        "ga_target_cluster_access_binding",
+        target_cluster_access_collector.is_file()
+        and "duckdock-ga-target-cluster-access-v1" in target_cluster_access_text
+        and '"can-i"' in target_cluster_access_text
+        and "target Kubernetes permission differs from the least-privilege profile"
+        in target_cluster_access_text
+        and "runtime Kubernetes operational scope differs from the campaign"
+        in target_cluster_access_text
+        and "change_request_id" in execution_campaign_text
+        and "kubernetes_scope" in execution_campaign_text
+        and "verify_target_cluster_access" in execution_progress_text
+        and "verify_target_cluster_access" in execution_closure_text
+        and "--operations-identity" in target_cluster_access_collector_text
+        and "--observed-at" not in target_cluster_access_collector_text
         and all(
-            "verify_live_target_cluster_identity(" in text
+            "verify_live_target_cluster_access(" in text
             and text.index("verify_runtime_entry(")
-            < text.index("verify_live_target_cluster_identity(")
+            < text.index("verify_live_target_cluster_access(")
             < text.index(effect)
             for text, phase_id, effect in execution_runtime_entrypoint_texts
             if phase_id in {"network", "secrets", "high_availability"}
         ),
-        "signed Operations observation binds kube-system UID and authenticated principal; risky Kubernetes CLIs recheck live identity",
-        "a context-name substitution or credential switch fails before target probing or mutation",
+        "signed Operations allow/deny RBAC receipt binds the exact change and Kubernetes scope; risky CLIs recheck it live",
+        "identity, permission or Secret/CNI/probe/zone scope drift fails before target probing or mutation",
     )
     add(
         "ga_execution_phase_interlocks",
@@ -444,14 +476,14 @@ def verify(env_file: Path) -> dict[str, Any]:
     )
     add(
         "ga_execution_campaign_closure",
-        "duckdock-ga-execution-campaign-closure-v3" in execution_closure_text
+        "duckdock-ga-execution-campaign-closure-v4" in execution_closure_text
         and "campaign evidence closure is not exact" in execution_closure_text
         and "execution campaign can close only inside its bound execution window"
         in execution_closure_text
         and "PREAPPROVAL_ASSEMBLED" in execution_closure_text
         and "campaign input changed before closure receipt emission"
         in execution_closure_text,
-        "exact 89-artifact/reference closure including dual authorization, signed cluster identity, eight phase starts and security engagement",
+        "exact 91-artifact/reference closure including dual authorization, signed cluster identity/access, eight phase starts and security engagement",
         "planned paths equal actual evidence before immutable non-authorizing closure",
     )
     add(

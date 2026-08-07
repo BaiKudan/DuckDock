@@ -82,6 +82,21 @@ def _action(action_id: str, description: str) -> dict[str, str]:
     }
 
 
+def _action_matches_change_request(
+    campaign: Mapping[str, Any],
+    action_id: str,
+) -> bool:
+    execution = campaign.get("execution")
+    change_request_id = (
+        execution.get("change_request_id") if isinstance(execution, dict) else None
+    )
+    return (
+        isinstance(change_request_id, str)
+        and action_id.startswith(f"{change_request_id}/")
+        and len(action_id) > len(change_request_id) + 1
+    )
+
+
 def _planned_output_path(
     campaign_path: Path,
     campaign: Mapping[str, Any],
@@ -218,6 +233,8 @@ def prepare_phase_start(
     campaign = validate_campaign(campaign_path)
     phase = _phase(campaign, phase_id)
     action = _action(action_id, action_description)
+    if not _action_matches_change_request(campaign, action_id):
+        raise ValueError("phase action_id must be scoped by the campaign change_request_id")
     if not meaningful(operations_identity):
         raise ValueError("Operations identity must be non-placeholder")
     starts_at = parse_time(campaign["window_starts_at"], "campaign window_starts_at")
@@ -393,6 +410,7 @@ def verify_phase_start(
         and set(action) == {"action_id", "description", "sha256"}
         and ACTION_ID_RE.fullmatch(str(action.get("action_id", ""))) is not None
         and _action(str(action.get("action_id")), str(action.get("description"))) == action
+        and _action_matches_change_request(campaign, str(action.get("action_id")))
         and dependencies_valid
         and isinstance(operator, dict)
         and set(operator) == {"role", "identity"}

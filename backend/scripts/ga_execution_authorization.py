@@ -18,7 +18,7 @@ except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
     from ga_path_resolution import ga_file_resolution_override
 
 
-CAMPAIGN_SCHEMA_VERSION = "duckdock-ga-execution-campaign-v3"
+CAMPAIGN_SCHEMA_VERSION = "duckdock-ga-execution-campaign-v4"
 MANIFEST_SCHEMA_VERSION = "duckdock-ga-execution-authorization-manifest-v1"
 STATEMENT_SCHEMA_VERSION = "duckdock-ga-execution-authorization-statement-v1"
 VERIFICATION_SCHEMA_VERSION = "duckdock-ga-execution-authorization-verification-v1"

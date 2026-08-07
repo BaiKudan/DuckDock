@@ -40,6 +40,8 @@ scripts/prepare_ga_execution_campaign.py
 scripts/ga_execution_authorization.py
 scripts/ga_target_cluster_identity.py
 scripts/collect_ga_target_cluster_identity.py
+scripts/ga_target_cluster_access.py
+scripts/collect_ga_target_cluster_access.py
 scripts/prepare_ga_execution_authorization.py
 scripts/sign_ga_execution_authorization.py
 scripts/verify_ga_execution_authorization.py

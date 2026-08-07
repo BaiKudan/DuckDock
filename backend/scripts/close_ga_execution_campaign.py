@@ -30,6 +30,7 @@ try:
         verify_phase_start,
     )
     from scripts.ga_path_resolution import ga_file_resolution_override
+    from scripts.ga_target_cluster_access import verify_target_cluster_access
     from scripts.ga_target_cluster_identity import verify_target_cluster_identity
     from scripts.prepare_ga_execution_campaign import (
         PLAN_SCHEMA_VERSION,
@@ -50,12 +51,13 @@ except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
     )
     from ga_execution_phase_start import RISKY_PHASE_IDS, verify_phase_start
     from ga_path_resolution import ga_file_resolution_override
+    from ga_target_cluster_access import verify_target_cluster_access
     from ga_target_cluster_identity import verify_target_cluster_identity
     from prepare_ga_execution_campaign import PLAN_SCHEMA_VERSION, _parse_time, prepare
     from verify_ga_production_authorization import evaluate
 
 
-CLOSURE_SCHEMA_VERSION = "duckdock-ga-execution-campaign-closure-v3"
+CLOSURE_SCHEMA_VERSION = "duckdock-ga-execution-campaign-closure-v4"
 CLOSURE_KEYS = {
     "schema_version",
     "status",
@@ -67,6 +69,7 @@ CLOSURE_KEYS = {
     "approval_policy",
     "execution_authorization",
     "target_cluster_identity",
+    "target_cluster_access",
     "phase_starts",
     "external_artifact_count",
     "external_artifacts",
@@ -441,6 +444,31 @@ def _target_cluster_identity_verdict(value: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _target_cluster_access_verdict(value: dict[str, Any]) -> dict[str, Any]:
+    report = value.get("report")
+    signature = value.get("signature")
+    if not isinstance(report, dict) or not isinstance(signature, dict):
+        raise ValueError("target cluster access verification has no signed artifacts")
+    return {
+        "schema_version": value.get("schema_version"),
+        "status": value.get("status"),
+        "authorization_boundary": value.get("authorization_boundary"),
+        "authorization_id": value.get("authorization_id"),
+        "campaign_id": value.get("campaign_id"),
+        "campaign_sha256": value.get("campaign_sha256"),
+        "target_id": value.get("target_id"),
+        "change_request_id": value.get("change_request_id"),
+        "kubernetes": value.get("kubernetes"),
+        "operational_scope": value.get("operational_scope"),
+        "permission_check_count": value.get("permission_check_count"),
+        "operator": value.get("operator"),
+        "observed_at": value.get("observed_at"),
+        "report_sha256": report.get("sha256"),
+        "signature_sha256": signature.get("sha256"),
+        "verified_at": value.get("verified_at"),
+    }
+
+
 def _verify_campaign_execution_authorization(
     campaign_path: Path,
     artifacts: dict[str, Path],
@@ -616,6 +644,12 @@ def close(
             now=current,
         )
     )
+    target_cluster_access = _target_cluster_access_verdict(
+        verify_target_cluster_access(
+            campaign_path,
+            now=current,
+        )
+    )
     phase_starts = _verify_phase_start_interlocks(
         campaign_path,
         planned_inputs,
@@ -709,6 +743,7 @@ def close(
         },
         "execution_authorization": execution_authorization,
         "target_cluster_identity": target_cluster_identity,
+        "target_cluster_access": target_cluster_access,
         "phase_starts": phase_starts,
         "external_artifact_count": len(planned_inputs),
         "external_artifacts": artifact_ledger,
@@ -862,6 +897,16 @@ def verify_persisted_closure(
     if closure.get("target_cluster_identity") != target_cluster_identity:
         raise ValueError(
             "execution closure target cluster identity did not independently re-verify"
+        )
+    target_cluster_access = _target_cluster_access_verdict(
+        verify_target_cluster_access(
+            campaign_path,
+            now=closed_at,
+        )
+    )
+    if closure.get("target_cluster_access") != target_cluster_access:
+        raise ValueError(
+            "execution closure target cluster access did not independently re-verify"
         )
     phase_starts = _verify_phase_start_interlocks(
         campaign_path,

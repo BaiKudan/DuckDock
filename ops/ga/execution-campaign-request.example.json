@@ -8,6 +8,19 @@
     "kubernetes_cluster_uid": "__CHANGE_ME_PRODUCTION_KUBE_SYSTEM_NAMESPACE_UID__",
     "kubernetes_context": "__CHANGE_ME_PRODUCTION_KUBE_CONTEXT__",
     "kubernetes_principal": "__CHANGE_ME_EXACT_KUBERNETES_PRINCIPAL__",
+    "change_request_id": "__CHANGE_ME_APPROVED_CHANGE_REQUEST_ID__",
+    "kubernetes_scope": {
+      "cni_daemonset_name": "__CHANGE_ME_CNI_DAEMONSET__",
+      "cni_daemonset_namespace": "kube-system",
+      "ha_drain_zone": "__CHANGE_ME_APPROVED_DRAIN_ZONE__",
+      "monitoring_probe_namespace": "__CHANGE_ME_MONITORING_PROBE_NAMESPACE__",
+      "monitoring_probe_pod": "__CHANGE_ME_MONITORING_PROBE_POD__",
+      "secret_name": "duckdock-runtime-secrets",
+      "trusted_probe_namespace": "__CHANGE_ME_TRUSTED_PROBE_NAMESPACE__",
+      "trusted_probe_pod": "__CHANGE_ME_TRUSTED_PROBE_POD__",
+      "untrusted_probe_namespace": "__CHANGE_ME_UNTRUSTED_PROBE_NAMESPACE__",
+      "untrusted_probe_pod": "__CHANGE_ME_UNTRUSTED_PROBE_POD__"
+    },
     "namespace": "duckdock",
     "recovery_target_class": "staging",
     "recovery_target_environment": "__CHANGE_ME_RECOVERY_TARGET__",
@@ -21,7 +34,7 @@
     "git_commit": "__CHANGE_ME_40_HEX_COMMIT__",
     "version": "2.0.0"
   },
-  "schema_version": "duckdock-ga-execution-campaign-request-v3",
+  "schema_version": "duckdock-ga-execution-campaign-request-v4",
   "target": {
     "deployment_mode": "kubernetes-ha",
     "environment": "production",

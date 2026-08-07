@@ -30,7 +30,7 @@ try:
     from scripts.ga_execution_phase_start import verify_runtime_entry
     from scripts.ga_network_evidence import NETWORK_EVIDENCE_SCHEMA_VERSION
     from scripts.ga_release_identity import build_release_binding
-    from scripts.ga_target_cluster_identity import verify_live_target_cluster_identity
+    from scripts.ga_target_cluster_access import verify_live_target_cluster_access
     from scripts.ga_state_services_evidence import (
         DIGEST_RE as STATE_DIGEST_RE,
         REQUIRED_SERVICES as STATE_REQUIRED_SERVICES,
@@ -41,7 +41,7 @@ except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
     from ga_execution_phase_start import verify_runtime_entry
     from ga_network_evidence import NETWORK_EVIDENCE_SCHEMA_VERSION
     from ga_release_identity import build_release_binding
-    from ga_target_cluster_identity import verify_live_target_cluster_identity
+    from ga_target_cluster_access import verify_live_target_cluster_access
     from ga_state_services_evidence import (
         DIGEST_RE as STATE_DIGEST_RE,
         REQUIRED_SERVICES as STATE_REQUIRED_SERVICES,
@@ -1059,7 +1059,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             kubernetes_context=args.context,
             namespace=args.namespace,
         )
-        verify_live_target_cluster_identity(args.execution_campaign)
+        verify_live_target_cluster_access(
+            args.execution_campaign,
+            phase_id="high_availability",
+            operational_scope={
+                "context": args.context,
+                "namespace": args.namespace,
+                "drain_zone": args.drain_zone,
+            },
+        )
         report = execute(args)
     except (ValueError, RuntimeError, json.JSONDecodeError, subprocess.TimeoutExpired) as exc:
         print(f"Target HA collection failed before a report could be completed: {exc}", file=sys.stderr)

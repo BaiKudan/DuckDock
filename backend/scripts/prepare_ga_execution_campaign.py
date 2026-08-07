@@ -34,8 +34,8 @@ except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
     )
 
 
-REQUEST_SCHEMA_VERSION = "duckdock-ga-execution-campaign-request-v3"
-PLAN_SCHEMA_VERSION = "duckdock-ga-execution-campaign-v3"
+REQUEST_SCHEMA_VERSION = "duckdock-ga-execution-campaign-request-v4"
+PLAN_SCHEMA_VERSION = "duckdock-ga-execution-campaign-v4"
 CAMPAIGN_ID_RE = re.compile(r"^gaexec_[0-9a-f]{64}$")
 DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -66,12 +66,33 @@ EXECUTION_KEYS = {
     "kubernetes_context",
     "kubernetes_cluster_uid",
     "kubernetes_principal",
+    "kubernetes_scope",
+    "change_request_id",
     "namespace",
     "recovery_target_environment",
     "recovery_target_class",
     "window_starts_at",
     "window_expires_at",
 }
+KUBERNETES_SCOPE_KEYS = {
+    "secret_name",
+    "cni_daemonset_namespace",
+    "cni_daemonset_name",
+    "trusted_probe_namespace",
+    "trusted_probe_pod",
+    "monitoring_probe_namespace",
+    "monitoring_probe_pod",
+    "untrusted_probe_namespace",
+    "untrusted_probe_pod",
+    "ha_drain_zone",
+}
+KUBERNETES_NAME_RE = re.compile(
+    r"^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$"
+)
+KUBERNETES_LABEL_VALUE_RE = re.compile(
+    r"^(?:[A-Za-z0-9](?:[-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?)?$"
+)
+CHANGE_REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$")
 RECOVERY_TARGET_CLASSES = {"recovery", "staging"}
 MAXIMUM_CAMPAIGN_WINDOW = timedelta(days=14)
 
@@ -210,6 +231,38 @@ def _validate_execution(
         character.isspace() or character in "*?!<>" for character in principal
     ):
         raise ValueError("execution kubernetes_principal must be one exact safe principal")
+    change_request_id = execution.get("change_request_id")
+    if (
+        not isinstance(change_request_id, str)
+        or CHANGE_REQUEST_ID_RE.fullmatch(change_request_id) is None
+    ):
+        raise ValueError("execution change_request_id must be one exact safe reference")
+    scope = execution.get("kubernetes_scope")
+    if not isinstance(scope, dict) or set(scope) != KUBERNETES_SCOPE_KEYS:
+        raise ValueError("execution kubernetes_scope must contain the exact operational scope")
+    name_fields = KUBERNETES_SCOPE_KEYS - {"ha_drain_zone"}
+    if any(
+        not isinstance(scope.get(key), str)
+        or KUBERNETES_NAME_RE.fullmatch(str(scope[key])) is None
+        for key in name_fields
+    ):
+        raise ValueError("execution kubernetes_scope names must be exact DNS-1123 names")
+    drain_zone = scope.get("ha_drain_zone")
+    if (
+        not isinstance(drain_zone, str)
+        or not drain_zone
+        or KUBERNETES_LABEL_VALUE_RE.fullmatch(drain_zone) is None
+    ):
+        raise ValueError("execution kubernetes_scope ha_drain_zone must be one label value")
+    probe_namespaces = {
+        str(scope["trusted_probe_namespace"]),
+        str(scope["monitoring_probe_namespace"]),
+        str(scope["untrusted_probe_namespace"]),
+    }
+    if len(probe_namespaces) != 3 or str(execution["namespace"]) in probe_namespaces:
+        raise ValueError(
+            "execution kubernetes_scope probe namespaces must be distinct from each other and target"
+        )
     recovery_target = str(execution["recovery_target_environment"])
     if recovery_target == target_id:
         raise ValueError("destructive recovery target must differ from the production target")
@@ -310,6 +363,8 @@ def _artifact_paths(root: Path) -> dict[str, str]:
         "execution_authorization_operations_signature": "execution-authorization-operations.json.sig",
         "target_cluster_identity_report": "target-cluster-identity.json",
         "target_cluster_identity_signature": "target-cluster-identity.json.sig",
+        "target_cluster_access_report": "target-cluster-access.json",
+        "target_cluster_access_signature": "target-cluster-access.json.sig",
         "phase_start_tls_statement": "phase-start-tls.json",
         "phase_start_tls_signature": "phase-start-tls.json.sig",
         "phase_start_network_statement": "phase-start-network.json",
@@ -496,6 +551,17 @@ def _phases(
             policy_roles=["approval:approver/Operations"],
         ),
         _phase(
+            "target_cluster_access",
+            risk_class="READ_ONLY_TARGET_AUTHORIZATION",
+            depends_on=["target_cluster_identity", "release_provenance"],
+            tools=["collect_ga_target_cluster_access.py"],
+            outputs=[
+                "target_cluster_access_report",
+                "target_cluster_access_signature",
+            ],
+            policy_roles=["approval:approver/Operations"],
+        ),
+        _phase(
             "tls",
             risk_class="READ_ONLY_EXTERNAL_VANTAGE",
             depends_on=["execution_authorization", "release_provenance"],
@@ -522,6 +588,7 @@ def _phases(
                 "execution_authorization",
                 "release_provenance",
                 "target_cluster_identity",
+                "target_cluster_access",
             ],
             tools=[
                 "start_ga_execution_phase.py",
