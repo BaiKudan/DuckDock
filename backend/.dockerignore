@@ -57,6 +57,7 @@ scripts/authorize_ga_publication.py
 scripts/ga_path_resolution.py
 scripts/probe_ga_target_tls.py
 scripts/verify_ga_production_authorization.py
+scripts/seed_analysis_worker_dev.py
 scripts/seed_handover_e2e.py
 scripts/verify_*_dev.py
 scripts/verify_langfuse.py

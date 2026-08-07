@@ -28,7 +28,9 @@ Runtime/Reporter
 |---|---:|---|
 | 冻结 API v2 契约 | PASS | `2.0.0-rc.1`，SHA-256 `aa260f301acc5c3a8004d14980952a03ce0197f9d70dcdd78cd62e986c3b1a83`，drift check clean |
 | 数据库迁移 | PASS | 空 MySQL 8.4 从 baseline 升至 `20260804_0062`；`alembic check` 无新增操作 |
-| 真实 Hermes | PASS | 本机 OpenAI-compatible 实例返回 1 个模型身份；真实 `/v1/embeddings` 推理 HTTP 200、384 维数值向量，只记录 shape |
+| 真实 Hermes Reporter | PASS | 当前本机 Hermes Agent 0.20.0 真实完成 enroll、v2 handshake/heartbeat、metadata-only Session/Run 和 structured report；Fleet 显示 DD-C1/ACTIVE/HEALTHY |
+| 当前 Hermes 模型推理 | BLOCKED（外部运行时） | 当前 Hermes 是 headless API 而非 OpenAI-compatible endpoint；其 LM Studio endpoint 不可达，临时 PATH 修正后的 Codex provider 探测 60 秒内无响应；本轮不宣称推理通过 |
+| 真实 Langfuse | PASS | Langfuse Web/Worker 4.1.0 与 SDK 4.14.2 的 60 项真实兼容门禁通过，覆盖 OTLP v4、Observation、Queue、Score、Dataset 与 Experiment |
 | Agent Package | PASS | 独立空库通过 HTTP 创建 Agent/Runtime/Package；Ed25519、manifest、CycloneDX SBOM 与组件覆盖均验证通过 |
 | Release Control | PASS | policy `ALLOW`；主晋级和 Runtime receipt `APPLIED`；失败 Canary 进入 `ROLLED_BACK`，rollback 与 receipt 均成功 |
 | Handover 2.0 | PASS | 初始义务 `BLOCKED`，履约后 `READY`；MinIO archive digest readback 与外部 Ed25519 验签通过 |
@@ -36,8 +38,8 @@ Runtime/Reporter
 | 恢复演练 | PASS | 独立临时 MySQL dump→drop→restore 3 行；MinIO 对象 backup→delete→restore 1 个；RPO 0 秒、RTO 1 秒 |
 | SLO | PASS | `HEALTHY`；142 个发布窗口请求、0 错误；ingest p95 7.729 ms、timeline p95 12.636 ms、policy p95 54.426 ms |
 | Readiness | PASS | `READY`；14 PASS / 0 WARN / 0 BLOCK |
-| 浏览器 | PASS | Playwright 3/3：未登录守卫、登录表单、审批→执行→回执→验证→完成；应用内浏览器复核 Operations/Release Control，console 0 warning/error |
-| 后端回归 | PASS | 1238 passed、19 skipped；核心覆盖率 81.04%（门槛 65%） |
+| 浏览器 | PASS | Playwright 3/3：未登录守卫、登录表单、审批→执行→回执→验证→完成；应用内浏览器复核 Operations/Fleet，真实 Hermes Runtime 可见，console 0 warning/error |
+| 后端回归 | PASS | 1245 passed、19 skipped；最近一次覆盖率门禁为核心覆盖率 81.04%（门槛 65%） |
 | Python 3.12 锁定环境 | PASS | hashed dev lock；runtime lock `pip-audit` 0 已知漏洞；Ruff/compile 通过 |
 | 真实 MySQL 测试 lane | PASS | 独立临时数据库 17/17；验证后数据库与用户均已删除 |
 | 前端 | PASS | npm audit 0；lint 0 warning；11 files / 56 tests；生产 build 最大入口块 569.69 kB（门槛 600 kB） |
@@ -57,6 +59,7 @@ Runtime/Reporter
 | 本地 Kubernetes HA 演练 | PASS (local reference) | kind 1 control-plane + 3 zone workers；三类 3 副本、Beat 1；整区 taint/drain 后 30 秒恢复，7 个连续 health/API 样本 0 失败，故障域回归后各 ReplicaSet 恢复三域覆盖；状态服务/RWX/CNI 未授权 |
 | GA 生产授权 | BLOCKED | 真实目标 HTTPS 容量/HA/异地恢复/告警回执、独立安全评估与四方签名尚未提供，授权器必须拒绝 |
 | Compose/CI | PASS | 四套 dev/profile/prod Compose config clean；CI action 固定 commit SHA；最终 tag 等完整四类 job 后才推镜像；生产静态基线 35/35 PASS |
+| 当前清库开发环境实时门禁 | BLOCKED（预期） | Hermes 接入后 7 PASS / 0 WARN / 7 BLOCK；缺少已清理的 Package、release receipt、signed handover、offboarding、key rotation、recovery 与 SLO 测试证据，不影响 fail-closed 正确性，但不能拿当前开发库声称 READY |
 
 ## 3. 14 项实时门禁
 
@@ -97,6 +100,7 @@ Langfuse 保持可替换的 provider adapter：关闭或不可用时，依赖它
 8. **外部 Provider 兼容性是持续门禁。** Langfuse、Hermes、OTel Collector 或其他 Harness 升级后必须重跑对应 compatibility gate。
 9. **真实组织信任拓扑尚未建立。** 仓库预检和最终门禁已能拒绝九份策略之间复用 identity 或 OpenSSH 公钥，但真实发布机构仍需确定审批人、评估方、builder、probe、provider、on-call、执行人与 verifier，建立九份内容寻址 policy/trust store 并生成不可覆盖的 topology PASS 回执；本地测试身份不能代替该职责分配。
 10. **RC 不是 GA。** 仓库已新增最终供应链 FOUNDATION：只有受控 `ci.yml@refs/tags/v2.0.0` 在 backend/frontend/E2E/Compose 全通过后才推送 commit 候选，四镜像均通过 Critical/High 扫描且最终 tag 从未存在后才晋升；独立 builder 策略和 OpenSSH 签名报告绑定 tag object/验证输出、source archive/tree、SLSA v1、SPDX 2.3、漏洞扫描和两个 `@sha256` 镜像，门禁会重读全部内容并拒绝跨镜像、predicate 修改、伪造统计或 builder/审批人公钥复用。但真实签名 tag、最终 registry digest 和 bundle 尚未产生。权威授权器仍严格分为 FOUNDATION、EVIDENCE_COLLECTION、APPROVAL_COLLECTION 和 AUTHORIZED；只有 `--require-evidence-ready` 证明全部非审批检查通过后才能收集四方签名，最终仍必须取得 `GA_AUTHORIZED`。
+11. **当前 Hermes 推理链路未通过。** Reporter/Fleet 控制面集成已真实通过，但当前本机默认 LM Studio endpoint 不可达，Codex provider 探测也未在 60 秒内返回；它必须作为运行时配置/供应商兼容问题修复并单独复验，不能用历史 embedding 证据替代当前推理结果。
 
 ## 6. GA 前必须完成
 

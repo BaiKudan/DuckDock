@@ -118,24 +118,28 @@ async def seed_handover_closed_loop(
         namespace = Namespace(name=namespace_name, owner_id=admin.id)
         db.add(namespace)
         await db.flush()
-    receiver_membership = (
-        await db.execute(
-            select(NamespaceMember).where(
-                NamespaceMember.namespace_id == namespace.id,
-                NamespaceMember.user_id == receiver.id,
+    for member_user, role in (
+        (admin, NamespaceRole.ADMIN),
+        (receiver, NamespaceRole.DEVELOPER),
+    ):
+        membership = (
+            await db.execute(
+                select(NamespaceMember).where(
+                    NamespaceMember.namespace_id == namespace.id,
+                    NamespaceMember.user_id == member_user.id,
+                )
             )
-        )
-    ).scalar_one_or_none()
-    if receiver_membership is None:
-        db.add(
-            NamespaceMember(
-                namespace_id=namespace.id,
-                user_id=receiver.id,
-                role=NamespaceRole.DEVELOPER,
+        ).scalar_one_or_none()
+        if membership is None:
+            db.add(
+                NamespaceMember(
+                    namespace_id=namespace.id,
+                    user_id=member_user.id,
+                    role=role,
+                )
             )
-        )
-    else:
-        receiver_membership.role = NamespaceRole.DEVELOPER
+        else:
+            membership.role = role
     await db.flush()
 
     asset = AIAsset(

@@ -187,6 +187,7 @@ def test_production_image_context_excludes_test_and_local_validation_artifacts()
         "scripts/collect_ga_target_recovery.py",
         "scripts/collect_ga_independent_security.py",
         "scripts/ga_security_assessment.py",
+        "scripts/seed_analysis_worker_dev.py",
         "scripts/seed_handover_e2e.py",
         "scripts/g2_target_capacity_gate.py",
         "scripts/collect_ga_target_capacity.py",
@@ -603,6 +604,20 @@ def test_dev_analysis_worker_waits_for_backend_health():
     assert "http://127.0.0.1:8801/health" in compose
     assert "backend:" in body
     assert "condition: service_healthy" in body
+
+
+def test_dev_script_bootstraps_analysis_worker_token_before_starting_profile():
+    dev_script = _read("scripts/dev.sh")
+    seed_script = _read("backend/scripts/seed_analysis_worker_dev.py")
+
+    assert "python scripts/seed_analysis_worker_dev.py" in dev_script
+    assert dev_script.index("python scripts/seed_analysis_worker_dev.py") < dev_script.index(
+        'up -d analysis-worker'
+    )
+    assert "if not settings.DEBUG:" in seed_script
+    assert "DUCKDOCK_ANALYSIS_WORKER_TOKEN" in seed_script
+    assert "print(token" not in seed_script
+    assert '"token":' not in seed_script
 
 
 def test_dev_script_starts_beat_service():
