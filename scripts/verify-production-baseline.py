@@ -145,6 +145,10 @@ def verify(env_file: Path) -> dict[str, Any]:
         "notification target and meta-alerts configured",
     )
     ci_workflow = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    local_preflight_path = REPO_ROOT / "scripts/run_ga_local_preflight.py"
+    local_preflight_text = (
+        local_preflight_path.read_text(encoding="utf-8") if local_preflight_path.is_file() else ""
+    )
     provenance_components = (
         REPO_ROOT / "backend/scripts/ga_release_provenance.py",
         REPO_ROOT / "backend/scripts/collect_ga_release_provenance.py",
@@ -168,6 +172,18 @@ def verify(env_file: Path) -> dict[str, Any]:
         and all(path.is_file() for path in provenance_components),
         "signed v2.0.0 after full CI; BuildKit attestations; retained SARIF; strict signed-report collector",
         "final tag reruns all CI gates and emits independently re-verifiable release evidence",
+    )
+    add(
+        "ga_local_preflight_handoff",
+        "duckdock-ga-local-preflight-v1" in local_preflight_text
+        and "working tree must be clean before a GA local preflight" in local_preflight_text
+        and "PENDING_EXTERNAL" in local_preflight_text
+        and "non-authorizing local preflight" in local_preflight_text
+        and "backend_tests_with_coverage" in local_preflight_text
+        and "live_langfuse_compatibility" in local_preflight_text
+        and "run_ga_local_preflight.py --help" in ci_workflow,
+        "clean source; repository/integrated gates; content-addressed receipt; six external requirements stay pending",
+        "one local command gives release operators a reproducible handoff without claiming GA authorization",
     )
     preapproval_assembler = REPO_ROOT / "backend/scripts/assemble_ga_preapproval_authorization.py"
     trust_topology_verifier = REPO_ROOT / "backend/scripts/verify_ga_trust_topology.py"

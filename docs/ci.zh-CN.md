@@ -25,6 +25,11 @@ CI 分为五个阻塞 job。
 | `compose` | 校验开发与生产 Compose，确保可选组件只在对应 profile 中出现 | `docker compose config`、`docker compose -f docker-compose.prod.yml config --quiet` |
 | `release-images` | 等待 backend/frontend/e2e/compose 全部通过；构建带 provenance/SBOM 的 commit 候选索引并阻断 Critical/High，保留四份原始 SARIF，`v2.0.0` 的四镜像全通过后才晋升最终 GHCR tag，流水线拒绝覆盖已有 tag | Buildx、Docker Scout CVE gate、Actions artifact |
 
+最终 tag 前可在开发机运行
+`backend/.venv/bin/python scripts/run_ga_local_preflight.py --profile integrated --output-dir <new-path>`，
+一次复验仓库门禁和本地集成门禁并生成内容寻址回执。它是非授权预检；最终 tag CI、
+真实目标环境证据和组织签字仍必须独立执行。
+
 普通 `ci.yml` 的 `release-images` 只证明候选镜像可构建且当次扫描未触发阻断，不能直接
 充当 2.0 GA provenance。正式 `v2.0.0` 必须由受控 `.github/workflows/ci.yml`
 构建并推送 commit 候选索引；四镜像扫描全部通过且最终 tag 尚不存在时才晋升最终

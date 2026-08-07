@@ -10,6 +10,33 @@ DuckDock 有两个刻意分离的门禁：
 只有第二个门禁输出 `GA_AUTHORIZED` 才能称为生产 GA。应用侧 `READY`、仓库
 基线 `PASS` 或 RC 验证都不能替代它。
 
+## 最终 tag 前的本地预检
+
+发布负责人可先在干净工作树上运行一条非授权预检，尽早发现代码、契约、依赖、
+Compose 或本地集成回归。`repository` profile 覆盖 backend audit/Ruff/mypy/compile/
+coverage、冻结 OpenAPI、frontend audit/lint/test/build、三类 Compose、生产静态基线、
+GA contract lint、全部 GA JSON template 和运维脚本语法。`integrated` profile 还会幂等
+启动本地 DuckDock、Analysis Worker、Langfuse、OTel 与 Prometheus，运行健康检查、
+Alembic check、Playwright 和真实 Langfuse compatibility gate：
+
+```bash
+preflight_parent="$(mktemp -d)"
+backend/.venv/bin/python scripts/run_ga_local_preflight.py \
+  --profile integrated \
+  --output-dir "$preflight_parent/duckdock-ga-local-preflight"
+```
+
+输出目录必须事先不存在且位于仓库之外。工具以 `0700/0600` 权限保存逐门禁日志、
+`receipt.json` 和 `receipt.json.sha256`，绑定完整 Git commit/tree、分支、版本、命令、
+耗时、退出码和日志 SHA-256。工作树不干净时直接拒绝；本地门禁失败时回执状态为
+`BLOCK`。
+
+即使结果为 `PASS`，其 `authorization_scope` 仍是
+`non-authorizing local preflight`，并固定保留六项 `PENDING_EXTERNAL`：最终 tag/供应链、
+目标部署控制、目标容量增长、目标 HA/故障域、独立安全评估和四方授权。该回执用于
+交接和减少最终流水线返工，不能进入 `APPROVAL_COLLECTION`，也不能替代下文任何真实
+目标证据或最终 tag CI。
+
 ## 执行顺序
 
 1. 从 `ops/ga/production-authorization.example.json` 复制目标环境文件。
