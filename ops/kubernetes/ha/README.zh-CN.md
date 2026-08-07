@@ -20,7 +20,8 @@ TLS Ingress。Celery Beat 保持一个逻辑实例并由 Deployment 自动重建
 - 将 `controlled-external-egress` 的 `0.0.0.0/0` 替换为批准的目标 CIDR，或用
   Cilium 等 FQDN egress policy 取代。未收紧不得通过 GA 门禁。
 
-不要直接编辑并整体应用参考清单。使用目标包生成器把干净 Git commit、发布流水线
+不要直接编辑并整体应用参考清单。正式 GA 路径必须先生成并审阅 execution campaign，
+再把目标包直接写入 campaign 预分配的 `target-bundle` 目录。使用目标包生成器把干净 Git commit、发布流水线
 产生的两个不可变 `@sha256` 镜像、真实域名、外部 Secret、RWX StorageClass 与
 批准的出口 CIDR 固化成内容寻址的三阶段部署包。输出目录必须位于仓库外且不能
 预先存在：
@@ -59,6 +60,7 @@ Pod Security 标签；Runtime/TLS Secret 必须由 Secret Manager 预先注入�
 install -d -m 0700 /secure/evidence/duckdock-ha
 backend/.venv/bin/python scripts/deploy-kubernetes-ha-target.py preflight \
   --bundle-dir /secure/release/duckdock-ha-target \
+  --execution-campaign /secure/release/duckdock-2.0.0-execution-campaign.json \
   --context company-prod \
   --expected-cluster-uid '<reviewed-kube-system-uid>' \
   --expected-principal '<reviewed-kubernetes-principal>' \
@@ -74,16 +76,30 @@ StorageClass、两个 Secret 的类型/键名、Ingress/monitoring Namespace 标
 allow/deny RBAC 矩阵，并分别执行三份清单的真实 server-side dry-run。它不读取或记录
 Secret 值，也不持久化任何 Kubernetes 资源。预检超过一小时后不得用于写入。
 
-正式执行必须提供变更单和精确确认串：
+预检会同时重验 campaign 的 Security/Operations 双签授权、最终 commit、两个镜像摘要、
+release provenance、目标集群访问签名、Secret/TLS/RWX/egress 范围和预分配输出路径，
+并把这些组织级约束写入可搬运的 organization binding。正式执行前，Operations 还必须
+为 `target_deployment` phase 签署一次动作许可；正式执行必须提供该 action ID、同一
+campaign、campaign 内的变更单和精确确认串：
 
 ```text
 APPLY_DUCKDOCK_HA_TARGET:<context>:<namespace>:<bundle receipt_sha256>
 ```
 
 ```bash
+backend/.venv/bin/python backend/scripts/start_ga_execution_phase.py \
+  --campaign /secure/release/duckdock-2.0.0-execution-campaign.json \
+  --phase-id target_deployment \
+  --action-id CHG-20260807-001/target-deployment/001 \
+  --action-description 'apply reviewed DuckDock HA target bundle' \
+  --operations-identity '<approved-operations-identity>' \
+  --key /secure/keys/operations_signing_key
+
 backend/.venv/bin/python scripts/deploy-kubernetes-ha-target.py deploy \
   --bundle-dir /secure/release/duckdock-ha-target \
   --preflight-receipt /secure/evidence/duckdock-ha/preflight.json \
+  --execution-campaign /secure/release/duckdock-2.0.0-execution-campaign.json \
+  --phase-action-id CHG-20260807-001/target-deployment/001 \
   --context company-prod \
   --expected-cluster-uid '<reviewed-kube-system-uid>' \
   --expected-principal '<reviewed-kubernetes-principal>' \
@@ -94,17 +110,22 @@ backend/.venv/bin/python scripts/deploy-kubernetes-ha-target.py deploy \
 
 backend/.venv/bin/python scripts/deploy-kubernetes-ha-target.py verify-deployment \
   --receipt /secure/evidence/duckdock-ha/deployment.json
+
+backend/.venv/bin/python scripts/deploy-kubernetes-ha-target.py \
+  verify-campaign-deployment \
+  --execution-campaign /secure/release/duckdock-2.0.0-execution-campaign.json
 ```
 
-执行器会在写入前重跑全部预检并拒绝任何 resourceVersion/身份/RBAC/拓扑漂移，随后
+执行器会在写入前重新验证 phase permit 和实时集群访问，重跑全部预检并拒绝任何
+release/campaign/resourceVersion/身份/RBAC/拓扑漂移，随后
 严格执行 bootstrap → PVC Bound → migration Complete → applications → 四个 rollout。
 成功回执为 `TARGET_HA_DEPLOYMENT_COMPLETED_NOT_GA_AUTHORIZED`；一旦目标写入已开始，
 任何失败都会写出 `TARGET_HA_DEPLOYMENT_INCOMPLETE_NOT_GA_AUTHORIZED`，列明已完成阶段，
 不得自动重跑或删除，必须进入变更事故处置。执行器不会自动回滚数据库迁移。
 
-`receipt.json` 的状态固定为 `PREPARED_NOT_AUTHORIZED`；即使本地验证成功，也仍把
-发布镜像 provenance、server-side dry-run、Secret/TLS、状态服务、RWX 冗余和故障域
-演练保留为外部待办。
+目标包 `receipt.json` 的状态固定为 `PREPARED_NOT_AUTHORIZED`。部署闸门现会验证签名
+release provenance 和 campaign，但不会把 Secret 值/轮换、TLS/网络实际 enforcement、
+状态服务、RWX 冗余或故障域演练标成通过。
 
 部署成功回执仍不是 GA 证据：Secret 值/轮换、TLS 外部握手、NetworkPolicy 实际
 enforcement、状态服务与 RWX 冗余、目标容量/增长、异地恢复/值班、故障域演练、独立

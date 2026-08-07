@@ -508,7 +508,19 @@ def assemble(
         and result.get("failed_evidence_checks") == []
         and result.get("next_action") == "collect_organizational_approvals"
     ):
-        raise ValueError("assembled authorization did not reach APPROVAL_COLLECTION")
+        failed_details = {
+            str(check.get("key")): str(check.get("observed"))
+            for check in result.get("checks", [])
+            if isinstance(check, dict) and check.get("passed") is False
+        }
+        raise ValueError(
+            "assembled authorization did not reach APPROVAL_COLLECTION: "
+            f"status={result.get('status')}, "
+            f"foundation={result.get('failed_foundation_checks')}, "
+            f"evidence={result.get('failed_evidence_checks')}, "
+            f"approvals={result.get('failed_approval_checks')}, "
+            f"details={failed_details}"
+        )
 
     if any(_sha256(path) != digest for path, digest in tracked_paths.items()):
         raise ValueError("preapproval assembly input changed during evaluation")

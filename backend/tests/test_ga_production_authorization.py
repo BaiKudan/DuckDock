@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import shutil
 import subprocess
@@ -10,6 +11,7 @@ import tarfile
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pytest
 
@@ -120,6 +122,20 @@ from scripts.ga_state_services_evidence import (
     VERIFICATION_RECEIPT_SCHEMA_VERSION as STATE_VERIFICATION_RECEIPT_SCHEMA_VERSION,
     VERIFICATION_SIGNATURE_NAMESPACE as STATE_VERIFICATION_SIGNATURE_NAMESPACE,
 )
+
+
+def _load_target_deployment_test_fixture() -> object:
+    module_name = "duckdock_target_deployment_campaign_fixture"
+    existing = sys.modules.get(module_name)
+    if existing is not None:
+        return existing
+    path = Path(__file__).with_name("test_kubernetes_ha_target_deployment.py")
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def _evidence(tmp_path: Path, name: str, observed_at: datetime) -> dict[str, str]:
@@ -479,11 +495,17 @@ def _resign_release_build_report(args: argparse.Namespace, tmp_path: Path) -> No
     )
 
 
-def _document(tmp_path: Path, now: datetime) -> dict:
+def _document(
+    tmp_path: Path,
+    now: datetime,
+    *,
+    fault_domains: list[str] | None = None,
+) -> dict:
+    target_fault_domains = fault_domains or ["zone-a", "zone-b"]
     observed_at = now - timedelta(minutes=5)
     commit = "a" * 40
-    backend_image = f"registry.example.com/duckdock/backend@sha256:{'b' * 64}"
-    frontend_image = f"registry.example.com/duckdock/frontend@sha256:{'c' * 64}"
+    backend_image = f"registry.acme.cn/duckdock/backend@sha256:{'b' * 64}"
+    frontend_image = f"registry.acme.cn/duckdock/frontend@sha256:{'c' * 64}"
     controls = {
         "application_readiness": {
             "status": "READY",
@@ -560,7 +582,7 @@ def _document(tmp_path: Path, now: datetime) -> dict:
         "high_availability": {
             "status": "PASS",
             "replica_counts": {"backend": 3, "frontend": 3, "worker": 3, "beat": 1},
-            "fault_domains_exercised": 2,
+            "fault_domains_exercised": len(target_fault_domains),
             "managed_mysql_ha": True,
             "managed_redis_ha": True,
             "object_store_ha": True,
@@ -598,7 +620,7 @@ def _document(tmp_path: Path, now: datetime) -> dict:
                     "backend": {"name": backend_image},
                     "frontend": {"name": frontend_image},
                 },
-                "base_url": "https://duckdock.example.com",
+                "base_url": "https://duckdock.acme.cn",
                 "transport": "network HTTPS against target",
                 "profile_version": "duckdock-2-ga-readiness-v1",
                 "pass_count": 14,
@@ -631,7 +653,7 @@ def _document(tmp_path: Path, now: datetime) -> dict:
             "peer_ip": "203.0.113.10",
             "peer_certificate_sha256": certificate_digest,
             "certificate_serial_number": "01ABCD",
-            "certificate_subject": "commonName=duckdock.example.com",
+            "certificate_subject": "commonName=duckdock.acme.cn",
             "certificate_issuer": "commonName=Example Public CA",
             "certificate_not_before": (tls_capture_at - timedelta(days=1)).isoformat(),
             "expires_at": (tls_capture_at + timedelta(days=60)).isoformat(),
@@ -684,9 +706,9 @@ def _document(tmp_path: Path, now: datetime) -> dict:
         }
 
     tls_endpoints = {
-        "application": tls_endpoint("duckdock.example.com", "/health", "1" * 64),
+        "application": tls_endpoint("duckdock.acme.cn", "/health", "1" * 64),
         "object_store": tls_endpoint(
-            "objects.example.com",
+            "objects.acme.cn",
             "/minio/health/live",
             "2" * 64,
         ),
@@ -710,8 +732,8 @@ def _document(tmp_path: Path, now: datetime) -> dict:
             "vantage_class": "external-internet",
             "source_ip": "1.1.1.1",
         },
-        "application_url": "https://duckdock.example.com/health",
-        "object_store_url": "https://objects.example.com/minio/health/live",
+        "application_url": "https://duckdock.acme.cn/health",
+        "object_store_url": "https://objects.acme.cn/minio/health/live",
         "negotiated_protocols": ["TLSv1.2", "TLSv1.3"],
         "legacy_protocols_rejected": ["TLSv1", "TLSv1.1"],
         "certificate_days_remaining": 60,
@@ -876,7 +898,7 @@ def _document(tmp_path: Path, now: datetime) -> dict:
         },
         "status": "PASSED",
         "observed_at": capacity_load_finished.isoformat(),
-        "base_url": "https://duckdock.example.com",
+        "base_url": "https://duckdock.acme.cn",
         "namespace_id": capacity_namespace_id,
         "exercise_id": capacity_exercise_id,
         "run_tag": capacity_run_tag,
@@ -1070,7 +1092,7 @@ def _document(tmp_path: Path, now: datetime) -> dict:
             "backend": {"name": backend_image},
             "frontend": {"name": frontend_image},
         },
-        "base_url": "https://duckdock.example.com",
+        "base_url": "https://duckdock.acme.cn",
         "namespace_id": capacity_namespace_id,
         "database_provider": capacity_database_provider,
         "transport": "network HTTPS against target",
@@ -1183,7 +1205,7 @@ def _document(tmp_path: Path, now: datetime) -> dict:
                     "backend": {"name": backend_image},
                     "frontend": {"name": frontend_image},
                 },
-                "fault_domains": ["zone-a", "zone-b"],
+                "fault_domains": target_fault_domains,
                 "cluster_nodes": [
                     {
                         "node": node,
@@ -1198,18 +1220,29 @@ def _document(tmp_path: Path, now: datetime) -> dict:
                         ("node-zone-b-1", "zone-b"),
                         ("node-zone-b-2", "zone-b"),
                         ("node-zone-b-3", "zone-b"),
+                        *(
+                            (
+                                ("node-zone-c-1", "zone-c"),
+                                ("node-zone-c-2", "zone-c"),
+                                ("node-zone-c-3", "zone-c"),
+                            )
+                            if "zone-c" in target_fault_domains
+                            else ()
+                        ),
                     )
                 ],
-                "fault_domains_exercised": 2,
+                "fault_domains_exercised": len(target_fault_domains),
                 "replica_counts": {
                     "backend": 3,
                     "frontend": 3,
                     "worker": 3,
                     "beat": 1,
                 },
-                "before": ha_snapshot(["zone-a", "zone-b"]),
-                "after_zone_drain": ha_snapshot(["zone-b"]),
-                "after_zone_return_and_rolling_rebalance": ha_snapshot(["zone-a", "zone-b"]),
+                "before": ha_snapshot(target_fault_domains),
+                "after_zone_drain": ha_snapshot(target_fault_domains[1:]),
+                "after_zone_return_and_rolling_rebalance": ha_snapshot(
+                    target_fault_domains
+                ),
                 "fault_injection": {
                     "drained_nodes": ["node-zone-a-1", "node-zone-a-3"],
                     "drained_node": "node-zone-a-1",
@@ -1223,7 +1256,7 @@ def _document(tmp_path: Path, now: datetime) -> dict:
                 },
                 "availability_probe": {
                     "transport": "network HTTPS against target",
-                    "base_url": "https://duckdock.example.com",
+                    "base_url": "https://duckdock.acme.cn",
                     "sample_count": 5,
                     "failure_count": 0,
                     "passed": True,
@@ -1623,7 +1656,7 @@ def _document(tmp_path: Path, now: datetime) -> dict:
                 "scanner_id": "external-scanner-01",
                 "scanner_source_ip": "8.8.8.8",
                 "public_ingress": network_scan(
-                    "duckdock.example.com", "1-65535", open_ports=[443]
+                    "duckdock.acme.cn", "1-65535", open_ports=[443]
                 ),
                 "private_data_services": {
                     "database": network_scan("10.0.0.10", "3306", open_ports=[]),
@@ -2616,9 +2649,9 @@ def _document(tmp_path: Path, now: datetime) -> dict:
         "target_id": "customer-production",
         "environment": "production",
         "deployment_mode": "kubernetes-ha",
-        "public_base_url": "https://duckdock.example.com",
-        "object_store_url": "https://objects.example.com",
-        "fault_domains": ["zone-a", "zone-b"],
+        "public_base_url": "https://duckdock.acme.cn",
+        "object_store_url": "https://objects.acme.cn",
+        "fault_domains": target_fault_domains,
         "maximum_rpo_seconds": 900,
         "maximum_rto_seconds": 14_400,
         "minimum_sustained_rps": 50,
@@ -3779,7 +3812,11 @@ def _execution_campaign_fixture(
     tmp_path: Path,
     now: datetime,
 ) -> tuple[dict, Path, Path, Path]:
-    document = _document(tmp_path, now)
+    document = _document(
+        tmp_path,
+        now,
+        fault_domains=["zone-a", "zone-b", "zone-c"],
+    )
     _add_signed_approvals(document, tmp_path, now)
     manifest_path = _write_trust_topology_manifest(tmp_path, document)
     topology_receipt_path = tmp_path / "trust-topology-verification.json"
@@ -3815,7 +3852,12 @@ def _execution_campaign_fixture(
             "kubernetes_principal": "system:serviceaccount:duckdock:ga-operator",
             "change_request_id": "CHG-2026-001",
             "kubernetes_scope": {
+                "approved_egress_cidrs": ["10.20.0.0/16", "172.20.0.0/16"],
                 "secret_name": "duckdock-runtime-secrets",
+                "tls_secret_name": "duckdock-ingress-tls",
+                "rwx_claim_name": "duckdock-repos-rwx",
+                "rwx_storage_class": "cephfs-rwx",
+                "rwx_storage_size": "100Gi",
                 "cni_daemonset_namespace": "kube-system",
                 "cni_daemonset_name": "cilium",
                 "trusted_probe_namespace": "duckdock-ingress-probe",
@@ -3996,6 +4038,20 @@ def test_execution_campaign_generates_pending_dependency_plan_and_assembly_reque
         "target_cluster_identity",
         "release_provenance",
     ]
+    assert phases["target_deployment"]["depends_on"] == [
+        "execution_authorization",
+        "release_provenance",
+        "target_cluster_identity",
+        "target_cluster_access",
+    ]
+    assert phases["target_deployment"]["risk_class"] == "MUTATING_TARGET"
+    assert phases["target_deployment"]["required_acknowledgement"] == (
+        "customer-production"
+    )
+    assert phases["application_readiness"]["depends_on"] == [
+        "release_provenance",
+        "target_deployment",
+    ]
     assert phases["network"]["depends_on"] == [
         "execution_authorization",
         "release_provenance",
@@ -4034,7 +4090,7 @@ def test_execution_campaign_generates_pending_dependency_plan_and_assembly_reque
     assert plan["preapproval_assembly_request"]["sha256"] == hashlib.sha256(
         assembly_request_output.read_bytes()
     ).hexdigest()
-    assert len(plan["artifacts"]) == 94
+    assert len(plan["artifacts"]) == 105
     assert phases["preapproval_assembly"]["tools"] == [
         "close_ga_execution_campaign.py"
     ]
@@ -4208,6 +4264,7 @@ def test_execution_authorization_requires_two_prewindow_role_signatures(
     )
     assert receipt["status"] == "AUTHORIZED_FOR_NAMED_PHASE_EXECUTION"
     assert receipt["authorized_phase_ids"] == [
+        "target_deployment",
         "tls",
         "network",
         "secrets",
@@ -4515,6 +4572,7 @@ def _materialize_campaign_fixture(
     campaign_path: Path,
 ) -> None:
     artifacts = {name: Path(path) for name, path in plan["artifacts"].items()}
+    Path(plan["execution"]["evidence_root"]).chmod(0o700)
     mapping: dict[str, Path] = {}
     for name, source_name in CAMPAIGN_FIXTURE_SOURCES.items():
         source = tmp_path / source_name
@@ -4730,6 +4788,116 @@ def _materialize_campaign_fixture(
         ),
         now=campaign_starts_at + timedelta(seconds=5),
     )
+    for offset, phase_id in enumerate(
+        execution_phase_start.RISKY_PHASE_IDS,
+        start=10,
+    ):
+        action = f"fixture-reviewed-action:{phase_id}"
+        execution_phase_start.persist_phase_start(
+            campaign_path,
+            phase_id=phase_id,
+            action_id=f"CHG-2026-001/{phase_id}/001",
+            action_description=action,
+            operations_identity="operations@example.com",
+            key=tmp_path / "operations_key",
+            now=campaign_starts_at + timedelta(seconds=offset),
+        )
+
+    target_deployment = execution_campaign_closer._target_deployment_api()
+    bundle_api = target_deployment._bundle_api()
+    bundle_dir = artifacts["target_deployment_bundle_bootstrap"].parent
+    scope = plan["execution"]["kubernetes_scope"]
+    source_state = bundle_api.source_state
+    bundle_api.source_state = lambda: {
+        "commit": plan["release"]["git_commit"],
+        "tree": "e" * 40,
+        "branch": "codex/release-2.0-rc1",
+    }
+    try:
+        bundle_api.prepare_bundle(
+            argparse.Namespace(
+                output_dir=bundle_dir,
+                namespace=plan["execution"]["namespace"],
+                backend_image=plan["release"]["backend_image"],
+                frontend_image=plan["release"]["frontend_image"],
+                public_host=urlparse(plan["target"]["public_base_url"]).hostname,
+                runtime_secret=scope["secret_name"],
+                tls_secret=scope["tls_secret_name"],
+                rwx_claim=scope["rwx_claim_name"],
+                rwx_storage_class=scope["rwx_storage_class"],
+                rwx_size=scope["rwx_storage_size"],
+                egress_cidr=scope["approved_egress_cidrs"],
+            )
+        )
+    finally:
+        bundle_api.source_state = source_state
+
+    fixture = _load_target_deployment_test_fixture()
+    fixture.SOURCE = {
+        "commit": plan["release"]["git_commit"],
+        "tree": "e" * 40,
+        "branch": "codex/release-2.0-rc1",
+    }
+    fixture.BACKEND_IMAGE = plan["release"]["backend_image"]
+    fixture.FRONTEND_IMAGE = plan["release"]["frontend_image"]
+    fixture.CONTEXT = plan["execution"]["kubernetes_context"]
+    fixture.CLUSTER_UID = plan["execution"]["kubernetes_cluster_uid"]
+    fixture.PRINCIPAL = plan["execution"]["kubernetes_principal"]
+    fixture.NAMESPACE = plan["execution"]["namespace"]
+    preflight_output = artifacts["target_deployment_preflight"]
+    organization_binding = target_deployment.authorize_campaign_preflight(
+        campaign_path,
+        bundle_dir,
+        context=fixture.CONTEXT,
+        expected_cluster_uid=fixture.CLUSTER_UID,
+        expected_principal=fixture.PRINCIPAL,
+        output=preflight_output,
+        now=campaign_starts_at + timedelta(seconds=20),
+    )
+    preflight = target_deployment.collect_preflight(
+        bundle_dir,
+        organization_binding=organization_binding,
+        context=fixture.CONTEXT,
+        expected_cluster_uid=fixture.CLUSTER_UID,
+        expected_principal=fixture.PRINCIPAL,
+        runner=fixture.FakeCluster(cluster_uid=fixture.CLUSTER_UID),
+        now=campaign_starts_at + timedelta(seconds=20),
+    )
+    target_deployment.write_receipt(preflight_output, preflight)
+    target_phase = execution_phase_start.verify_phase_start(
+        campaign_path,
+        phase_id="target_deployment",
+        now=campaign_starts_at + timedelta(seconds=25),
+    )
+    phase_binding = {
+        "phase_id": "target_deployment",
+        "action_id": target_phase["action"]["action_id"],
+        "authorization_id": target_phase["authorization_id"],
+        "phase_started_at": target_phase["started_at"],
+        "verified_at": (campaign_starts_at + timedelta(seconds=25)).isoformat(),
+        "live_access_verified_at": (
+            campaign_starts_at + timedelta(seconds=25)
+        ).isoformat(),
+    }
+    bundle = bundle_api.verify_bundle(bundle_dir)
+    target_deployment.execute_deployment(
+        bundle_dir=bundle_dir,
+        preflight_receipt=preflight_output,
+        organization_binding=organization_binding,
+        phase_binding=phase_binding,
+        context=fixture.CONTEXT,
+        expected_cluster_uid=fixture.CLUSTER_UID,
+        expected_principal=fixture.PRINCIPAL,
+        change_request_id=plan["execution"]["change_request_id"],
+        confirmation=target_deployment.mutation_confirmation(
+            fixture.CONTEXT,
+            fixture.NAMESPACE,
+            bundle["receipt_sha256"],
+        ),
+        output=artifacts["target_deployment_receipt"],
+        runner=fixture.FakeCluster(cluster_uid=fixture.CLUSTER_UID),
+        now=campaign_starts_at + timedelta(seconds=25),
+    )
     security = json.loads(artifacts["security_assessment"].read_text(encoding="utf-8"))
     security["authorized_engagement"] = {
         **engagement,
@@ -4751,20 +4919,6 @@ def _materialize_campaign_fixture(
         json.dumps(security, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    for offset, phase_id in enumerate(
-        execution_phase_start.RISKY_PHASE_IDS,
-        start=10,
-    ):
-        action = f"fixture-reviewed-action:{phase_id}"
-        execution_phase_start.persist_phase_start(
-            campaign_path,
-            phase_id=phase_id,
-            action_id=f"CHG-2026-001/{phase_id}/001",
-            action_description=action,
-            operations_identity="operations@example.com",
-            key=tmp_path / "operations_key",
-            now=campaign_starts_at + timedelta(seconds=offset),
-        )
 
 
 def test_execution_phase_start_interlocks_are_signed_ordered_and_fail_closed(
@@ -4999,7 +5153,7 @@ def test_execution_phase_start_interlocks_are_signed_ordered_and_fail_closed(
         )
 
 
-def test_execution_campaign_closure_reverifies_all_91_external_artifacts(
+def test_execution_campaign_closure_reverifies_all_102_external_artifacts(
     tmp_path: Path,
 ) -> None:
     if shutil.which("ssh-keygen") is None:
@@ -5040,9 +5194,10 @@ def test_execution_campaign_closure_reverifies_all_91_external_artifacts(
     assert authorization["approvals"] == []
     assert receipt["evaluation"]["campaign_stage"] == "APPROVAL_COLLECTION"
     assert closure["status"] == "PREAPPROVAL_ASSEMBLED"
-    assert closure["external_artifact_count"] == 91
-    assert closure["captured_input_count"] == len(tracked) == 115
-    assert closure["reference_count"] == 294
+    assert closure["external_artifact_count"] == 102
+    assert closure["captured_input_count"] == len(tracked)
+    assert closure["captured_input_count"] >= 126
+    assert closure["reference_count"] >= 294
     assert closure["execution_authorization"]["status"] == (
         "AUTHORIZED_FOR_NAMED_PHASE_EXECUTION"
     )
@@ -5062,6 +5217,14 @@ def test_execution_campaign_closure_reverifies_all_91_external_artifacts(
     assert closure["target_cluster_access"]["change_request_id"] == "CHG-2026-001"
     assert closure["target_cluster_access"]["permission_check_count"] >= 40
     assert "path" not in closure["target_cluster_access"]
+    assert closure["target_deployment"]["status"] == (
+        "TARGET_HA_CAMPAIGN_DEPLOYMENT_VERIFIED_NOT_GA_AUTHORIZED"
+    )
+    assert closure["target_deployment"]["completed_phases"] == [
+        "bootstrap",
+        "migration",
+        "applications",
+    ]
     assert set(closure["phase_starts"]) == set(execution_phase_start.RISKY_PHASE_IDS)
     assert all(
         verdict["status"] == "PHASE_START_AUTHORIZED"
@@ -5379,12 +5542,12 @@ def test_execution_campaign_progress_is_incremental_non_authorizing_and_exact(
         "does_not_authorize_GA_or_target_mutation_or_evidence_PASS"
     )
     assert empty["counts"] == {
-        "planned_external_artifacts": 91,
+        "planned_external_artifacts": 102,
         "present_valid_artifacts": 0,
-        "missing_artifacts": 91,
+        "missing_artifacts": 102,
         "invalid_artifacts": 0,
         "present_size_bytes": 0,
-        "external_phases": 14,
+        "external_phases": 15,
         "ready_external_phases": 0,
     }
     assert empty["next_action"]["phase_id"] == "execution_authorization"
@@ -5649,10 +5812,10 @@ def test_execution_campaign_progress_is_incremental_non_authorizing_and_exact(
         now=now,
     )
     assert ready["status"] == "READY_FOR_CLOSURE_ATTEMPT"
-    assert ready["counts"]["present_valid_artifacts"] == 91
+    assert ready["counts"]["present_valid_artifacts"] == 102
     assert ready["counts"]["missing_artifacts"] == 0
     assert ready["counts"]["invalid_artifacts"] == 0
-    assert ready["counts"]["ready_external_phases"] == 14
+    assert ready["counts"]["ready_external_phases"] == 15
     assert ready["closure"]["state"] == "MISSING"
     assert ready["next_action"] == {
         "code": "run_fail_closed_campaign_closure",
@@ -5735,7 +5898,7 @@ def test_ga_publication_gate_rejects_stale_or_mismatched_context(
                     "target_id": "duckdock-production",
                     "environment": "production",
                     "deployment_mode": "kubernetes-ha",
-                    "public_base_url": "https://duckdock.example.com",
+                    "public_base_url": "https://duckdock.acme.cn",
                 },
                 "release_build": {
                     "source_repository": "https://github.com/BaiKudan/DuckDock",

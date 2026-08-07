@@ -253,7 +253,7 @@ def verify(env_file: Path) -> dict[str, Any]:
         ha_target_bundle_path.is_file()
         and os.access(ha_target_bundle_path, os.X_OK)
         and ha_target_bundle_tests.is_file()
-        and "duckdock-kubernetes-ha-target-bundle-v1" in ha_target_bundle_text
+        and "duckdock-kubernetes-ha-target-bundle-v2" in ha_target_bundle_text
         and "working tree must be clean before preparing a target HA bundle"
         in ha_target_bundle_text
         and "PREPARED_NOT_AUTHORIZED" in ha_target_bundle_text
@@ -274,8 +274,10 @@ def verify(env_file: Path) -> dict[str, Any]:
         ha_target_deployer_path.is_file()
         and os.access(ha_target_deployer_path, os.X_OK)
         and ha_target_deployer_tests.is_file()
-        and "duckdock-kubernetes-ha-target-preflight-v1" in ha_target_deployer_text
-        and "duckdock-kubernetes-ha-target-deployment-v1" in ha_target_deployer_text
+        and "duckdock-kubernetes-ha-target-preflight-v2" in ha_target_deployer_text
+        and "duckdock-kubernetes-ha-target-deployment-v2" in ha_target_deployer_text
+        and "duckdock-kubernetes-ha-target-organization-binding-v1"
+        in ha_target_deployer_text
         and "TARGET_HA_PREFLIGHT_PASSED_NOT_GA_AUTHORIZED"
         in ha_target_deployer_text
         and "TARGET_HA_DEPLOYMENT_COMPLETED_NOT_GA_AUTHORIZED"
@@ -290,8 +292,8 @@ def verify(env_file: Path) -> dict[str, Any]:
         and "independent_security_assessment" in ha_target_deployer_text
         and "four_role_ga_approvals" in ha_target_deployer_text
         and "deploy-kubernetes-ha-target.py --help" in ci_workflow,
-        "live UID/principal, three zones, Secret/TLS metadata, metrics, exact allow/deny RBAC and three server dry-runs; explicit content-addressed mutation confirmation; success/failure receipts",
-        "target deployment is machine-sequenced and auditable while provenance, enforcement, capacity, HA, assessment and approvals remain external",
+        "signed campaign/provenance/access permit; live UID/principal, three zones, Secret/TLS metadata, metrics, exact allow/deny RBAC and server dry-runs; content-addressed confirmation and portable receipts",
+        "target deployment is campaign-bound, machine-sequenced and independently archivable while enforcement, capacity, HA, assessment and approvals remain external",
     )
     preapproval_assembler = REPO_ROOT / "backend/scripts/assemble_ga_preapproval_authorization.py"
     trust_topology_verifier = REPO_ROOT / "backend/scripts/verify_ga_trust_topology.py"
@@ -330,6 +332,7 @@ def verify(env_file: Path) -> dict[str, Any]:
             ("backend/scripts/collect_ga_target_recovery.py", "recovery", "report = collect(args)"),
             ("backend/scripts/collect_ga_state_services_ha.py", "state_services", "report = collect(args)"),
             ("backend/scripts/collect_ga_target_ha.py", "high_availability", "report = execute(args)"),
+            ("scripts/deploy-kubernetes-ha-target.py", "target_deployment", "execute_deployment("),
         )
     )
     execution_campaign_request = REPO_ROOT / "ops/ga/execution-campaign-request.example.json"
@@ -509,7 +512,7 @@ def verify(env_file: Path) -> dict[str, Any]:
         and "EXPIRED_INCOMPLETE" in execution_progress_text
         and "verify_persisted_closure" in execution_progress_text,
         "immutable non-authorizing checkpoints detect partial/missing/invalid evidence and exact next phase",
-        "external execution mistakes are visible before the final 91-artifact closure attempt",
+        "external execution mistakes are visible before the final 102-artifact closure attempt",
     )
     add(
         "ga_target_cluster_identity_binding",
@@ -549,7 +552,8 @@ def verify(env_file: Path) -> dict[str, Any]:
             < text.index("verify_live_target_cluster_access(")
             < text.index(effect)
             for text, phase_id, effect in execution_runtime_entrypoint_texts
-            if phase_id in {"network", "secrets", "high_availability"}
+            if phase_id
+            in {"network", "secrets", "high_availability", "target_deployment"}
         ),
         "signed Operations allow/deny RBAC receipt binds the exact change and Kubernetes scope; risky CLIs recheck it live",
         "identity, permission or Secret/CNI/probe/zone scope drift fails before target probing or mutation",
@@ -568,7 +572,7 @@ def verify(env_file: Path) -> dict[str, Any]:
         and "--action-description" in execution_phase_starter_text
         and "--action-sha256" not in execution_phase_starter_text
         and "--started-at" not in execution_phase_starter_text,
-        "eight immutable Operations-signed starts bind the campaign, phase, dependencies and reviewed action",
+        "nine immutable Operations-signed starts bind the campaign, phase, dependencies and reviewed action",
         "risky evidence is rejected when execution predates its signed interlock or reuses/tampers with a permit",
     )
     add(
@@ -576,7 +580,7 @@ def verify(env_file: Path) -> dict[str, Any]:
         "duckdock-ga-execution-runtime-entry-v1" in execution_phase_start_text
         and "RUNTIME_ENTRY_AUTHORIZED" in execution_phase_start_text
         and "runtime entry does not match the signed phase action" in execution_phase_start_text
-        and len(execution_runtime_entrypoint_texts) == 8
+        and len(execution_runtime_entrypoint_texts) == 9
         and all(
             "verify_runtime_entry(" in text
             and f'phase_id="{phase_id}"' in text
@@ -586,7 +590,7 @@ def verify(env_file: Path) -> dict[str, Any]:
             and text.index("verify_runtime_entry(") < text.index(effect)
             for text, phase_id, effect in execution_runtime_entrypoint_texts
         ),
-        "all eight official target CLIs reverify the signed permit before probing or mutating the target",
+        "all nine official target CLIs reverify the signed permit before probing or mutating the target",
         "campaign, phase action, release images, target and relevant execution context must match at process entry",
     )
     add(
@@ -600,14 +604,15 @@ def verify(env_file: Path) -> dict[str, Any]:
     )
     add(
         "ga_execution_campaign_closure",
-        "duckdock-ga-execution-campaign-closure-v4" in execution_closure_text
+        "duckdock-ga-execution-campaign-closure-v5" in execution_closure_text
+        and "verify_campaign_deployment" in execution_closure_text
         and "campaign evidence closure is not exact" in execution_closure_text
         and "execution campaign can close only inside its bound execution window"
         in execution_closure_text
         and "PREAPPROVAL_ASSEMBLED" in execution_closure_text
         and "campaign input changed before closure receipt emission"
         in execution_closure_text,
-        "exact 91-artifact/reference closure including dual authorization, signed cluster identity/access, eight phase starts and security engagement",
+        "exact 102-artifact/reference closure including campaign-bound target deployment, dual authorization, signed cluster identity/access, nine phase starts and security engagement",
         "planned paths equal actual evidence before immutable non-authorizing closure",
     )
     add(

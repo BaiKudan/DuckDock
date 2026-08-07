@@ -304,12 +304,12 @@ Langfuse v4 导出使用独立 `telemetry-langfuse` profile，默认栈均不启
 - [ ] 替换 `.env.prod` 全部默认 secret（`SECRET_KEY` · `MYSQL_*` · `MINIO_ROOT_PASSWORD` · `DUCKDOCK_CREDENTIAL_KEY` · Langfuse 三件套）
 - [ ] MySQL / Redis / S3 / RWX 仓库存储使用目标故障域内的 HA 服务，并收紧默认拒绝 NetworkPolicy 的 egress
 - [ ] 用 `scripts/prepare-kubernetes-ha-target.py` 生成并复验三阶段目标包；server dry-run 后等待 commit-bound migration 成功再滚应用
-- [ ] 用 `scripts/deploy-kubernetes-ha-target.py` 绑定目标 UID/principal、三 zone、Secret/TLS/RWX/RBAC，凭变更单和精确确认串部署并保存成功/不完整回执
+- [ ] 用 `scripts/deploy-kubernetes-ha-target.py` 重验签名 campaign/provenance/集群访问，绑定目标 UID/principal、三 zone、Secret/TLS/RWX/RBAC，凭 `target_deployment` phase permit、变更单和精确确认串部署并保存成功/不完整回执
 - [ ] TLS 证书覆盖 application/object 两个域名；公网扫描确认只有 443，关 `DEBUG`
 - [ ] Alertmanager firing/resolved 均送达真实 on-call；异地 age 加密、签名、object-lock 备份完成破坏性恢复
 - [ ] 至少 900 秒、声明 RPS 以上且 50,000+ Run 的容量/数据增长门禁通过
-- [ ] 九份 GA trust policy/公钥通过全局职责分离预检；发布机构审阅绑定 release/target、独立恢复目标、新 evidence root 和 12-phase DAG 的不可覆盖执行 campaign
-- [ ] 八个风险 phase 均由原 Operations 授权 identity 在活动窗口、依赖完成后签署独立 start interlock；动作/回执时间不早于许可
+- [ ] 九份 GA trust policy/公钥通过全局职责分离预检；发布机构审阅绑定 release/target、独立恢复目标、新 evidence root 和 15-phase DAG 的不可覆盖执行 campaign
+- [ ] 九个风险 phase（含 `target_deployment`）均由原 Operations 授权 identity 在活动窗口、依赖完成后签署独立 start interlock；动作/回执时间不早于许可
 - [ ] 至少一个 Celery worker 常驻;`alembic upgrade head` 对齐 schema
 - [ ] 第一个注册账号用企业管理员邮箱（自动成 admin）
 - [ ] 核心栈启动后在 `/analysis` 创建 Worker token，填入 `.env.prod.enc`，再 `bash scripts/prod.sh worker`

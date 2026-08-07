@@ -42,14 +42,17 @@ Secret names, RWX StorageClass and approved provider CIDRs. The command writes
 outside the repository and emits exact `bootstrap.yaml`, `migration.yaml` and
 `applications.yaml` phases plus a content-addressed receipt.
 
-Run `verify` again at the deployment boundary, server-side dry-run all three
-files, and then use `scripts/deploy-kubernetes-ha-target.py`: its preflight binds
-the reviewed kube-system UID and authenticated principal, requires three Ready
-zones, checks the exact Secret metadata/RWX/metrics/RBAC profile, and performs
-all three server dry-runs. A fresh preflight plus an exact content-addressed
-mutation confirmation is required before the executor applies bootstrap, waits
+Run `verify` again at the deployment boundary, then use
+`scripts/deploy-kubernetes-ha-target.py` with the reviewed GA execution campaign.
+Its preflight re-verifies the Security/Operations campaign authorization, signed
+release provenance and cluster-access receipt; binds the reviewed kube-system UID
+and authenticated principal; requires three Ready zones; checks the exact Secret
+metadata/RWX/metrics/RBAC profile; and performs all three server dry-runs. A fresh
+preflight, a signed `target_deployment` phase action, and an exact content-addressed
+mutation confirmation are required before the executor applies bootstrap, waits
 for RWX, waits for the commit-named migration, and rolls out all four workloads.
-Success and partial failure both create immutable non-authorizing receipts.
+Success and partial failure both create immutable, portable, non-authorizing
+receipts that the campaign closure and offline GA archive verifier re-evaluate.
 
 The receipts deliberately remain outside GA authorization. Release provenance,
 Secret values/rotation, external TLS and network enforcement, managed-state/RWX

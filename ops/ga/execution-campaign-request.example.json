@@ -10,12 +10,19 @@
     "kubernetes_principal": "__CHANGE_ME_EXACT_KUBERNETES_PRINCIPAL__",
     "change_request_id": "__CHANGE_ME_APPROVED_CHANGE_REQUEST_ID__",
     "kubernetes_scope": {
+      "approved_egress_cidrs": [
+        "__CHANGE_ME_APPROVED_MYSQL_REDIS_S3_CIDR__"
+      ],
       "cni_daemonset_name": "__CHANGE_ME_CNI_DAEMONSET__",
       "cni_daemonset_namespace": "kube-system",
       "ha_drain_zone": "__CHANGE_ME_APPROVED_DRAIN_ZONE__",
       "monitoring_probe_namespace": "__CHANGE_ME_MONITORING_PROBE_NAMESPACE__",
       "monitoring_probe_pod": "__CHANGE_ME_MONITORING_PROBE_POD__",
+      "rwx_claim_name": "duckdock-repos-rwx",
+      "rwx_storage_class": "__CHANGE_ME_REDUNDANT_RWX_STORAGE_CLASS__",
+      "rwx_storage_size": "100Gi",
       "secret_name": "duckdock-runtime-secrets",
+      "tls_secret_name": "duckdock-ingress-tls",
       "trusted_probe_namespace": "__CHANGE_ME_TRUSTED_PROBE_NAMESPACE__",
       "trusted_probe_pod": "__CHANGE_ME_TRUSTED_PROBE_POD__",
       "untrusted_probe_namespace": "__CHANGE_ME_UNTRUSTED_PROBE_NAMESPACE__",
@@ -34,13 +41,14 @@
     "git_commit": "__CHANGE_ME_40_HEX_COMMIT__",
     "version": "2.0.0"
   },
-  "schema_version": "duckdock-ga-execution-campaign-request-v4",
+  "schema_version": "duckdock-ga-execution-campaign-request-v5",
   "target": {
     "deployment_mode": "kubernetes-ha",
     "environment": "production",
     "fault_domains": [
       "__CHANGE_ME_ZONE_A__",
-      "__CHANGE_ME_ZONE_B__"
+      "__CHANGE_ME_ZONE_B__",
+      "__CHANGE_ME_ZONE_C__"
     ],
     "maximum_rpo_seconds": 900,
     "maximum_rto_seconds": 14400,

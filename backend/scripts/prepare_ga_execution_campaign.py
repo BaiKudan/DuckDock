@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 import json
 import math
 import os
@@ -34,8 +35,8 @@ except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
     )
 
 
-REQUEST_SCHEMA_VERSION = "duckdock-ga-execution-campaign-request-v4"
-PLAN_SCHEMA_VERSION = "duckdock-ga-execution-campaign-v4"
+REQUEST_SCHEMA_VERSION = "duckdock-ga-execution-campaign-request-v5"
+PLAN_SCHEMA_VERSION = "duckdock-ga-execution-campaign-v5"
 CAMPAIGN_ID_RE = re.compile(r"^gaexec_[0-9a-f]{64}$")
 DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -75,7 +76,12 @@ EXECUTION_KEYS = {
     "window_expires_at",
 }
 KUBERNETES_SCOPE_KEYS = {
+    "approved_egress_cidrs",
     "secret_name",
+    "tls_secret_name",
+    "rwx_claim_name",
+    "rwx_storage_class",
+    "rwx_storage_size",
     "cni_daemonset_namespace",
     "cni_daemonset_name",
     "trusted_probe_namespace",
@@ -86,6 +92,11 @@ KUBERNETES_SCOPE_KEYS = {
     "untrusted_probe_pod",
     "ha_drain_zone",
 }
+KUBERNETES_NON_NAME_SCOPE_KEYS = {
+    "approved_egress_cidrs",
+    "ha_drain_zone",
+    "rwx_storage_size",
+}
 KUBERNETES_NAME_RE = re.compile(
     r"^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$"
 )
@@ -93,6 +104,7 @@ KUBERNETES_LABEL_VALUE_RE = re.compile(
     r"^(?:[A-Za-z0-9](?:[-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?)?$"
 )
 CHANGE_REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$")
+STORAGE_SIZE_RE = re.compile(r"^(?P<count>[1-9][0-9]*)(?P<unit>Gi|Ti)$")
 RECOVERY_TARGET_CLASSES = {"recovery", "staging"}
 MAXIMUM_CAMPAIGN_WINDOW = timedelta(days=14)
 
@@ -194,9 +206,9 @@ def _validate_target(target: Any) -> dict[str, Any]:
         and isinstance(fault_domains, list)
         and all(_meaningful(domain) for domain in fault_domains)
         and len(fault_domains) == len(set(fault_domains))
-        and len(fault_domains) >= 2
+        and len(fault_domains) >= 3
     ):
-        raise ValueError("target must be a named HTTPS production kubernetes-ha target in 2+ fault domains")
+        raise ValueError("target must be a named HTTPS production kubernetes-ha target in 3+ fault domains")
     for key in ("maximum_rpo_seconds", "maximum_rto_seconds", "minimum_sustained_rps"):
         _positive_number(target.get(key), f"target {key}")
     return dict(target)
@@ -240,7 +252,7 @@ def _validate_execution(
     scope = execution.get("kubernetes_scope")
     if not isinstance(scope, dict) or set(scope) != KUBERNETES_SCOPE_KEYS:
         raise ValueError("execution kubernetes_scope must contain the exact operational scope")
-    name_fields = KUBERNETES_SCOPE_KEYS - {"ha_drain_zone"}
+    name_fields = KUBERNETES_SCOPE_KEYS - KUBERNETES_NON_NAME_SCOPE_KEYS
     if any(
         not isinstance(scope.get(key), str)
         or KUBERNETES_NAME_RE.fullmatch(str(scope[key])) is None
@@ -254,6 +266,59 @@ def _validate_execution(
         or KUBERNETES_LABEL_VALUE_RE.fullmatch(drain_zone) is None
     ):
         raise ValueError("execution kubernetes_scope ha_drain_zone must be one label value")
+    storage_size = scope.get("rwx_storage_size")
+    storage_match = (
+        STORAGE_SIZE_RE.fullmatch(storage_size)
+        if isinstance(storage_size, str)
+        else None
+    )
+    storage_gib = (
+        int(storage_match.group("count"))
+        * (1024 if storage_match.group("unit") == "Ti" else 1)
+        if storage_match is not None
+        else 0
+    )
+    if storage_gib < 10:
+        raise ValueError("execution kubernetes_scope rwx_storage_size must be at least 10Gi")
+    raw_egress = scope.get("approved_egress_cidrs")
+    if not isinstance(raw_egress, list) or not raw_egress or len(raw_egress) > 32:
+        raise ValueError("execution kubernetes_scope requires 1-32 approved egress CIDRs")
+    blocked_networks = (
+        ipaddress.ip_network("0.0.0.0/8"),
+        ipaddress.ip_network("127.0.0.0/8"),
+        ipaddress.ip_network("169.254.0.0/16"),
+        ipaddress.ip_network("224.0.0.0/4"),
+        ipaddress.ip_network("::/128"),
+        ipaddress.ip_network("::1/128"),
+        ipaddress.ip_network("fe80::/10"),
+        ipaddress.ip_network("ff00::/8"),
+    )
+    egress_networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    for raw_network in raw_egress:
+        try:
+            network = ipaddress.ip_network(raw_network, strict=True)
+        except ValueError as exc:
+            raise ValueError(
+                "execution kubernetes_scope approved_egress_cidrs must be canonical"
+            ) from exc
+        minimum_prefix = 8 if network.version == 4 else 16
+        if network.prefixlen < minimum_prefix or any(
+            network.version == blocked.version and network.overlaps(blocked)
+            for blocked in blocked_networks
+        ):
+            raise ValueError(
+                "execution kubernetes_scope approved_egress_cidrs contains a forbidden or broad network"
+            )
+        egress_networks.append(network)
+    canonical_egress = [
+        str(network)
+        for network in sorted(
+            set(egress_networks),
+            key=lambda item: (item.version, int(item.network_address), item.prefixlen),
+        )
+    ]
+    if len(canonical_egress) != len(raw_egress):
+        raise ValueError("execution kubernetes_scope approved_egress_cidrs must be unique")
     probe_namespaces = {
         str(scope["trusted_probe_namespace"]),
         str(scope["monitoring_probe_namespace"]),
@@ -310,6 +375,10 @@ def _validate_execution(
     if expires_at <= current:
         raise ValueError("execution window is already expired")
     normalized = dict(execution)
+    normalized["kubernetes_scope"] = {
+        **scope,
+        "approved_egress_cidrs": canonical_egress,
+    }
     normalized["evidence_root"] = str(evidence_root)
     normalized["backup_allowed_signers"] = {
         "path": str(backup_path),
@@ -365,6 +434,17 @@ def _artifact_paths(root: Path) -> dict[str, str]:
         "target_cluster_identity_signature": "target-cluster-identity.json.sig",
         "target_cluster_access_report": "target-cluster-access.json",
         "target_cluster_access_signature": "target-cluster-access.json.sig",
+        "target_deployment_bundle_bootstrap": "target-bundle/bootstrap.yaml",
+        "target_deployment_bundle_migration": "target-bundle/migration.yaml",
+        "target_deployment_bundle_applications": "target-bundle/applications.yaml",
+        "target_deployment_bundle_receipt": "target-bundle/receipt.json",
+        "target_deployment_bundle_receipt_sha256": "target-bundle/receipt.sha256",
+        "phase_start_target_deployment_statement": "phase-start-target-deployment.json",
+        "phase_start_target_deployment_signature": "phase-start-target-deployment.json.sig",
+        "target_deployment_preflight": "target-deployment-preflight.json",
+        "target_deployment_preflight_sha256": "target-deployment-preflight.json.sha256",
+        "target_deployment_receipt": "target-deployment.json",
+        "target_deployment_receipt_sha256": "target-deployment.json.sha256",
         "phase_start_tls_statement": "phase-start-tls.json",
         "phase_start_tls_signature": "phase-start-tls.json.sig",
         "phase_start_network_statement": "phase-start-network.json",
@@ -533,13 +613,6 @@ def _phases(
             policy_roles=["release-provenance:builder"],
         ),
         _phase(
-            "application_readiness",
-            risk_class="READ_ONLY_TARGET",
-            depends_on=["release_provenance"],
-            tools=["collect_ga_target_readiness.py"],
-            outputs=["application_readiness"],
-        ),
-        _phase(
             "target_cluster_identity",
             risk_class="READ_ONLY_TARGET_IDENTITY",
             depends_on=["execution_authorization", "release_provenance"],
@@ -560,6 +633,42 @@ def _phases(
                 "target_cluster_access_signature",
             ],
             policy_roles=["approval:approver/Operations"],
+        ),
+        _phase(
+            "target_deployment",
+            risk_class="MUTATING_TARGET",
+            depends_on=[
+                "execution_authorization",
+                "release_provenance",
+                "target_cluster_identity",
+                "target_cluster_access",
+            ],
+            tools=[
+                "start_ga_execution_phase.py",
+                "prepare-kubernetes-ha-target.py",
+                "deploy-kubernetes-ha-target.py",
+            ],
+            outputs=[
+                "target_deployment_bundle_bootstrap",
+                "target_deployment_bundle_migration",
+                "target_deployment_bundle_applications",
+                "target_deployment_bundle_receipt",
+                "target_deployment_bundle_receipt_sha256",
+                "phase_start_target_deployment_statement",
+                "phase_start_target_deployment_signature",
+                "target_deployment_preflight",
+                "target_deployment_preflight_sha256",
+                "target_deployment_receipt",
+                "target_deployment_receipt_sha256",
+            ],
+            acknowledgement=target_id,
+        ),
+        _phase(
+            "application_readiness",
+            risk_class="READ_ONLY_TARGET",
+            depends_on=["release_provenance", "target_deployment"],
+            tools=["collect_ga_target_readiness.py"],
+            outputs=["application_readiness"],
         ),
         _phase(
             "tls",

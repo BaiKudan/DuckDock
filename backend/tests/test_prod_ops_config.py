@@ -317,7 +317,8 @@ def test_ga_approval_tools_reverify_before_signing_and_before_final_output():
     assert "READY_FOR_CLOSURE_ATTEMPT" in execution_progress
     assert "EXPIRED_INCOMPLETE" in execution_progress
     assert "verify_persisted_closure" in execution_progress
-    assert "duckdock-ga-execution-campaign-closure-v4" in execution_closure
+    assert "duckdock-ga-execution-campaign-closure-v5" in execution_closure
+    assert "verify_campaign_deployment" in execution_closure
     assert "duckdock-ga-target-cluster-identity-v1" in target_cluster_identity
     assert '"auth", "whoami"' in target_cluster_identity
     assert '"get", "namespace", "kube-system"' in target_cluster_identity
@@ -347,6 +348,7 @@ def test_ga_approval_tools_reverify_before_signing_and_before_final_output():
         ("backend/scripts/collect_ga_target_recovery.py", "recovery", "report = collect(args)"),
         ("backend/scripts/collect_ga_state_services_ha.py", "state_services", "report = collect(args)"),
         ("backend/scripts/collect_ga_target_ha.py", "high_availability", "report = execute(args)"),
+        ("scripts/deploy-kubernetes-ha-target.py", "target_deployment", "execute_deployment("),
     ):
         runtime_entry = _read(runtime_entrypoint)
         assert "verify_runtime_entry(" in runtime_entry
@@ -354,7 +356,12 @@ def test_ga_approval_tools_reverify_before_signing_and_before_final_output():
         assert "--execution-campaign" in runtime_entry
         assert "--phase-action-id" in runtime_entry
         assert runtime_entry.index("verify_runtime_entry(") < runtime_entry.index(effect)
-        if phase_id in {"network", "secrets", "high_availability"}:
+        if phase_id in {
+            "network",
+            "secrets",
+            "high_availability",
+            "target_deployment",
+        }:
             assert "verify_live_target_cluster_access(" in runtime_entry
             assert runtime_entry.index("verify_runtime_entry(") < runtime_entry.index(
                 "verify_live_target_cluster_access("

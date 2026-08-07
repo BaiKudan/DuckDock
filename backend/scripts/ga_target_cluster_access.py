@@ -330,6 +330,8 @@ def expected_phase_scope(campaign: Mapping[str, Any], phase_id: str) -> dict[str
         }
     if phase_id == "secrets":
         return {**common, "secret_name": str(scope["secret_name"])}
+    if phase_id == "target_deployment":
+        return common
     if phase_id == "high_availability":
         return {**common, "drain_zone": str(scope["ha_drain_zone"])}
     raise ValueError(f"phase has no Kubernetes operational scope binding: {phase_id}")

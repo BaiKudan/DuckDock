@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -57,7 +58,7 @@ except ModuleNotFoundError:  # direct `python backend/scripts/...` execution
     from verify_ga_production_authorization import evaluate
 
 
-CLOSURE_SCHEMA_VERSION = "duckdock-ga-execution-campaign-closure-v4"
+CLOSURE_SCHEMA_VERSION = "duckdock-ga-execution-campaign-closure-v5"
 CLOSURE_KEYS = {
     "schema_version",
     "status",
@@ -70,6 +71,7 @@ CLOSURE_KEYS = {
     "execution_authorization",
     "target_cluster_identity",
     "target_cluster_access",
+    "target_deployment",
     "phase_starts",
     "external_artifact_count",
     "external_artifacts",
@@ -101,6 +103,7 @@ FINAL_EVIDENCE_KEYS = (
     "security_assessment",
 )
 PHASE_START_TIMESTAMPS = {
+    "target_deployment": ("target_deployment_receipt", ("observed_at",)),
     "tls": ("tls_probe_report", ("observed_at",)),
     "network": ("network_probe_report", ("observed_at",)),
     "secrets": ("secret_rotation_receipt", ("started_at",)),
@@ -110,6 +113,21 @@ PHASE_START_TIMESTAMPS = {
     "state_services": ("state_provider_receipt", ("observed_at",)),
     "high_availability": ("high_availability", ("fault_injection", "started_at")),
 }
+
+
+def _target_deployment_api() -> Any:
+    module_name = "duckdock_campaign_target_deployment_verifier"
+    existing = sys.modules.get(module_name)
+    if existing is not None:
+        return existing
+    script = Path(__file__).resolve().parents[2] / "scripts" / "deploy-kubernetes-ha-target.py"
+    spec = importlib.util.spec_from_file_location(module_name, script)
+    if spec is None or spec.loader is None:
+        raise ValueError("cannot load target deployment campaign verifier")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def _load_object(path: Path, label: str) -> dict[str, Any]:
@@ -650,6 +668,10 @@ def close(
             now=current,
         )
     )
+    target_deployment = _target_deployment_api().verify_campaign_deployment(
+        campaign_path,
+        now=current,
+    )
     phase_starts = _verify_phase_start_interlocks(
         campaign_path,
         planned_inputs,
@@ -744,6 +766,7 @@ def close(
         "execution_authorization": execution_authorization,
         "target_cluster_identity": target_cluster_identity,
         "target_cluster_access": target_cluster_access,
+        "target_deployment": target_deployment,
         "phase_starts": phase_starts,
         "external_artifact_count": len(planned_inputs),
         "external_artifacts": artifact_ledger,
@@ -907,6 +930,14 @@ def verify_persisted_closure(
     if closure.get("target_cluster_access") != target_cluster_access:
         raise ValueError(
             "execution closure target cluster access did not independently re-verify"
+        )
+    target_deployment = _target_deployment_api().verify_campaign_deployment(
+        campaign_path,
+        now=closed_at,
+    )
+    if closure.get("target_deployment") != target_deployment:
+        raise ValueError(
+            "execution closure target deployment did not independently re-verify"
         )
     phase_starts = _verify_phase_start_interlocks(
         campaign_path,

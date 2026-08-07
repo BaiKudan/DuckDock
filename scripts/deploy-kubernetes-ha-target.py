@@ -9,29 +9,37 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BUNDLE_SCRIPT = REPO_ROOT / "scripts" / "prepare-kubernetes-ha-target.py"
-PREFLIGHT_SCHEMA_VERSION = "duckdock-kubernetes-ha-target-preflight-v1"
-DEPLOYMENT_SCHEMA_VERSION = "duckdock-kubernetes-ha-target-deployment-v1"
+BACKEND_ROOT = REPO_ROOT / "backend"
+PREFLIGHT_SCHEMA_VERSION = "duckdock-kubernetes-ha-target-preflight-v2"
+DEPLOYMENT_SCHEMA_VERSION = "duckdock-kubernetes-ha-target-deployment-v2"
+ORGANIZATION_BINDING_SCHEMA_VERSION = (
+    "duckdock-kubernetes-ha-target-organization-binding-v1"
+)
 PREFLIGHT_STATUS = "TARGET_HA_PREFLIGHT_PASSED_NOT_GA_AUTHORIZED"
 DEPLOYED_STATUS = "TARGET_HA_DEPLOYMENT_COMPLETED_NOT_GA_AUTHORIZED"
 INCOMPLETE_STATUS = "TARGET_HA_DEPLOYMENT_INCOMPLETE_NOT_GA_AUTHORIZED"
 REFUSED_STATUS = "TARGET_HA_DEPLOYMENT_REFUSED_NOT_MUTATED"
 AUTHORIZATION_BOUNDARY = (
-    "operational target preparation only; does not prove release provenance, "
+    "campaign-bound operational target preparation only; does not prove "
     "managed-state HA, fault-domain survival, independent security assessment "
     "or GA authorization"
 )
 PREFLIGHT_MAX_AGE = timedelta(hours=1)
+MAXIMUM_CLOCK_SKEW = timedelta(minutes=5)
 MINIMUM_KUBERNETES = (1, 27)
 MAX_COMMAND_OUTPUT_BYTES = 1024 * 1024
 SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{7,127}$")
@@ -56,7 +64,6 @@ REQUIRED_TLS_SECRET_KEYS = {"tls.crt", "tls.key"}
 REPLICATED_DEPLOYMENTS = {"backend", "frontend", "worker"}
 ALL_DEPLOYMENTS = (*sorted(REPLICATED_DEPLOYMENTS), "beat")
 PENDING_AFTER_DEPLOYMENT = {
-    "release_image_provenance": "PENDING_EXTERNAL",
     "runtime_secret_values_and_rotation": "PENDING_EXTERNAL",
     "tls_certificate_external_probe": "PENDING_EXTERNAL",
     "network_policy_enforcement": "PENDING_EXTERNAL",
@@ -69,6 +76,7 @@ PENDING_AFTER_DEPLOYMENT = {
     "four_role_ga_approvals": "PENDING_EXTERNAL",
 }
 PREFLIGHT_VALIDATED_REQUIREMENTS = {
+    "signed_release_provenance_and_campaign": "PASS",
     "runtime_secret_metadata": "PASS",
     "tls_secret_metadata": "PASS",
     "ingress_and_monitoring_namespace_labels": "PASS",
@@ -111,10 +119,6 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def iso_now() -> str:
-    return utc_now().isoformat()
-
-
 def sha256_bytes(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
@@ -135,6 +139,418 @@ def _bundle_api() -> Any:
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _ga_apis() -> tuple[Any, Any, Any]:
+    loaded = []
+    for qualified, bare in (
+        ("scripts.ga_execution_authorization", "ga_execution_authorization"),
+        ("scripts.ga_execution_phase_start", "ga_execution_phase_start"),
+        ("scripts.ga_target_cluster_access", "ga_target_cluster_access"),
+    ):
+        module = sys.modules.get(qualified) or sys.modules.get(bare)
+        if module is None:
+            loaded = []
+            break
+        loaded.append(module)
+    if len(loaded) == 3:
+        return loaded[0], loaded[1], loaded[2]
+    backend = str(BACKEND_ROOT)
+    if backend not in sys.path:
+        sys.path.insert(0, backend)
+    try:
+        from scripts import ga_execution_authorization as execution_authorization
+        from scripts import ga_execution_phase_start as execution_phase_start
+        from scripts import ga_target_cluster_access as target_cluster_access
+    except ImportError as exc:
+        raise TargetError("cannot load GA campaign authorization modules") from exc
+    return execution_authorization, execution_phase_start, target_cluster_access
+
+
+def _planned_campaign_path(campaign_path: Path, raw: Any, *, label: str) -> Path:
+    if not isinstance(raw, str) or not raw.strip():
+        raise TargetError(f"campaign has no planned {label}")
+    execution_authorization, _phase_start, _target_access = _ga_apis()
+    handled, overridden = execution_authorization.ga_file_resolution_override(raw)
+    if handled:
+        if overridden is None:
+            raise TargetError(f"planned {label} has no verified portable mapping")
+        return overridden.resolve(strict=True)
+    unresolved = Path(raw).expanduser()
+    if not unresolved.is_absolute():
+        unresolved = campaign_path.parent / unresolved
+    if unresolved.is_symlink():
+        raise TargetError(f"planned {label} must not be a symbolic link")
+    return unresolved.resolve(strict=False)
+
+
+def _campaign_bundle_contract(
+    campaign_path: Path,
+    bundle_dir: Path,
+    *,
+    context: str,
+    expected_cluster_uid: str,
+    expected_principal: str,
+    preflight_output: Path | None = None,
+    deployment_output: Path | None = None,
+    portable_bundle: bool = False,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    execution_authorization, _phase_start, _access = _ga_apis()
+    campaign_path = campaign_path.expanduser().resolve(strict=True)
+    campaign = execution_authorization.validate_campaign(campaign_path)
+    bundle_dir = bundle_dir.expanduser().resolve(strict=True)
+    bundle = _bundle_api().verify_bundle(bundle_dir)
+    release = campaign.get("release")
+    target = campaign.get("target")
+    execution = campaign.get("execution")
+    if not all(isinstance(item, dict) for item in (release, target, execution)):
+        raise TargetError("campaign lacks exact release, target or execution controls")
+    scope = execution.get("kubernetes_scope")
+    artifacts = campaign.get("artifacts")
+    if not isinstance(scope, dict) or not isinstance(artifacts, dict):
+        raise TargetError("campaign lacks Kubernetes deployment scope or artifacts")
+    public_host = urlparse(str(target.get("public_base_url", ""))).hostname
+    expected_target = {
+        "namespace": execution.get("namespace"),
+        "backend_image": release.get("backend_image"),
+        "frontend_image": release.get("frontend_image"),
+        "public_host": public_host,
+        "runtime_secret": scope.get("secret_name"),
+        "tls_secret": scope.get("tls_secret_name"),
+        "rwx_claim": scope.get("rwx_claim_name"),
+        "rwx_storage_class": scope.get("rwx_storage_class"),
+        "rwx_size": scope.get("rwx_storage_size"),
+        "egress_cidrs": scope.get("approved_egress_cidrs"),
+    }
+    expected_kubernetes = {
+        "context": execution.get("kubernetes_context"),
+        "namespace": execution.get("namespace"),
+        "cluster_uid": execution.get("kubernetes_cluster_uid"),
+        "principal": execution.get("kubernetes_principal"),
+    }
+    if (
+        bundle.get("source", {}).get("commit") != release.get("git_commit")
+        or bundle.get("target") != expected_target
+        or context != expected_kubernetes["context"]
+        or expected_cluster_uid != expected_kubernetes["cluster_uid"]
+        or expected_principal != expected_kubernetes["principal"]
+    ):
+        raise TargetError(
+            "HA bundle or Kubernetes identity differs from the reviewed campaign",
+            stage="campaign_binding",
+        )
+    expected_bundle_files = {
+        "target_deployment_bundle_bootstrap": bundle_dir / "bootstrap.yaml",
+        "target_deployment_bundle_migration": bundle_dir / "migration.yaml",
+        "target_deployment_bundle_applications": bundle_dir / "applications.yaml",
+        "target_deployment_bundle_receipt": bundle_dir / "receipt.json",
+        "target_deployment_bundle_receipt_sha256": bundle_dir / "receipt.sha256",
+    }
+    for name, expected in expected_bundle_files.items():
+        planned = _planned_campaign_path(campaign_path, artifacts.get(name), label=name)
+        if planned != expected and not (
+            portable_bundle
+            and expected.is_file()
+            and sha256_file(planned) == sha256_file(expected)
+        ):
+            raise TargetError(f"prepared bundle path differs from campaign artifact {name}")
+    planned_preflight = _planned_campaign_path(
+        campaign_path,
+        artifacts.get("target_deployment_preflight"),
+        label="target deployment preflight",
+    )
+    planned_deployment = _planned_campaign_path(
+        campaign_path,
+        artifacts.get("target_deployment_receipt"),
+        label="target deployment receipt",
+    )
+    if preflight_output is not None and preflight_output.resolve(strict=False) != planned_preflight:
+        raise TargetError("preflight output differs from the campaign artifact path")
+    if deployment_output is not None and deployment_output.resolve(strict=False) != planned_deployment:
+        raise TargetError("deployment output differs from the campaign artifact path")
+    for receipt_path, sidecar_name in (
+        (planned_preflight, "target_deployment_preflight_sha256"),
+        (planned_deployment, "target_deployment_receipt_sha256"),
+    ):
+        planned_sidecar = _planned_campaign_path(
+            campaign_path,
+            artifacts.get(sidecar_name),
+            label=sidecar_name,
+        )
+        portable_sidecar = (
+            portable_bundle
+            and planned_sidecar.is_file()
+            and receipt_path.is_file()
+            and planned_sidecar.read_text(encoding="utf-8")
+            == f"{sha256_file(receipt_path)}  {Path(str(artifacts.get(sidecar_name))).name.removesuffix('.sha256')}\n"
+        )
+        if planned_sidecar != receipt_sidecar(receipt_path) and not portable_sidecar:
+            raise TargetError(f"campaign {sidecar_name} path does not match its receipt")
+    release_provenance = execution_authorization.resolve_recorded_path(
+        artifacts.get("release_provenance"),
+        base=campaign_path,
+        label="release provenance",
+    )
+    access_report = execution_authorization.resolve_recorded_path(
+        artifacts.get("target_cluster_access_report"),
+        base=campaign_path,
+        label="target cluster access report",
+    )
+    access_signature = execution_authorization.resolve_recorded_path(
+        artifacts.get("target_cluster_access_signature"),
+        base=campaign_path,
+        label="target cluster access signature",
+    )
+    contract = {
+        "campaign": {
+            "sha256": sha256_file(campaign_path),
+            "campaign_id": campaign.get("campaign_id"),
+        },
+        "target_environment": target.get("target_id"),
+        "release": {
+            "source_commit": release.get("git_commit"),
+            "backend_image": release.get("backend_image"),
+            "frontend_image": release.get("frontend_image"),
+        },
+        "release_provenance_sha256": sha256_file(release_provenance),
+        "change_request_id": execution.get("change_request_id"),
+        "kubernetes": expected_kubernetes,
+        "deployment_scope": expected_target,
+        "target_cluster_access": {
+            "report_sha256": sha256_file(access_report),
+            "signature_sha256": sha256_file(access_signature),
+        },
+        "planned_outputs": {
+            "preflight": str(artifacts.get("target_deployment_preflight")),
+            "deployment": str(artifacts.get("target_deployment_receipt")),
+        },
+    }
+    return campaign, bundle, contract
+
+
+def _validate_organization_binding(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != {
+        "schema_version",
+        "authorization_id",
+        "campaign",
+        "target_environment",
+        "release",
+        "release_provenance_sha256",
+        "change_request_id",
+        "kubernetes",
+        "deployment_scope",
+        "target_cluster_access",
+        "planned_outputs",
+    }:
+        raise TargetError("organization binding has missing or unexpected fields")
+    if value.get("schema_version") != ORGANIZATION_BINDING_SCHEMA_VERSION:
+        raise TargetError("organization binding schema is unsupported")
+    campaign = value.get("campaign")
+    release = value.get("release")
+    kubernetes = value.get("kubernetes")
+    access = value.get("target_cluster_access")
+    outputs = value.get("planned_outputs")
+    if (
+        not isinstance(campaign, dict)
+        or set(campaign) != {"sha256", "campaign_id"}
+        or not isinstance(release, dict)
+        or set(release) != {"source_commit", "backend_image", "frontend_image"}
+        or not isinstance(kubernetes, dict)
+        or set(kubernetes) != {"context", "namespace", "cluster_uid", "principal"}
+        or not isinstance(access, dict)
+        or set(access) != {"report_sha256", "signature_sha256"}
+        or not isinstance(outputs, dict)
+        or set(outputs) != {"preflight", "deployment"}
+        or any(
+            re.fullmatch(r"[0-9a-f]{64}", str(digest)) is None
+            for digest in (
+                campaign.get("sha256"),
+                value.get("release_provenance_sha256"),
+                access.get("report_sha256"),
+                access.get("signature_sha256"),
+            )
+        )
+        or re.fullmatch(r"gaexec_[0-9a-f]{64}", str(campaign.get("campaign_id")))
+        is None
+        or re.fullmatch(r"gaexecauth_[0-9a-f]{64}", str(value.get("authorization_id")))
+        is None
+        or re.fullmatch(r"[0-9a-f]{40}", str(release.get("source_commit"))) is None
+        or not all(
+            _meaningful(item)
+            for item in (
+                value.get("authorization_id"),
+                campaign.get("campaign_id"),
+                value.get("target_environment"),
+                value.get("change_request_id"),
+                release.get("backend_image"),
+                release.get("frontend_image"),
+                *kubernetes.values(),
+                *outputs.values(),
+            )
+        )
+        or not isinstance(value.get("deployment_scope"), dict)
+    ):
+        raise TargetError("organization binding projection is invalid")
+    return json.loads(json.dumps(value, sort_keys=True))
+
+
+def authorize_campaign_preflight(
+    campaign_path: Path,
+    bundle_dir: Path,
+    *,
+    context: str,
+    expected_cluster_uid: str,
+    expected_principal: str,
+    output: Path,
+    now: datetime | None = None,
+    _portable_bundle: bool = False,
+) -> dict[str, Any]:
+    current = (now or utc_now()).astimezone(timezone.utc)
+    _authorization, _phase_start, target_cluster_access = _ga_apis()
+    campaign, _bundle, contract = _campaign_bundle_contract(
+        campaign_path,
+        bundle_dir,
+        context=context,
+        expected_cluster_uid=expected_cluster_uid,
+        expected_principal=expected_principal,
+        preflight_output=output,
+        portable_bundle=_portable_bundle,
+    )
+    verified_access = target_cluster_access.verify_target_cluster_access(
+        campaign_path,
+        now=current,
+    )
+    if (
+        verified_access.get("campaign_id") != campaign.get("campaign_id")
+        or verified_access.get("change_request_id") != contract["change_request_id"]
+        or verified_access.get("kubernetes") != contract["kubernetes"]
+        or verified_access.get("report", {}).get("sha256")
+        != contract["target_cluster_access"]["report_sha256"]
+        or verified_access.get("signature", {}).get("sha256")
+        != contract["target_cluster_access"]["signature_sha256"]
+    ):
+        raise TargetError("signed cluster access differs from the deployment campaign")
+    return _validate_organization_binding(
+        {
+            "schema_version": ORGANIZATION_BINDING_SCHEMA_VERSION,
+            "authorization_id": verified_access["authorization_id"],
+            **contract,
+        }
+    )
+
+
+def authorize_campaign_deployment(
+    campaign_path: Path,
+    bundle_dir: Path,
+    *,
+    phase_action_id: str,
+    context: str,
+    expected_cluster_uid: str,
+    expected_principal: str,
+    output: Path,
+    now: datetime | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    current = (now or utc_now()).astimezone(timezone.utc)
+    _authorization, phase_start, target_cluster_access = _ga_apis()
+    campaign, bundle, _contract = _campaign_bundle_contract(
+        campaign_path,
+        bundle_dir,
+        context=context,
+        expected_cluster_uid=expected_cluster_uid,
+        expected_principal=expected_principal,
+        deployment_output=output,
+    )
+    preflight_binding = authorize_campaign_preflight(
+        campaign_path,
+        bundle_dir,
+        context=context,
+        expected_cluster_uid=expected_cluster_uid,
+        expected_principal=expected_principal,
+        output=_planned_campaign_path(
+            campaign_path,
+            campaign["artifacts"]["target_deployment_preflight"],
+            label="target deployment preflight",
+        ),
+        now=current,
+    )
+    release_binding = {
+        "scope": "target-production",
+        "target_environment": campaign["target"]["target_id"],
+        "source_commit": bundle["source"]["commit"],
+        "images": {
+            "backend": {"name": bundle["target"]["backend_image"]},
+            "frontend": {"name": bundle["target"]["frontend_image"]},
+        },
+    }
+    runtime = phase_start.verify_runtime_entry(
+        campaign_path,
+        phase_id="target_deployment",
+        action_id=phase_action_id,
+        release_binding=release_binding,
+        target_environment=campaign["target"]["target_id"],
+        kubernetes_context=context,
+        namespace=bundle["target"]["namespace"],
+        now=current,
+    )
+    live_access = target_cluster_access.verify_live_target_cluster_access(
+        campaign_path,
+        phase_id="target_deployment",
+        operational_scope={
+            "context": context,
+            "namespace": bundle["target"]["namespace"],
+        },
+        now=current,
+    )
+    if (
+        live_access.get("campaign_id") != campaign.get("campaign_id")
+        or live_access.get("change_request_id")
+        != preflight_binding["change_request_id"]
+        or runtime.get("authorization_id")
+        != preflight_binding["authorization_id"]
+    ):
+        raise TargetError("live deployment authorization differs from the campaign")
+    phase_binding = {
+        "phase_id": "target_deployment",
+        "action_id": phase_action_id,
+        "authorization_id": runtime["authorization_id"],
+        "phase_started_at": runtime["phase_started_at"],
+        "verified_at": runtime["verified_at"],
+        "live_access_verified_at": live_access["verified_at"],
+    }
+    return preflight_binding, phase_binding
+
+
+def _validate_phase_binding(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != {
+        "phase_id",
+        "action_id",
+        "authorization_id",
+        "phase_started_at",
+        "verified_at",
+        "live_access_verified_at",
+    }:
+        raise TargetError("deployment phase authorization binding is invalid")
+    if (
+        value.get("phase_id") != "target_deployment"
+        or SAFE_ID_RE.fullmatch(str(value.get("action_id", ""))) is None
+        or not _meaningful(value.get("authorization_id"))
+    ):
+        raise TargetError("deployment phase authorization identity is invalid")
+    timestamps: dict[str, datetime] = {}
+    for field in ("phase_started_at", "verified_at", "live_access_verified_at"):
+        try:
+            timestamp = datetime.fromisoformat(str(value.get(field)))
+        except ValueError as exc:
+            raise TargetError(f"deployment phase authorization {field} is invalid") from exc
+        if timestamp.tzinfo is None:
+            raise TargetError(f"deployment phase authorization {field} lacks a timezone")
+        timestamps[field] = timestamp.astimezone(timezone.utc)
+    if not (
+        timestamps["phase_started_at"] <= timestamps["verified_at"]
+        and timestamps["phase_started_at"] <= timestamps["live_access_verified_at"]
+    ):
+        raise TargetError("deployment phase authorization timeline is invalid")
+    return dict(value)
 
 
 def default_runner(argv: list[str], timeout_seconds: int) -> CommandResult:
@@ -227,7 +643,10 @@ def _meaningful(value: Any) -> bool:
     return (
         isinstance(value, str)
         and bool(value.strip())
-        and not any(marker in value.lower() for marker in ("change_me", "example", "placeholder"))
+        and not any(
+            marker in value.lower()
+            for marker in ("__change_me", "example.invalid", "placeholder", "<", ">")
+        )
     )
 
 
@@ -855,6 +1274,7 @@ def validate_preflight_kubernetes(
 def collect_preflight(
     bundle_dir: Path,
     *,
+    organization_binding: dict[str, Any],
     context: str,
     expected_cluster_uid: str,
     expected_principal: str,
@@ -862,12 +1282,27 @@ def collect_preflight(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     current = (now or utc_now()).astimezone(timezone.utc)
+    organization_binding = _validate_organization_binding(organization_binding)
     bundle_dir = bundle_dir.expanduser().resolve(strict=True)
     bundle = _bundle_api().verify_bundle(bundle_dir)
     target = bundle["target"]
     context = validate_context_value(context, field="Kubernetes context")
     expected_cluster_uid = validate_context_value(expected_cluster_uid, field="cluster UID")
     expected_principal = validate_context_value(expected_principal, field="Kubernetes principal")
+    if (
+        organization_binding["release"]["source_commit"] != bundle["source"]["commit"]
+        or organization_binding["release"]["backend_image"] != target["backend_image"]
+        or organization_binding["release"]["frontend_image"] != target["frontend_image"]
+        or organization_binding["deployment_scope"] != target
+        or organization_binding["kubernetes"]
+        != {
+            "context": context,
+            "namespace": target["namespace"],
+            "cluster_uid": expected_cluster_uid,
+            "principal": expected_principal,
+        }
+    ):
+        raise TargetError("organization binding differs from the live preflight inputs")
     kubectl = Kubectl(context, runner)
     identity = observe_identity(
         kubectl,
@@ -922,6 +1357,7 @@ def collect_preflight(
             "verification": bundle["verification"],
             "manifest_sha256": manifest_digests,
         },
+        "organization_binding": organization_binding,
         "kubernetes": {
             "identity": identity,
             "version": version,
@@ -956,6 +1392,7 @@ def verify_preflight(
         "authorization_boundary",
         "observed_at",
         "bundle",
+        "organization_binding",
         "kubernetes",
         "validated_requirements",
         "remaining_external_requirements",
@@ -986,10 +1423,15 @@ def verify_preflight(
         "manifest_sha256",
     }:
         raise TargetError("preflight receipt has no bundle binding")
-    recorded_dir = Path(str(bundle.get("directory", ""))).resolve(strict=True)
-    if bundle_dir is not None and recorded_dir != bundle_dir.expanduser().resolve(strict=True):
-        raise TargetError("preflight receipt is bound to another bundle directory")
-    verified_bundle = _bundle_api().verify_bundle(recorded_dir)
+    recorded_directory = bundle.get("directory")
+    if not isinstance(recorded_directory, str) or not recorded_directory.strip():
+        raise TargetError("preflight receipt bundle directory is invalid")
+    verified_bundle_dir = (
+        bundle_dir.expanduser().resolve(strict=True)
+        if bundle_dir is not None
+        else Path(recorded_directory).resolve(strict=True)
+    )
+    verified_bundle = _bundle_api().verify_bundle(verified_bundle_dir)
     if (
         bundle.get("receipt_sha256") != verified_bundle["receipt_sha256"]
         or bundle.get("source") != verified_bundle["source"]
@@ -1000,7 +1442,7 @@ def verify_preflight(
         raise TargetError("preflight bundle binding changed")
     manifests = bundle.get("manifest_sha256")
     expected_manifests = {
-        name: sha256_file(recorded_dir / name)
+        name: sha256_file(verified_bundle_dir / name)
         for name in ("bootstrap.yaml", "migration.yaml", "applications.yaml")
     }
     if manifests != expected_manifests:
@@ -1010,6 +1452,19 @@ def verify_preflight(
         raise TargetError("preflight validated requirements changed")
     if receipt.get("remaining_external_requirements") != PENDING_AFTER_DEPLOYMENT:
         raise TargetError("preflight remaining external requirements changed")
+    organization_binding = _validate_organization_binding(
+        receipt.get("organization_binding")
+    )
+    if (
+        organization_binding["release"]["source_commit"]
+        != verified_bundle["source"]["commit"]
+        or organization_binding["release"]["backend_image"]
+        != verified_bundle["target"]["backend_image"]
+        or organization_binding["release"]["frontend_image"]
+        != verified_bundle["target"]["frontend_image"]
+        or organization_binding["deployment_scope"] != verified_bundle["target"]
+    ):
+        raise TargetError("preflight organization binding differs from its bundle or output")
     kubernetes = validate_preflight_kubernetes(
         receipt.get("kubernetes"),
         target=verified_bundle["target"],
@@ -1026,6 +1481,7 @@ def verify_preflight(
         "authorization_boundary": AUTHORIZATION_BOUNDARY,
         "receipt_sha256": sha256_file(path.resolve()),
         "bundle": bundle,
+        "organization_binding": organization_binding,
         "kubernetes": kubernetes,
         "validated_requirements": validated,
         "remaining_external_requirements": PENDING_AFTER_DEPLOYMENT,
@@ -1038,6 +1494,7 @@ def _preflight_projection(receipt: dict[str, Any]) -> dict[str, Any]:
     kubernetes = receipt["kubernetes"]
     return {
         "bundle": receipt["bundle"],
+        "organization_binding": receipt["organization_binding"],
         "identity": kubernetes["identity"],
         "version": kubernetes["version"],
         "namespace": kubernetes["namespace"],
@@ -1135,6 +1592,8 @@ def execute_deployment(
     *,
     bundle_dir: Path,
     preflight_receipt: Path,
+    organization_binding: dict[str, Any],
+    phase_binding: dict[str, Any],
     context: str,
     expected_cluster_uid: str,
     expected_principal: str,
@@ -1145,8 +1604,25 @@ def execute_deployment(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     current = (now or utc_now()).astimezone(timezone.utc)
+    organization_binding = _validate_organization_binding(organization_binding)
+    phase_binding = _validate_phase_binding(phase_binding)
+    phase_times = [
+        datetime.fromisoformat(phase_binding[field]).astimezone(timezone.utc)
+        for field in ("phase_started_at", "verified_at", "live_access_verified_at")
+    ]
+    if any(timestamp > current + MAXIMUM_CLOCK_SKEW for timestamp in phase_times):
+        raise TargetError("phase authorization is in the future")
     bundle_dir = bundle_dir.expanduser().resolve(strict=True)
     output = validate_output(output, bundle_dir=bundle_dir)
+    if Path(organization_binding["planned_outputs"]["deployment"]).resolve() != output:
+        raise TargetError("deployment output differs from the signed campaign")
+    if organization_binding["kubernetes"] != {
+        "context": context,
+        "namespace": organization_binding["deployment_scope"].get("namespace"),
+        "cluster_uid": expected_cluster_uid,
+        "principal": expected_principal,
+    }:
+        raise TargetError("deployment Kubernetes inputs differ from the signed campaign")
     if SAFE_ID_RE.fullmatch(change_request_id) is None:
         raise TargetError("change request ID must be 8-128 safe characters")
     verified_preflight = verify_preflight(
@@ -1156,6 +1632,16 @@ def execute_deployment(
         require_fresh=True,
     )
     bundle = verified_preflight["bundle"]
+    if verified_preflight["organization_binding"] != organization_binding:
+        raise TargetError("fresh deployment authorization differs from the preflight binding")
+    if phase_binding["authorization_id"] != organization_binding["authorization_id"]:
+        raise TargetError("phase authorization differs from the campaign authorization")
+    if not phase_binding["action_id"].startswith(
+        f"{organization_binding['change_request_id']}/"
+    ):
+        raise TargetError("phase action differs from the campaign change request")
+    if change_request_id != organization_binding["change_request_id"]:
+        raise TargetError("change request ID differs from the signed campaign")
     expected_confirmation = mutation_confirmation(
         context,
         bundle["target"]["namespace"],
@@ -1173,6 +1659,7 @@ def execute_deployment(
     try:
         live_preflight = collect_preflight(
             bundle_dir,
+            organization_binding=organization_binding,
             context=context,
             expected_cluster_uid=expected_cluster_uid,
             expected_principal=expected_principal,
@@ -1268,14 +1755,17 @@ def execute_deployment(
             )
             deployments.append(_validate_deployment(value, name=name, bundle=bundle))
         completed_phases.append("applications")
+        finished_at = current if now is not None else utc_now()
         receipt = {
             "schema_version": DEPLOYMENT_SCHEMA_VERSION,
             "status": DEPLOYED_STATUS,
             "authorization_boundary": AUTHORIZATION_BOUNDARY,
             "change_request_id": change_request_id,
             "observed_at": current.isoformat(),
-            "completed_at": iso_now(),
+            "completed_at": finished_at.isoformat(),
             "bundle": bundle,
+            "organization_binding": organization_binding,
+            "phase_authorization": phase_binding,
             "preflight_receipt": {
                 "path": str(preflight_receipt.resolve()),
                 "sha256": sha256_file(preflight_receipt.resolve()),
@@ -1292,15 +1782,18 @@ def execute_deployment(
     except Exception as exc:
         stage = exc.stage if isinstance(exc, TargetError) else type(exc).__name__
         status = INCOMPLETE_STATUS if mutation_started else REFUSED_STATUS
+        finished_at = current if now is not None else utc_now()
         receipt = {
             "schema_version": DEPLOYMENT_SCHEMA_VERSION,
             "status": status,
             "authorization_boundary": AUTHORIZATION_BOUNDARY,
             "change_request_id": change_request_id,
             "observed_at": current.isoformat(),
-            "failed_at": iso_now(),
+            "failed_at": finished_at.isoformat(),
             "failure": {"stage": stage, "category": type(exc).__name__},
             "bundle": bundle,
+            "organization_binding": organization_binding,
+            "phase_authorization": phase_binding,
             "preflight_receipt": {
                 "path": str(preflight_receipt.resolve()),
                 "sha256": sha256_file(preflight_receipt.resolve()),
@@ -1321,7 +1814,14 @@ def execute_deployment(
         ) from exc
 
 
-def verify_deployment(path: Path) -> dict[str, Any]:
+def verify_deployment(
+    path: Path,
+    *,
+    bundle_dir: Path | None = None,
+    preflight_receipt: Path | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    current = (now or utc_now()).astimezone(timezone.utc)
     receipt = load_receipt(path, expected_schema=DEPLOYMENT_SCHEMA_VERSION)
     status = receipt.get("status")
     if status not in {DEPLOYED_STATUS, INCOMPLETE_STATUS, REFUSED_STATUS}:
@@ -1333,6 +1833,8 @@ def verify_deployment(path: Path) -> dict[str, Any]:
         "change_request_id",
         "observed_at",
         "bundle",
+        "organization_binding",
+        "phase_authorization",
         "preflight_receipt",
         "completed_phases",
         "migration",
@@ -1350,6 +1852,7 @@ def verify_deployment(path: Path) -> dict[str, Any]:
     change_request = receipt.get("change_request_id")
     if not isinstance(change_request, str) or SAFE_ID_RE.fullmatch(change_request) is None:
         raise TargetError("deployment receipt change request ID is invalid")
+    parsed_times: dict[str, datetime] = {}
     for field in ("observed_at", "completed_at" if status == DEPLOYED_STATUS else "failed_at"):
         try:
             timestamp = datetime.fromisoformat(str(receipt[field]))
@@ -1357,6 +1860,13 @@ def verify_deployment(path: Path) -> dict[str, Any]:
             raise TargetError(f"deployment receipt {field} is invalid") from exc
         if timestamp.tzinfo is None:
             raise TargetError(f"deployment receipt {field} lacks a timezone")
+        parsed_times[field] = timestamp.astimezone(timezone.utc)
+    terminal_field = "completed_at" if status == DEPLOYED_STATUS else "failed_at"
+    if not (
+        parsed_times["observed_at"] <= parsed_times[terminal_field]
+        and parsed_times[terminal_field] <= current + MAXIMUM_CLOCK_SKEW
+    ):
+        raise TargetError("deployment receipt timeline is invalid")
     bundle = receipt.get("bundle")
     if not isinstance(bundle, dict) or set(bundle) != {
         "directory",
@@ -1368,23 +1878,73 @@ def verify_deployment(path: Path) -> dict[str, Any]:
         "manifest_sha256",
     }:
         raise TargetError("deployment receipt has no bundle binding")
-    bundle_dir = Path(str(bundle.get("directory", ""))).resolve(strict=True)
-    verified_bundle = _bundle_api().verify_bundle(bundle_dir)
+    recorded_bundle_dir = bundle.get("directory")
+    if not isinstance(recorded_bundle_dir, str) or not recorded_bundle_dir.strip():
+        raise TargetError("deployment receipt bundle directory is invalid")
+    verified_bundle_dir = (
+        bundle_dir.expanduser().resolve(strict=True)
+        if bundle_dir is not None
+        else Path(recorded_bundle_dir).resolve(strict=True)
+    )
+    verified_bundle = _bundle_api().verify_bundle(verified_bundle_dir)
     if any(
         bundle.get(key) != verified_bundle.get(key)
         for key in ("receipt_sha256", "source", "target", "migration_job", "verification")
     ):
         raise TargetError("deployment receipt bundle binding changed")
+    expected_manifests = {
+        name: sha256_file(verified_bundle_dir / name)
+        for name in ("bootstrap.yaml", "migration.yaml", "applications.yaml")
+    }
+    if bundle.get("manifest_sha256") != expected_manifests:
+        raise TargetError("deployment receipt manifest binding changed")
+    organization_binding = _validate_organization_binding(
+        receipt.get("organization_binding")
+    )
+    phase_binding = _validate_phase_binding(receipt.get("phase_authorization"))
+    if (
+        organization_binding["release"]["source_commit"]
+        != verified_bundle["source"]["commit"]
+        or organization_binding["release"]["backend_image"]
+        != verified_bundle["target"]["backend_image"]
+        or organization_binding["release"]["frontend_image"]
+        != verified_bundle["target"]["frontend_image"]
+        or organization_binding["deployment_scope"] != verified_bundle["target"]
+        or organization_binding["change_request_id"] != change_request
+        or organization_binding["authorization_id"]
+        != phase_binding["authorization_id"]
+        or not phase_binding["action_id"].startswith(f"{change_request}/")
+    ):
+        raise TargetError("deployment organization binding differs from its receipt")
     preflight_reference = receipt.get("preflight_receipt")
     if not isinstance(preflight_reference, dict) or set(preflight_reference) != {
         "path",
         "sha256",
     }:
         raise TargetError("deployment receipt has no preflight reference")
-    preflight_path = Path(str(preflight_reference.get("path", ""))).resolve(strict=True)
+    recorded_preflight_path = preflight_reference.get("path")
+    if not isinstance(recorded_preflight_path, str) or not recorded_preflight_path.strip():
+        raise TargetError("deployment preflight reference path is invalid")
+    preflight_path = (
+        preflight_receipt.expanduser().resolve(strict=True)
+        if preflight_receipt is not None
+        else Path(recorded_preflight_path).resolve(strict=True)
+    )
     if sha256_file(preflight_path) != preflight_reference.get("sha256"):
         raise TargetError("deployment preflight reference changed")
-    verify_preflight(preflight_path, bundle_dir=bundle_dir)
+    verified_preflight = verify_preflight(
+        preflight_path,
+        bundle_dir=verified_bundle_dir,
+        now=current,
+    )
+    if verified_preflight["organization_binding"] != organization_binding:
+        raise TargetError("deployment preflight binding differs from its receipt")
+    phase_times = [
+        datetime.fromisoformat(phase_binding[field]).astimezone(timezone.utc)
+        for field in ("phase_started_at", "verified_at", "live_access_verified_at")
+    ]
+    if any(timestamp > parsed_times["observed_at"] for timestamp in phase_times):
+        raise TargetError("deployment started before its signed phase authorization")
     completed = receipt.get("completed_phases")
     allowed_prefixes = [[], ["bootstrap"], ["bootstrap", "migration"], ["bootstrap", "migration", "applications"]]
     if completed not in allowed_prefixes:
@@ -1525,8 +2085,134 @@ def verify_deployment(path: Path) -> dict[str, Any]:
         "authorization_boundary": AUTHORIZATION_BOUNDARY,
         "receipt_sha256": sha256_file(path.resolve()),
         "bundle_receipt_sha256": bundle["receipt_sha256"],
+        "organization_binding": organization_binding,
+        "phase_authorization": phase_binding,
         "completed_phases": completed,
         "remaining_external_requirements": PENDING_AFTER_DEPLOYMENT,
+    }
+
+
+def verify_campaign_deployment(
+    campaign_path: Path,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    current = (now or utc_now()).astimezone(timezone.utc)
+    execution_authorization, phase_start, _target_access = _ga_apis()
+    campaign_path = campaign_path.expanduser().resolve(strict=True)
+    campaign = execution_authorization.validate_campaign(campaign_path)
+    execution = campaign["execution"]
+    artifacts = campaign["artifacts"]
+    bundle_artifacts = {
+        "bootstrap.yaml": "target_deployment_bundle_bootstrap",
+        "migration.yaml": "target_deployment_bundle_migration",
+        "applications.yaml": "target_deployment_bundle_applications",
+        "receipt.json": "target_deployment_bundle_receipt",
+        "receipt.sha256": "target_deployment_bundle_receipt_sha256",
+    }
+    preflight_path = _planned_campaign_path(
+        campaign_path,
+        artifacts.get("target_deployment_preflight"),
+        label="target deployment preflight",
+    )
+    deployment_path = _planned_campaign_path(
+        campaign_path,
+        artifacts.get("target_deployment_receipt"),
+        label="target deployment receipt",
+    )
+    with tempfile.TemporaryDirectory(prefix="duckdock-ga-target-deployment-") as directory:
+        temporary_root = Path(directory)
+        temporary_root.chmod(0o700)
+        bundle_dir = temporary_root / "bundle"
+        bundle_dir.mkdir(mode=0o700)
+        bundle_dir.chmod(0o700)
+        for name, artifact_name in bundle_artifacts.items():
+            source = execution_authorization.resolve_recorded_path(
+                artifacts.get(artifact_name),
+                base=campaign_path,
+                label=artifact_name,
+            )
+            target = bundle_dir / name
+            shutil.copyfile(source, target)
+            target.chmod(0o600)
+        organization_binding = authorize_campaign_preflight(
+            campaign_path,
+            bundle_dir,
+            context=str(execution["kubernetes_context"]),
+            expected_cluster_uid=str(execution["kubernetes_cluster_uid"]),
+            expected_principal=str(execution["kubernetes_principal"]),
+            output=preflight_path,
+            now=current,
+            _portable_bundle=True,
+        )
+        receipt_dir = temporary_root / "receipts"
+        receipt_dir.mkdir(mode=0o700)
+        staged_receipts: dict[str, Path] = {}
+        for label, source, sidecar_artifact in (
+            (
+                "preflight",
+                preflight_path,
+                "target_deployment_preflight_sha256",
+            ),
+            (
+                "deployment",
+                deployment_path,
+                "target_deployment_receipt_sha256",
+            ),
+        ):
+            staged = receipt_dir / source.name
+            shutil.copyfile(source, staged)
+            staged.chmod(0o600)
+            source_sidecar = execution_authorization.resolve_recorded_path(
+                artifacts.get(sidecar_artifact),
+                base=campaign_path,
+                label=sidecar_artifact,
+            )
+            staged_sidecar = receipt_sidecar(staged)
+            shutil.copyfile(source_sidecar, staged_sidecar)
+            staged_sidecar.chmod(0o600)
+            staged_receipts[label] = staged
+        preflight = verify_preflight(
+            staged_receipts["preflight"],
+            bundle_dir=bundle_dir,
+            now=current,
+        )
+        deployment = verify_deployment(
+            staged_receipts["deployment"],
+            bundle_dir=bundle_dir,
+            preflight_receipt=staged_receipts["preflight"],
+            now=current,
+        )
+        phase = phase_start.verify_phase_start(
+            campaign_path,
+            phase_id="target_deployment",
+            now=current,
+        )
+    phase_binding = deployment["phase_authorization"]
+    if (
+        preflight["organization_binding"] != organization_binding
+        or deployment["organization_binding"] != organization_binding
+        or not deployment["status"].startswith(DEPLOYED_STATUS)
+        or phase_binding["phase_id"] != "target_deployment"
+        or phase_binding["action_id"] != phase["action"]["action_id"]
+        or phase_binding["authorization_id"] != phase["authorization_id"]
+        or phase_binding["phase_started_at"] != phase["started_at"]
+    ):
+        raise TargetError("persisted target deployment differs from its signed campaign")
+    return {
+        "schema_version": "duckdock-kubernetes-ha-campaign-deployment-verification-v1",
+        "status": "TARGET_HA_CAMPAIGN_DEPLOYMENT_VERIFIED_NOT_GA_AUTHORIZED",
+        "authorization_boundary": AUTHORIZATION_BOUNDARY,
+        "campaign_id": campaign["campaign_id"],
+        "authorization_id": organization_binding["authorization_id"],
+        "target_environment": organization_binding["target_environment"],
+        "change_request_id": organization_binding["change_request_id"],
+        "phase_action_id": phase_binding["action_id"],
+        "bundle_receipt_sha256": deployment["bundle_receipt_sha256"],
+        "preflight_receipt_sha256": preflight["receipt_sha256"],
+        "deployment_receipt_sha256": deployment["receipt_sha256"],
+        "completed_phases": deployment["completed_phases"],
+        "verified_at": current.isoformat(),
     }
 
 
@@ -1536,6 +2222,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     preflight = subparsers.add_parser("preflight", help="Run target I/O and server-side dry-run without persistence")
     preflight.add_argument("--bundle-dir", type=Path, required=True)
+    preflight.add_argument("--execution-campaign", type=Path, required=True)
     preflight.add_argument("--context", required=True)
     preflight.add_argument("--expected-cluster-uid", required=True)
     preflight.add_argument("--expected-principal", required=True)
@@ -1544,6 +2231,8 @@ def build_parser() -> argparse.ArgumentParser:
     deploy = subparsers.add_parser("deploy", help="Apply the three target phases after a fresh preflight")
     deploy.add_argument("--bundle-dir", type=Path, required=True)
     deploy.add_argument("--preflight-receipt", type=Path, required=True)
+    deploy.add_argument("--execution-campaign", type=Path, required=True)
+    deploy.add_argument("--phase-action-id", required=True)
     deploy.add_argument("--context", required=True)
     deploy.add_argument("--expected-cluster-uid", required=True)
     deploy.add_argument("--expected-principal", required=True)
@@ -1557,6 +2246,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     verify_deployment_parser = subparsers.add_parser("verify-deployment", help="Verify a deployment receipt offline")
     verify_deployment_parser.add_argument("--receipt", type=Path, required=True)
+    verify_campaign_parser = subparsers.add_parser(
+        "verify-campaign-deployment",
+        help="Reverify the campaign-bound target deployment without target I/O",
+    )
+    verify_campaign_parser.add_argument("--execution-campaign", type=Path, required=True)
     return parser
 
 
@@ -1566,8 +2260,17 @@ def main() -> int:
         if args.command == "preflight":
             bundle_dir = args.bundle_dir.expanduser().resolve(strict=True)
             output = validate_output(args.output, bundle_dir=bundle_dir)
+            organization_binding = authorize_campaign_preflight(
+                args.execution_campaign,
+                bundle_dir,
+                context=args.context,
+                expected_cluster_uid=args.expected_cluster_uid,
+                expected_principal=args.expected_principal,
+                output=output,
+            )
             receipt = collect_preflight(
                 bundle_dir,
+                organization_binding=organization_binding,
                 context=args.context,
                 expected_cluster_uid=args.expected_cluster_uid,
                 expected_principal=args.expected_principal,
@@ -1575,9 +2278,20 @@ def main() -> int:
             digest = write_receipt(output, receipt)
             result = {**receipt, "receipt_path": str(output), "receipt_sha256": digest}
         elif args.command == "deploy":
+            organization_binding, phase_binding = authorize_campaign_deployment(
+                args.execution_campaign,
+                args.bundle_dir,
+                phase_action_id=args.phase_action_id,
+                context=args.context,
+                expected_cluster_uid=args.expected_cluster_uid,
+                expected_principal=args.expected_principal,
+                output=args.output,
+            )
             result = execute_deployment(
                 bundle_dir=args.bundle_dir,
                 preflight_receipt=args.preflight_receipt,
+                organization_binding=organization_binding,
+                phase_binding=phase_binding,
                 context=args.context,
                 expected_cluster_uid=args.expected_cluster_uid,
                 expected_principal=args.expected_principal,
@@ -1587,8 +2301,10 @@ def main() -> int:
             )
         elif args.command == "verify-preflight":
             result = verify_preflight(args.receipt, bundle_dir=args.bundle_dir)
-        else:
+        elif args.command == "verify-deployment":
             result = verify_deployment(args.receipt)
+        else:
+            result = verify_campaign_deployment(args.execution_campaign)
     except (TargetError, OSError, KeyError, TypeError, ValueError) as exc:
         print(f"HA target deployment refused: {exc}", file=sys.stderr)
         return 2

@@ -253,18 +253,70 @@ def _create_preflight(
     bundle_dir: Path,
     cluster: FakeCluster,
     now: datetime,
+    deployment_output: Path | None = None,
 ) -> Path:
+    deployment_output = deployment_output or (tmp_path / "deployment.json")
+    bundle = ha_bundle.verify_bundle(bundle_dir)
+    preflight_path = tmp_path / "preflight.json"
+    organization_binding = {
+        "schema_version": ha_deploy.ORGANIZATION_BINDING_SCHEMA_VERSION,
+        "authorization_id": "gaexecauth_" + "1" * 64,
+        "campaign": {
+            "sha256": "2" * 64,
+            "campaign_id": "gaexec_" + "3" * 64,
+        },
+        "target_environment": "duckdock-production",
+        "release": {
+            "source_commit": SOURCE["commit"],
+            "backend_image": BACKEND_IMAGE,
+            "frontend_image": FRONTEND_IMAGE,
+        },
+        "release_provenance_sha256": "4" * 64,
+        "change_request_id": "CHG-20260807-001",
+        "kubernetes": {
+            "context": CONTEXT,
+            "namespace": NAMESPACE,
+            "cluster_uid": CLUSTER_UID,
+            "principal": PRINCIPAL,
+        },
+        "deployment_scope": bundle["target"],
+        "target_cluster_access": {
+            "report_sha256": "5" * 64,
+            "signature_sha256": "6" * 64,
+        },
+        "planned_outputs": {
+            "preflight": str(preflight_path),
+            "deployment": str(deployment_output),
+        },
+    }
     receipt = ha_deploy.collect_preflight(
         bundle_dir,
+        organization_binding=organization_binding,
         context=CONTEXT,
         expected_cluster_uid=CLUSTER_UID,
         expected_principal=PRINCIPAL,
         runner=cluster,
         now=now,
     )
-    path = tmp_path / "preflight.json"
-    ha_deploy.write_receipt(path, receipt)
-    return path
+    ha_deploy.write_receipt(preflight_path, receipt)
+    return preflight_path
+
+
+def _organization_binding(preflight_path: Path) -> dict[str, Any]:
+    return json.loads(preflight_path.read_text(encoding="utf-8"))[
+        "organization_binding"
+    ]
+
+
+def _phase_binding(now: datetime) -> dict[str, str]:
+    return {
+        "phase_id": "target_deployment",
+        "action_id": "CHG-20260807-001/target-deployment/001",
+        "authorization_id": "gaexecauth_" + "1" * 64,
+        "phase_started_at": now.isoformat(),
+        "verified_at": now.isoformat(),
+        "live_access_verified_at": now.isoformat(),
+    }
 
 
 def test_preflight_binds_target_and_server_side_dry_runs(
@@ -378,6 +430,16 @@ def test_preflight_rejects_target_drift(
     with pytest.raises(ha_deploy.TargetError, match=match):
         ha_deploy.collect_preflight(
             bundle_dir,
+            organization_binding={
+                **_organization_binding(
+                    _create_preflight(
+                        tmp_path,
+                        bundle_dir,
+                        FakeCluster(),
+                        datetime.now(timezone.utc),
+                    )
+                )
+            },
             context=CONTEXT,
             expected_cluster_uid=CLUSTER_UID,
             expected_principal=PRINCIPAL,
@@ -390,13 +452,17 @@ def test_deploy_runs_exact_phases_and_verifies_receipt(
 ) -> None:
     bundle_dir = _prepared_bundle(tmp_path, monkeypatch)
     now = datetime.now(timezone.utc)
-    preflight_path = _create_preflight(tmp_path, bundle_dir, FakeCluster(), now)
-    bundle_digest = ha_bundle.verify_bundle(bundle_dir)["receipt_sha256"]
     output = tmp_path / "deployment.json"
+    preflight_path = _create_preflight(
+        tmp_path, bundle_dir, FakeCluster(), now, deployment_output=output
+    )
+    bundle_digest = ha_bundle.verify_bundle(bundle_dir)["receipt_sha256"]
 
     result = ha_deploy.execute_deployment(
         bundle_dir=bundle_dir,
         preflight_receipt=preflight_path,
+        organization_binding=_organization_binding(preflight_path),
+        phase_binding=_phase_binding(now),
         context=CONTEXT,
         expected_cluster_uid=CLUSTER_UID,
         expected_principal=PRINCIPAL,
@@ -424,18 +490,22 @@ def test_deploy_requires_exact_content_addressed_confirmation(
 ) -> None:
     bundle_dir = _prepared_bundle(tmp_path, monkeypatch)
     now = datetime.now(timezone.utc)
-    preflight_path = _create_preflight(tmp_path, bundle_dir, FakeCluster(), now)
     cluster = FakeCluster()
     output = tmp_path / "must-not-exist.json"
+    preflight_path = _create_preflight(
+        tmp_path, bundle_dir, FakeCluster(), now, deployment_output=output
+    )
 
     with pytest.raises(ha_deploy.TargetError, match="confirmation"):
         ha_deploy.execute_deployment(
             bundle_dir=bundle_dir,
             preflight_receipt=preflight_path,
+            organization_binding=_organization_binding(preflight_path),
+            phase_binding=_phase_binding(now),
             context=CONTEXT,
             expected_cluster_uid=CLUSTER_UID,
             expected_principal=PRINCIPAL,
-            change_request_id="CHG-20260807-003",
+            change_request_id="CHG-20260807-001",
             confirmation="APPLY_DUCKDOCK_HA_TARGET:wrong",
             output=output,
             runner=cluster,
@@ -446,23 +516,115 @@ def test_deploy_requires_exact_content_addressed_confirmation(
     assert cluster.calls == []
 
 
+def test_deploy_rejects_phase_action_from_another_change_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle_dir = _prepared_bundle(tmp_path, monkeypatch)
+    now = datetime.now(timezone.utc)
+    cluster = FakeCluster()
+    output = tmp_path / "must-not-exist-phase.json"
+    preflight_path = _create_preflight(
+        tmp_path, bundle_dir, FakeCluster(), now, deployment_output=output
+    )
+    phase_binding = _phase_binding(now)
+    phase_binding["action_id"] = "OTHER-CHANGE/target-deployment/001"
+
+    with pytest.raises(ha_deploy.TargetError, match="campaign change request"):
+        ha_deploy.execute_deployment(
+            bundle_dir=bundle_dir,
+            preflight_receipt=preflight_path,
+            organization_binding=_organization_binding(preflight_path),
+            phase_binding=phase_binding,
+            context=CONTEXT,
+            expected_cluster_uid=CLUSTER_UID,
+            expected_principal=PRINCIPAL,
+            change_request_id="CHG-20260807-001",
+            confirmation=ha_deploy.mutation_confirmation(
+                CONTEXT,
+                NAMESPACE,
+                ha_bundle.verify_bundle(bundle_dir)["receipt_sha256"],
+            ),
+            output=output,
+            runner=cluster,
+            now=now,
+        )
+
+    assert not output.exists()
+    assert cluster.calls == []
+
+
+def test_deployment_rejects_substituted_preflight_organization_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle_dir = _prepared_bundle(tmp_path, monkeypatch)
+    now = datetime.now(timezone.utc)
+    output = tmp_path / "deployment-substituted-preflight.json"
+    preflight_path = _create_preflight(
+        tmp_path, bundle_dir, FakeCluster(), now, deployment_output=output
+    )
+    ha_deploy.execute_deployment(
+        bundle_dir=bundle_dir,
+        preflight_receipt=preflight_path,
+        organization_binding=_organization_binding(preflight_path),
+        phase_binding=_phase_binding(now),
+        context=CONTEXT,
+        expected_cluster_uid=CLUSTER_UID,
+        expected_principal=PRINCIPAL,
+        change_request_id="CHG-20260807-001",
+        confirmation=ha_deploy.mutation_confirmation(
+            CONTEXT,
+            NAMESPACE,
+            ha_bundle.verify_bundle(bundle_dir)["receipt_sha256"],
+        ),
+        output=output,
+        runner=FakeCluster(),
+        now=now,
+    )
+
+    substituted = json.loads(preflight_path.read_text(encoding="utf-8"))
+    substituted["organization_binding"]["release_provenance_sha256"] = "9" * 64
+    payload = json.dumps(substituted, indent=2, sort_keys=True).encode() + b"\n"
+    preflight_path.write_bytes(payload)
+    ha_deploy.receipt_sidecar(preflight_path).write_text(
+        f"{hashlib.sha256(payload).hexdigest()}  {preflight_path.name}\n",
+        encoding="utf-8",
+    )
+    deployment = json.loads(output.read_text(encoding="utf-8"))
+    deployment["preflight_receipt"]["sha256"] = hashlib.sha256(payload).hexdigest()
+    deployment_payload = (
+        json.dumps(deployment, indent=2, sort_keys=True).encode() + b"\n"
+    )
+    output.write_bytes(deployment_payload)
+    ha_deploy.receipt_sidecar(output).write_text(
+        f"{hashlib.sha256(deployment_payload).hexdigest()}  {output.name}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ha_deploy.TargetError, match="preflight binding differs"):
+        ha_deploy.verify_deployment(output, now=now)
+
+
 def test_partial_deployment_persists_immutable_incomplete_receipt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     bundle_dir = _prepared_bundle(tmp_path, monkeypatch)
     now = datetime.now(timezone.utc)
-    preflight_path = _create_preflight(tmp_path, bundle_dir, FakeCluster(), now)
-    bundle_digest = ha_bundle.verify_bundle(bundle_dir)["receipt_sha256"]
     output = tmp_path / "deployment-incomplete.json"
+    preflight_path = _create_preflight(
+        tmp_path, bundle_dir, FakeCluster(), now, deployment_output=output
+    )
+    bundle_digest = ha_bundle.verify_bundle(bundle_dir)["receipt_sha256"]
 
     with pytest.raises(ha_deploy.TargetError, match="apply_applications"):
         ha_deploy.execute_deployment(
             bundle_dir=bundle_dir,
             preflight_receipt=preflight_path,
+            organization_binding=_organization_binding(preflight_path),
+            phase_binding=_phase_binding(now),
             context=CONTEXT,
             expected_cluster_uid=CLUSTER_UID,
             expected_principal=PRINCIPAL,
-            change_request_id="CHG-20260807-002",
+            change_request_id="CHG-20260807-001",
             confirmation=ha_deploy.mutation_confirmation(
                 CONTEXT, NAMESPACE, bundle_digest
             ),
@@ -488,18 +650,22 @@ def test_incomplete_receipt_rejects_tampered_rollout_projection(
 ) -> None:
     bundle_dir = _prepared_bundle(tmp_path, monkeypatch)
     now = datetime.now(timezone.utc)
-    preflight_path = _create_preflight(tmp_path, bundle_dir, FakeCluster(), now)
-    bundle_digest = ha_bundle.verify_bundle(bundle_dir)["receipt_sha256"]
     output = tmp_path / "deployment-incomplete-tampered.json"
+    preflight_path = _create_preflight(
+        tmp_path, bundle_dir, FakeCluster(), now, deployment_output=output
+    )
+    bundle_digest = ha_bundle.verify_bundle(bundle_dir)["receipt_sha256"]
 
     with pytest.raises(ha_deploy.TargetError, match="apply_applications"):
         ha_deploy.execute_deployment(
             bundle_dir=bundle_dir,
             preflight_receipt=preflight_path,
+            organization_binding=_organization_binding(preflight_path),
+            phase_binding=_phase_binding(now),
             context=CONTEXT,
             expected_cluster_uid=CLUSTER_UID,
             expected_principal=PRINCIPAL,
-            change_request_id="CHG-20260807-004",
+            change_request_id="CHG-20260807-001",
             confirmation=ha_deploy.mutation_confirmation(
                 CONTEXT, NAMESPACE, bundle_digest
             ),

@@ -20,7 +20,7 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 HA_BASE = REPO_ROOT / "ops" / "kubernetes" / "ha"
-SCHEMA_VERSION = "duckdock-kubernetes-ha-target-bundle-v1"
+SCHEMA_VERSION = "duckdock-kubernetes-ha-target-bundle-v2"
 AUTHORIZATION_SCOPE = (
     "prepared target deployment manifests only; server-side dry-run, live rollout, "
     "fault injection, state-service verification and GA authorization remain mandatory"
@@ -672,7 +672,7 @@ def prepare_bundle(args: argparse.Namespace) -> dict[str, Any]:
         path.write_text(dump_documents(phases[name]), encoding="utf-8")
         files.append(
             {
-                "path": name,
+                "name": name,
                 "sha256": sha256_file(path),
                 "size": path.stat().st_size,
                 "resource_count": len(phases[name]),
@@ -757,15 +757,15 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
     )
     expected_names = list(PHASE_FILES)
     entries = receipt.get("files")
-    _require(isinstance(entries, list) and [item.get("path") for item in entries] == expected_names, "bundle file manifest is not exact")
+    _require(isinstance(entries, list) and [item.get("name") for item in entries] == expected_names, "bundle file manifest is not exact")
     phases: dict[str, list[dict[str, Any]]] = {}
     for entry in entries:
         _require(
             isinstance(entry, dict)
-            and set(entry) == {"path", "sha256", "size", "resource_count"},
+            and set(entry) == {"name", "sha256", "size", "resource_count"},
             "bundle file entry has missing or unexpected fields",
         )
-        path = directory / entry["path"]
+        path = directory / entry["name"]
         _require(path.parent == directory, "bundle file escaped its directory")
         _require(path.stat().st_mode & 0o077 == 0, f"bundle file is accessible by group or others: {path.name}")
         _require(sha256_file(path) == entry.get("sha256"), f"bundle digest mismatch: {path.name}")
