@@ -94,6 +94,47 @@ def sha256_bytes(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def output_artifact_manifest(output_dir: Path) -> list[dict[str, object]]:
+    artifacts: list[dict[str, object]] = []
+    for current_root, directory_names, file_names in os.walk(output_dir, followlinks=False):
+        current = Path(current_root)
+        for name in directory_names:
+            directory = current / name
+            if directory.is_symlink():
+                raise ValueError(f"symbolic-link output artifact is forbidden: {directory}")
+        for name in file_names:
+            path = current / name
+            if path.is_symlink():
+                raise ValueError(f"symbolic-link output artifact is forbidden: {path}")
+            payload = path.read_bytes()
+            artifacts.append(
+                {
+                    "path": str(path.relative_to(output_dir)),
+                    "sha256": sha256_bytes(payload),
+                    "size": len(payload),
+                }
+            )
+    return sorted(artifacts, key=lambda item: str(item["path"]))
+
+
+def harden_output_tree(output_dir: Path) -> None:
+    for current_root, directory_names, file_names in os.walk(output_dir, followlinks=False):
+        current = Path(current_root)
+        if current.is_symlink():
+            raise ValueError(f"symbolic-link output directory is forbidden: {current}")
+        current.chmod(0o700)
+        for name in directory_names:
+            directory = current / name
+            if directory.is_symlink():
+                raise ValueError(f"symbolic-link output directory is forbidden: {directory}")
+            directory.chmod(0o700)
+        for name in file_names:
+            path = current / name
+            if path.is_symlink():
+                raise ValueError(f"symbolic-link output artifact is forbidden: {path}")
+            path.chmod(0o600)
+
+
 def run_git(*args: str) -> str:
     completed = subprocess.run(
         ["git", *args],
@@ -395,10 +436,12 @@ def run_check(check: CommandCheck, logs_dir: Path) -> CheckResult:
 def write_receipt(output_dir: Path, receipt: dict[str, object]) -> tuple[Path, str]:
     payload = (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode()
     receipt_path = output_dir / "receipt.json"
+    sidecar = output_dir / "receipt.json.sha256"
+    if receipt_path.exists() or sidecar.exists():
+        raise ValueError("preflight receipt outputs must not already exist")
     receipt_path.write_bytes(payload)
     receipt_path.chmod(0o600)
     digest = sha256_bytes(payload)
-    sidecar = output_dir / "receipt.json.sha256"
     sidecar.write_text(f"{digest}  receipt.json\n", encoding="utf-8")
     sidecar.chmod(0o600)
     if sha256_bytes(receipt_path.read_bytes()) != digest:
@@ -433,6 +476,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             if result.status == "BLOCK" and args.fail_fast:
                 break
         status = "PASS" if len(results) == len(checks) and all(item.status == "PASS" for item in results) else "BLOCK"
+        artifacts = output_artifact_manifest(output_dir)
         receipt = {
             "schema_version": SCHEMA_VERSION,
             "status": status,
@@ -446,6 +490,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             "planned_check_count": len(checks),
             "executed_check_count": len(results),
             "checks": [asdict(item) for item in results],
+            "artifact_count": len(artifacts),
+            "artifacts": artifacts,
             "external_pending_count": len(EXTERNAL_REQUIREMENTS),
             "external_requirements": list(EXTERNAL_REQUIREMENTS),
             "next_action": (
@@ -455,6 +501,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             ),
         }
         receipt_path, digest = write_receipt(output_dir, receipt)
+        harden_output_tree(output_dir)
     except (OSError, RuntimeError, subprocess.CalledProcessError, ValueError, json.JSONDecodeError) as exc:
         print(f"GA local preflight failed: {exc}", file=sys.stderr)
         return 3

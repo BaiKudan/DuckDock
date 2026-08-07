@@ -113,3 +113,33 @@ def test_receipt_is_content_addressed_and_not_overwritten(tmp_path):
 
     assert preflight.sha256_bytes(path.read_bytes()) == digest
     assert (output / "receipt.json.sha256").read_text().startswith(digest)
+    with pytest.raises(ValueError, match="must not already exist"):
+        preflight.write_receipt(output, receipt)
+
+
+def test_output_artifacts_are_manifested_hardened_and_symlink_safe(tmp_path):
+    preflight = load_preflight_module()
+    output = tmp_path / "receipt"
+    nested = output / "playwright"
+    nested.mkdir(parents=True)
+    artifact = nested / ".last-run.json"
+    artifact.write_text('{"status":"passed"}\n', encoding="utf-8")
+
+    manifest = preflight.output_artifact_manifest(output)
+    preflight.harden_output_tree(output)
+
+    assert manifest == [
+        {
+            "path": "playwright/.last-run.json",
+            "sha256": preflight.sha256_bytes(artifact.read_bytes()),
+            "size": artifact.stat().st_size,
+        }
+    ]
+    assert output.stat().st_mode & 0o777 == 0o700
+    assert nested.stat().st_mode & 0o777 == 0o700
+    assert artifact.stat().st_mode & 0o777 == 0o600
+
+    link = output / "artifact-link"
+    link.symlink_to(artifact)
+    with pytest.raises(ValueError, match="symbolic-link output artifact is forbidden"):
+        preflight.output_artifact_manifest(output)
