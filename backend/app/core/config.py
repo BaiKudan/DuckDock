@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     APP_NAME: str = "DuckDock"
     DEBUG: bool = False
     API_V1_PREFIX: str = "/api/v1"
+    API_V2_PREFIX: str = "/api/v2"
 
     @field_validator("DEBUG", mode="before")
     @classmethod
@@ -40,6 +41,57 @@ class Settings(BaseSettings):
 
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
+
+    # Transactional Outbox dispatcher. Domain writes never call Redis/Celery;
+    # the dispatcher leases committed rows and publishes them afterward.
+    OUTBOX_BATCH_SIZE: int = 50
+    OUTBOX_LEASE_SECONDS: int = 60
+    OUTBOX_MAX_ATTEMPTS: int = 5
+    OUTBOX_BASE_RETRY_SECONDS: int = 5
+    OUTBOX_MAX_RETRY_SECONDS: int = 3600
+    OUTBOX_DISPATCH_SCHEDULE_SECONDS: int = 5
+    EVALUATION_LEASE_SECONDS: int = 300
+    EVALUATION_HEARTBEAT_SECONDS: int = 60
+    EVALUATION_MAX_ATTEMPTS: int = 3
+    EVALUATION_BASE_RETRY_SECONDS: int = 15
+    EVALUATION_MAX_RETRY_SECONDS: int = 900
+    EVALUATION_MAX_CONCURRENCY: int = 5
+    EVALUATION_DISPATCH_SCHEDULE_SECONDS: int = 10
+    EVALUATION_DISPATCH_BATCH_SIZE: int = 50
+    ANNOTATION_QUEUE_LEASE_SECONDS: int = 300
+    ANNOTATION_QUEUE_MAX_ATTEMPTS: int = 5
+    ANNOTATION_QUEUE_BASE_RETRY_SECONDS: int = 15
+    ANNOTATION_QUEUE_MAX_RETRY_SECONDS: int = 900
+    ANNOTATION_QUEUE_DISPATCH_SCHEDULE_SECONDS: int = 10
+    ANNOTATION_QUEUE_DISPATCH_BATCH_SIZE: int = 50
+    SEMANTIC_MONITOR_LEASE_SECONDS: int = 300
+    SEMANTIC_MONITOR_MAX_ATTEMPTS: int = 3
+    SEMANTIC_MONITOR_BASE_RETRY_SECONDS: int = 15
+    SEMANTIC_MONITOR_MAX_RETRY_SECONDS: int = 900
+    SEMANTIC_MONITOR_DISPATCH_SCHEDULE_SECONDS: int = 10
+    SEMANTIC_MONITOR_DISPATCH_BATCH_SIZE: int = 20
+
+    # Foundation Reporter Session/Run starts are rollout controlled. Disabling
+    # this blocks new work while completion endpoints remain available so
+    # already accepted executions can reach a durable terminal state.
+    AGENT_EXECUTION_INGESTION_ENABLED: bool = False
+    AGENT_EXECUTION_RUNTIME_ALLOWLIST: Annotated[list[int], NoDecode] = []
+
+    @field_validator("AGENT_EXECUTION_RUNTIME_ALLOWLIST", mode="before")
+    @classmethod
+    def parse_execution_runtime_allowlist(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        stripped = value.strip()
+        if not stripped:
+            return []
+        if stripped.startswith("["):
+            return json.loads(stripped)
+        return [
+            int(entry.strip())
+            for entry in stripped.split(",")
+            if entry.strip()
+        ]
 
     # SEC-03: Redis token-bucket rate limiter for auth/token/register endpoints.
     # CRITICAL SAFETY: default OFF so dev/tests + `from app.main import app` are unaffected.
@@ -71,7 +123,7 @@ class Settings(BaseSettings):
 
     # JWT
     SECRET_KEY: str = INSECURE_SECRET_KEY_DEFAULT
-    # 运行时凭证加密密钥(specs/001 FR-016)— Fernet key,独立于 SECRET_KEY,
+    # 运行时凭证加密密钥：Fernet key，独立于 SECRET_KEY。
     # 生成:python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
     DUCKDOCK_CREDENTIAL_KEY: str = ""
     ALGORITHM: str = "HS256"
@@ -119,6 +171,18 @@ class Settings(BaseSettings):
     REPORT_UPLOAD_URL_EXPIRE_SECONDS: int = 900
     REPORT_UPLOAD_MAX_SIZE_MB: int = 512
     REPORT_UPLOAD_DIRECT_INGEST_ENABLED: bool = False
+    PACK_IMPORT_MAX_COMPRESSED_BYTES: int = 64 * 1024 * 1024
+    PACK_IMPORT_MAX_UNCOMPRESSED_BYTES: int = 256 * 1024 * 1024
+    PACK_IMPORT_MAX_ENTRY_BYTES: int = 64 * 1024 * 1024
+    PACK_IMPORT_MAX_PAYLOADS: int = 64
+    PACK_IMPORT_MAX_COMPRESSION_RATIO: int = 100
+    PACK_IMPORT_MAX_MANIFEST_BYTES: int = 128 * 1024
+    PACK_IMPORT_PENDING_TTL_SECONDS: int = 24 * 60 * 60
+    PACK_BATCH_REPLAY_WINDOW_SECONDS: int = 7 * 24 * 60 * 60
+    ADAPTER_HANDSHAKE_TTL_SECONDS: int = 24 * 60 * 60
+    ADAPTER_HANDSHAKE_REPLAY_WINDOW_SECONDS: int = 7 * 24 * 60 * 60
+    ADAPTER_MAX_CLOCK_SKEW_SECONDS: int = 300
+    FLEET_HEARTBEAT_STALE_SECONDS: int = 5 * 60
     ANALYSIS_JOB_LEASE_SECONDS: int = 1800
     ANALYSIS_RESULT_CONTENT_TYPE: str = "application/json"
 
@@ -192,7 +256,7 @@ class Settings(BaseSettings):
     CLINIC_RUBRIC_VERSION: str = "v1"
     CLINIC_JUDGE_PROMPT_VERSION: str = "v1"
 
-    # Handover LLM advisor (T042) — L2 起默认开启意图但仍 key 闸控:开启后用 OpenAI 兼容 LLM
+    # Handover LLM advisor：默认开启意图但仍由 key 闸控，开启后使用 OpenAI 兼容 LLM
     # 产出每个资产的 {推荐动作, 置信度, 理由};解析不出 key 时仍降级 RuleBased(无 key 行为不变)。
     # key/base_url/model 留空时回落规范 DUCKDOCK_LLM_*（见 resolve_llm）。
     HANDOVER_LLM_ENABLED: bool = True
@@ -206,8 +270,29 @@ class Settings(BaseSettings):
     LANGFUSE_PUBLIC_KEY: str = ""
     LANGFUSE_SECRET_KEY: str = ""
     LANGFUSE_BASE_URL: str = "https://cloud.langfuse.com"
+    LANGFUSE_PUBLIC_BASE_URL: str = ""
     LANGFUSE_ENVIRONMENT: str = "development"
     LANGFUSE_TIMEOUT_SECONDS: int = 5
+    LANGFUSE_COMPATIBILITY_PROFILE: str = "langfuse-v4"
+
+    # Optional semantic-failure clustering. The endpoint is deployment config,
+    # never accepted from an API request or persisted in governance rows.
+    SEMANTIC_EMBEDDING_ENABLED: bool = False
+    SEMANTIC_EMBEDDING_PROFILE: str = "openai-compatible-local"
+    SEMANTIC_EMBEDDING_BASE_URL: str = ""
+    SEMANTIC_EMBEDDING_API_KEY: str = ""
+    SEMANTIC_EMBEDDING_TIMEOUT_SECONDS: int = 15
+
+    @field_validator("LANGFUSE_COMPATIBILITY_PROFILE")
+    @classmethod
+    def validate_langfuse_compatibility_profile(cls, value: str) -> str:
+        normalized = value.strip()
+        if normalized != "langfuse-v4":
+            raise ValueError(
+                "Unsupported LANGFUSE_COMPATIBILITY_PROFILE; "
+                "register a new adapter before changing major versions"
+            )
+        return normalized
 
     # Optional component manager. This is intentionally limited to the
     # same compose file so optional services stay outside the core runtime.
@@ -217,6 +302,12 @@ class Settings(BaseSettings):
     COMPONENT_DOCKER_PROJECT_DIRECTORY: str = str(PROJECT_ROOT)
     COMPONENT_DOCKER_TIMEOUT_SECONDS: int = 180
     COMPONENT_LANGFUSE_URL: str = "http://127.0.0.1:3200"
+
+    # Readiness probes the separately deployable Prometheus component.
+    # Compose overrides this with the internal service address; host-native dev
+    # can use the loopback default.
+    PROMETHEUS_BASE_URL: str = "http://127.0.0.1:9090"
+    PROMETHEUS_READINESS_TIMEOUT_SECONDS: int = 3
 
 
 def assert_production_security(settings: Settings) -> None:

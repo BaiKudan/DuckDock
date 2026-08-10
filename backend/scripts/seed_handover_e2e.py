@@ -118,24 +118,28 @@ async def seed_handover_closed_loop(
         namespace = Namespace(name=namespace_name, owner_id=admin.id)
         db.add(namespace)
         await db.flush()
-    receiver_membership = (
-        await db.execute(
-            select(NamespaceMember).where(
-                NamespaceMember.namespace_id == namespace.id,
-                NamespaceMember.user_id == receiver.id,
+    for member_user, role in (
+        (admin, NamespaceRole.ADMIN),
+        (receiver, NamespaceRole.DEVELOPER),
+    ):
+        membership = (
+            await db.execute(
+                select(NamespaceMember).where(
+                    NamespaceMember.namespace_id == namespace.id,
+                    NamespaceMember.user_id == member_user.id,
+                )
             )
-        )
-    ).scalar_one_or_none()
-    if receiver_membership is None:
-        db.add(
-            NamespaceMember(
-                namespace_id=namespace.id,
-                user_id=receiver.id,
-                role=NamespaceRole.DEVELOPER,
+        ).scalar_one_or_none()
+        if membership is None:
+            db.add(
+                NamespaceMember(
+                    namespace_id=namespace.id,
+                    user_id=member_user.id,
+                    role=role,
+                )
             )
-        )
-    else:
-        receiver_membership.role = NamespaceRole.DEVELOPER
+        else:
+            membership.role = role
     await db.flush()
 
     asset = AIAsset(
@@ -222,7 +226,7 @@ async def _ensure_user(
     if user is None:
         user = User(
             username=username,
-            email=f"{username}@e2e.duckdock.local",
+            email=f"{username}@e2e.duckdock.example.com",
             full_name=username.replace("-", " ").title(),
             hashed_password=hash_password(password),
             system_role=role,
@@ -243,7 +247,6 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Seed a pending-approval handover case for P3-11 Playwright E2E.")
     parser.add_argument("--json", action="store_true", help="Print JSON output (default).")
     parser.add_argument("--shell", action="store_true", help="Print shell exports for E2E_* variables.")
-    parser.add_argument("--allow-non-debug", action="store_true", help="Allow seeding when DEBUG is false.")
     parser.add_argument("--admin-username", default=os.getenv("E2E_ADMIN_USER", DEFAULT_ADMIN_USERNAME))
     parser.add_argument("--admin-password", default=os.getenv("E2E_ADMIN_PASS", DEFAULT_ADMIN_PASSWORD))
     parser.add_argument("--reset-admin-password", action="store_true", default=os.getenv("E2E_RESET_ADMIN_PASSWORD") == "1")
@@ -261,30 +264,33 @@ async def async_main() -> int:
     args = parse_args()
     engine.echo = False
     logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
-    if not settings.DEBUG and not args.allow_non_debug and os.getenv("E2E_ALLOW_SEED") != "1":
-        raise SystemExit(
-            "Refusing to seed handover E2E data while DEBUG=false. "
-            "Use DEBUG=true for dev/test, or pass --allow-non-debug intentionally."
+    try:
+        if not settings.DEBUG:
+            raise SystemExit(
+                "Refusing to seed handover E2E data while DEBUG=false. "
+                "This test utility has no production override."
+            )
+
+        config = HandoverE2ESeedConfig(
+            admin_username=args.admin_username,
+            admin_password=args.admin_password,
+            reset_admin_password=args.reset_admin_password,
+            preapprove=args.preapprove,
+            run_id=args.run_id,
         )
+        async with AsyncSessionLocal() as db:
+            result = await seed_handover_closed_loop(db, config)
+            await db.commit()
 
-    config = HandoverE2ESeedConfig(
-        admin_username=args.admin_username,
-        admin_password=args.admin_password,
-        reset_admin_password=args.reset_admin_password,
-        preapprove=args.preapprove,
-        run_id=args.run_id,
-    )
-    async with AsyncSessionLocal() as db:
-        result = await seed_handover_closed_loop(db, config)
-        await db.commit()
-
-    if args.shell:
-        print("export E2E_SEEDED=1")
-        print(f"export E2E_CASE_ID={result.case_id}")
-        print(f"export E2E_ADMIN_USER={json.dumps(result.admin_username)}")
-    else:
-        print(json.dumps(asdict(result), ensure_ascii=False, indent=2))
-    return 0
+        if args.shell:
+            print("export E2E_SEEDED=1")
+            print(f"export E2E_CASE_ID={result.case_id}")
+            print(f"export E2E_ADMIN_USER={json.dumps(result.admin_username)}")
+        else:
+            print(json.dumps(asdict(result), ensure_ascii=False, indent=2))
+        return 0
+    finally:
+        await engine.dispose()
 
 
 if __name__ == "__main__":

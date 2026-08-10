@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────────────
-# DuckDock 生产启动脚本(baseline)。对照 scripts/dev.sh 的生产版。
-# 用 docker-compose.prod.yml:不可变镜像、无热重载、前端 nginx、迁移先行。
+# DuckDock 生产启动脚本。对照 scripts/dev.sh 的生产版。
+# 基线 Compose + 强制 TLS overlay:不可变镜像、无热重载、迁移先行。
 #
 # 用法: bash scripts/prod.sh [preflight|up|worker|down|build|migrate|status|logs|shell|backup|help]
 #   不带参数 = up。启动前会用 SOPS/age 解密 .env.prod.enc 并预检强密钥(弱口即拒绝)。
 #
-# ⚠ 这是 Compose 生产部署入口。上线前仍需补 TLS 反代、监控和恢复演练。
+# ⚠ 这是单主机生产基线；跨故障域部署应使用 ops/kubernetes/ha。
 # ──────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -33,7 +33,12 @@ else
   echo "✗ 未找到 docker compose。请确认 Docker 已安装并运行。" >&2
   exit 1
 fi
-COMPOSE=("${DC[@]}" -f docker-compose.prod.yml --env-file "$ENV_FILE")
+COMPOSE=(
+  "${DC[@]}"
+  -f docker-compose.prod.yml
+  -f docker-compose.prod-tls.yml
+  --env-file "$ENV_FILE"
+)
 
 decrypt_env() {
   if [ ! -f "$ENV_ENC_FILE" ]; then
@@ -79,6 +84,17 @@ preflight() {
   require MINIO_ACCESS_KEY "duckdock minioadmin"
   require MINIO_SECRET_KEY "duckdock_secret"
   require CORS_ORIGINS ""
+  require DUCKDOCK_PUBLIC_HOST ""
+  require DUCKDOCK_MINIO_PUBLIC_HOST ""
+  require DUCKDOCK_TLS_CERT_FILE ""
+  require DUCKDOCK_TLS_KEY_FILE ""
+  require ALERTMANAGER_CONFIG_FILE ""
+  require ALERTMANAGER_EXTERNAL_URL ""
+  require DUCKDOCK_RELEASE_COMMIT ""
+  require DUCKDOCK_BACKUP_DIR ""
+  require DUCKDOCK_BACKUP_AGE_RECIPIENT ""
+  require DUCKDOCK_BACKUP_SIGNING_KEY ""
+  require DUCKDOCK_BACKUP_S3_URI ""
   if [ "${DUCKDOCK_ANALYSIS_WORKER_ENABLED:-false}" = "true" ]; then
     require DUCKDOCK_ANALYSIS_WORKER_TOKEN ""
   fi
@@ -90,6 +106,67 @@ preflight() {
   fi
   if printf '%s' "${CORS_ORIGINS:-}" | grep -Eq 'localhost|127\.0\.0\.1|\*'; then
     echo "  ✗ CORS_ORIGINS must use production origins, not localhost, 127.0.0.1, or *"; bad=1
+  fi
+  if [ "${MINIO_SECURE:-}" != "true" ]; then
+    echo "  ✗ MINIO_SECURE must be true for the public signed-object endpoint"; bad=1
+  fi
+  if [ "${DUCKDOCK_PUBLIC_HOST:-}" = "${DUCKDOCK_MINIO_PUBLIC_HOST:-}" ]; then
+    echo "  ✗ Application and object-store TLS hostnames must be different"; bad=1
+  fi
+  for host in "${DUCKDOCK_PUBLIC_HOST:-}" "${DUCKDOCK_MINIO_PUBLIC_HOST:-}"; do
+    if ! printf '%s' "$host" | grep -Eq '^[A-Za-z0-9.-]+$' \
+      || printf '%s' "$host" | grep -Eq '(^|\.)(localhost|local)$|127\.0\.0\.1'; then
+      echo "  ✗ Invalid production TLS hostname: ${host:-<empty>}"; bad=1
+    fi
+  done
+  if [ "${MINIO_PUBLIC_ENDPOINT:-}" != "${DUCKDOCK_MINIO_PUBLIC_HOST:-}" ]; then
+    echo "  ✗ MINIO_PUBLIC_ENDPOINT must exactly match DUCKDOCK_MINIO_PUBLIC_HOST"; bad=1
+  fi
+  if [ "${BACKEND_BASE_URL:-}" != "https://${DUCKDOCK_PUBLIC_HOST:-}" ]; then
+    echo "  ✗ BACKEND_BASE_URL must be https://DUCKDOCK_PUBLIC_HOST"; bad=1
+  fi
+  if ! printf '%s' "${ALERTMANAGER_EXTERNAL_URL:-}" | grep -Eq '^https://'; then
+    echo "  ✗ ALERTMANAGER_EXTERNAL_URL must be an HTTPS URL"; bad=1
+  fi
+  if ! printf '%s' "${DUCKDOCK_RELEASE_COMMIT:-}" | grep -Eq '^[0-9a-f]{40}$'; then
+    echo "  ✗ DUCKDOCK_RELEASE_COMMIT must be an immutable 40-hex commit"; bad=1
+  fi
+  if ! printf '%s' "${DUCKDOCK_BACKUP_AGE_RECIPIENT:-}" | grep -Eq '^age1[0-9a-z]+$'; then
+    echo "  ✗ DUCKDOCK_BACKUP_AGE_RECIPIENT must be an age X25519 recipient"; bad=1
+  fi
+  if ! printf '%s' "${DUCKDOCK_BACKUP_S3_URI:-}" | grep -Eq '^s3://[^/]+(/.*)?$'; then
+    echo "  ✗ DUCKDOCK_BACKUP_S3_URI must identify approved offsite S3 media"; bad=1
+  fi
+  if [ ! -d "${DUCKDOCK_BACKUP_DIR:-}" ] || [ ! -r "${DUCKDOCK_BACKUP_SIGNING_KEY:-}" ]; then
+    echo "  ✗ Backup output directory and signing key must exist"; bad=1
+  fi
+  if [ ! -r "${DUCKDOCK_TLS_CERT_FILE:-}" ] || [ ! -r "${DUCKDOCK_TLS_KEY_FILE:-}" ]; then
+    echo "  ✗ TLS certificate/key files must exist and be readable"; bad=1
+  elif ! command -v openssl >/dev/null 2>&1; then
+    echo "  ✗ openssl is required for TLS certificate preflight"; bad=1
+  else
+    if ! openssl x509 -in "$DUCKDOCK_TLS_CERT_FILE" -noout -checkend 2592000 >/dev/null; then
+      echo "  ✗ TLS certificate expires within 30 days or is invalid"; bad=1
+    fi
+    for host in "$DUCKDOCK_PUBLIC_HOST" "$DUCKDOCK_MINIO_PUBLIC_HOST"; do
+      if ! openssl x509 -in "$DUCKDOCK_TLS_CERT_FILE" -noout -checkhost "$host" >/dev/null; then
+        echo "  ✗ TLS certificate does not cover $host"; bad=1
+      fi
+    done
+    cert_key_digest="$(openssl x509 -in "$DUCKDOCK_TLS_CERT_FILE" -pubkey -noout \
+      | openssl pkey -pubin -outform DER 2>/dev/null | openssl sha256)"
+    private_key_digest="$(openssl pkey -in "$DUCKDOCK_TLS_KEY_FILE" -pubout -outform DER 2>/dev/null \
+      | openssl sha256)"
+    if [ -z "$cert_key_digest" ] || [ "$cert_key_digest" != "$private_key_digest" ]; then
+      echo "  ✗ TLS certificate and private key do not match"; bad=1
+    fi
+  fi
+  if [ ! -r "${ALERTMANAGER_CONFIG_FILE:-}" ]; then
+    echo "  ✗ Alertmanager config file must exist and be readable"; bad=1
+  elif grep -Eq '__CHANGE_ME|example\.invalid' "$ALERTMANAGER_CONFIG_FILE"; then
+    echo "  ✗ Alertmanager config still contains placeholder receivers"; bad=1
+  elif ! grep -Eq 'https://' "$ALERTMANAGER_CONFIG_FILE"; then
+    echo "  ✗ Alertmanager config must contain an HTTPS notification receiver"; bad=1
   fi
   if [ "$bad" -ne 0 ]; then
     echo "✗ 预检未通过,拒绝以不安全配置启动生产。" >&2
@@ -111,18 +188,18 @@ case "${1:-up}" in
     ;;
   up)
     preflight
-    echo "→ 构建镜像 → 迁移(一次性)→ 启动 backend/worker/beat/frontend(生产)…"
+    echo "→ 构建镜像 → 迁移 → 启动 TLS/backend/worker/beat/frontend/monitoring…"
     "${COMPOSE[@]}" up -d --build
     echo ""
     "${COMPOSE[@]}" ps
     echo ""
-    echo "✓ 入口: http://localhost:${HTTP_PORT:-80}  —— 上线请置于 TLS 反向代理之后。"
+    echo "✓ TLS 入口: https://${DUCKDOCK_PUBLIC_HOST}:${HTTPS_PORT:-443}"
     ;;
   worker)
     preflight
     require_analysis_worker_token
     echo "→ 启动 analysis-worker profile…"
-    "${DC[@]}" -f docker-compose.prod.yml --env-file "$ENV_FILE" --profile analysis-worker up -d --build analysis-worker
+    "${COMPOSE[@]}" --profile analysis-worker up -d --build analysis-worker
     ;;
   build)   preflight; "${COMPOSE[@]}" build "${@:2}" ;;
   migrate) preflight; "${COMPOSE[@]}" run --rm migrate ;;
@@ -133,9 +210,11 @@ case "${1:-up}" in
   backup)
     preflight
     ts="$(date +%Y%m%d-%H%M%S)"
-    db_out="duckdock-mysql-${ts}.sql.gz"
-    repos_out="duckdock-repos-${ts}.tar.gz"
-    minio_out="duckdock-minio-${ts}.tar.gz"
+    backup_tmp="$(mktemp -d)"
+    trap 'rm -rf "$backup_tmp"; cleanup_env' EXIT
+    db_out="$backup_tmp/duckdock-mysql-${ts}.sql.gz"
+    repos_out="$backup_tmp/duckdock-repos-${ts}.tar.gz"
+    minio_out="$backup_tmp/duckdock-minio-${ts}.tar.gz"
     echo "→ 导出 MySQL 到 ${db_out} …"
     "${COMPOSE[@]}" exec -T mysql sh -c 'exec mysqldump -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE"' | gzip > "$db_out"
     # Git 裸仓库卷(repos_data)与 MinIO 对象卷(minio_data)用同一时间戳归档,
@@ -144,7 +223,18 @@ case "${1:-up}" in
     "${COMPOSE[@]}" run --rm --no-deps -T -v repos_data:/volume:ro --entrypoint sh backend -c 'exec tar -C /volume -czf - .' > "$repos_out"
     echo "→ 归档 MinIO 对象卷(minio_data)到 ${minio_out} …"
     "${COMPOSE[@]}" run --rm --no-deps -T -v minio_data:/volume:ro --entrypoint sh backend -c 'exec tar -C /volume -czf - .' > "$minio_out"
-    echo "✓ 备份完成: ${db_out} + ${repos_out} + ${minio_out}(DB + Git 仓库 + MinIO 对象,同一时间戳 ${ts})"
+    echo "→ age 加密、OpenSSH 签名并上传异地介质…"
+    bash scripts/seal-backup.sh \
+      --mysql "$db_out" \
+      --repos "$repos_out" \
+      --minio "$minio_out" \
+      --output-dir "$DUCKDOCK_BACKUP_DIR" \
+      --timestamp "$ts" \
+      --release-commit "$DUCKDOCK_RELEASE_COMMIT" \
+      --age-recipient "$DUCKDOCK_BACKUP_AGE_RECIPIENT" \
+      --signing-key "$DUCKDOCK_BACKUP_SIGNING_KEY" \
+      --remote-s3-uri "$DUCKDOCK_BACKUP_S3_URI"
+    echo "✓ 加密备份集已完成并上传: DB + Git 仓库 + MinIO 对象 (${ts})"
     ;;
   help|-h|--help)
     echo "用法: bash scripts/prod.sh [preflight|up|worker|down|build|migrate|status|logs|shell|backup]"

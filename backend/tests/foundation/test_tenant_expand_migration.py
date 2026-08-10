@@ -53,7 +53,7 @@ T = TypeVar("T")
 
 
 @pytest.mark.parametrize("model", FOUNDATION_MODELS, ids=lambda model: model.__name__)
-def test_foundation_model_has_nullable_indexed_namespace_fk(model: type[Any]) -> None:
+def test_foundation_model_has_contracted_indexed_namespace_fk(model: type[Any]) -> None:
     table = model.__table__
     assert "namespace_id" in table.c, (
         f"{model.__name__} ({table.name}) must expose namespace_id during the "
@@ -61,7 +61,10 @@ def test_foundation_model_has_nullable_indexed_namespace_fk(model: type[Any]) ->
     )
 
     column = table.c.namespace_id
-    assert column.nullable is True, f"{table.name}.namespace_id must remain nullable in the expand phase"
+    assert column.nullable is False, (
+        f"{table.name}.namespace_id must be non-null in current model metadata; "
+        "revision 0027 separately preserves the historical expand shape"
+    )
     assert {foreign_key.target_fullname for foreign_key in column.foreign_keys} == {"namespaces.id"}, (
         f"{table.name}.namespace_id must reference namespaces.id"
     )
@@ -489,11 +492,11 @@ def test_mysql_populated_upgrade_from_0026_preserves_rows(monkeypatch: pytest.Mo
         # upgrade to 0026 may already contain the new nullable columns.  Round
         # trip through 0027 and its guarded downgrade to reconstruct the real
         # deployed-0026 shape before inserting legacy rows.
-        command.upgrade(config, "head")
+        command.upgrade(config, TARGET_REVISION)
         command.downgrade(config, PREVIOUS_REVISION)
         row_ids = asyncio.run(_run_with_sync_connection(mysql_url, _seed_legacy_rows))
 
-        command.upgrade(config, "head")
+        command.upgrade(config, TARGET_REVISION)
         asyncio.run(
             _run_with_sync_connection(
                 mysql_url,

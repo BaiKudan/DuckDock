@@ -1,0 +1,69 @@
+{
+  "schema_version": "duckdock-ga-state-services-provider-receipt-v1",
+  "target_environment": "__CHANGE_ME_TARGET_ID__",
+  "source_commit": "__CHANGE_ME_40_HEX_GIT_COMMIT__",
+  "images": {
+    "backend": {"name": "registry.example.invalid/duckdock/backend@sha256:__CHANGE_ME_64_HEX__"},
+    "frontend": {"name": "registry.example.invalid/duckdock/frontend@sha256:__CHANGE_ME_64_HEX__"}
+  },
+  "exercise_id": "__CHANGE_ME_STATE_HA_EXERCISE_ID__",
+  "observed_at": "2026-08-06T00:10:00Z",
+  "services": {
+    "mysql": {
+      "provider": "__CHANGE_ME_MANAGED_MYSQL_PROVIDER__",
+      "service_instance_id": "__CHANGE_ME_OPAQUE_INSTANCE_ID__",
+      "topology_id": "__CHANGE_ME_PROVIDER_TOPOLOGY_ID__",
+      "fault_domain_count": 2,
+      "failover_event_id": "__CHANGE_ME_PROVIDER_EVENT_ID__",
+      "source_fault_domain": "__CHANGE_ME_SOURCE_DOMAIN__",
+      "destination_fault_domain": "__CHANGE_ME_DESTINATION_DOMAIN__",
+      "ha_enabled": true,
+      "automatic_failover": true,
+      "started_at": "2026-08-06T00:00:00Z",
+      "recovered_at": "2026-08-06T00:05:00Z",
+      "provider_event_sha256": "__CHANGE_ME_64_HEX__"
+    },
+    "redis": {
+      "provider": "__CHANGE_ME_MANAGED_REDIS_PROVIDER__",
+      "service_instance_id": "__CHANGE_ME_OPAQUE_INSTANCE_ID__",
+      "topology_id": "__CHANGE_ME_PROVIDER_TOPOLOGY_ID__",
+      "fault_domain_count": 2,
+      "failover_event_id": "__CHANGE_ME_PROVIDER_EVENT_ID__",
+      "source_fault_domain": "__CHANGE_ME_SOURCE_DOMAIN__",
+      "destination_fault_domain": "__CHANGE_ME_DESTINATION_DOMAIN__",
+      "ha_enabled": true,
+      "automatic_failover": true,
+      "started_at": "2026-08-06T00:00:00Z",
+      "recovered_at": "2026-08-06T00:05:00Z",
+      "provider_event_sha256": "__CHANGE_ME_64_HEX__"
+    },
+    "object_store": {
+      "provider": "__CHANGE_ME_MANAGED_OBJECT_STORE_PROVIDER__",
+      "service_instance_id": "__CHANGE_ME_OPAQUE_INSTANCE_ID__",
+      "topology_id": "__CHANGE_ME_PROVIDER_TOPOLOGY_ID__",
+      "fault_domain_count": 2,
+      "failover_event_id": "__CHANGE_ME_PROVIDER_EVENT_ID__",
+      "source_fault_domain": "__CHANGE_ME_SOURCE_DOMAIN__",
+      "destination_fault_domain": "__CHANGE_ME_DESTINATION_DOMAIN__",
+      "ha_enabled": true,
+      "automatic_failover": true,
+      "started_at": "2026-08-06T00:00:00Z",
+      "recovered_at": "2026-08-06T00:05:00Z",
+      "provider_event_sha256": "__CHANGE_ME_64_HEX__"
+    },
+    "rwx_repository_storage": {
+      "provider": "__CHANGE_ME_MANAGED_RWX_PROVIDER__",
+      "service_instance_id": "__CHANGE_ME_OPAQUE_INSTANCE_ID__",
+      "topology_id": "__CHANGE_ME_PROVIDER_TOPOLOGY_ID__",
+      "fault_domain_count": 2,
+      "failover_event_id": "__CHANGE_ME_PROVIDER_EVENT_ID__",
+      "source_fault_domain": "__CHANGE_ME_SOURCE_DOMAIN__",
+      "destination_fault_domain": "__CHANGE_ME_DESTINATION_DOMAIN__",
+      "ha_enabled": true,
+      "automatic_failover": true,
+      "started_at": "2026-08-06T00:00:00Z",
+      "recovered_at": "2026-08-06T00:05:00Z",
+      "provider_event_sha256": "__CHANGE_ME_64_HEX__"
+    }
+  }
+}

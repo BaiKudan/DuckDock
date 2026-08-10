@@ -1,0 +1,23 @@
+{
+  "schema_version": "duckdock-ga-backup-media-receipt-v1",
+  "exercise_id": "ga-recovery-20260806",
+  "target_environment": "__CHANGE_ME_TARGET_ID__",
+  "storage_provider": "AWS S3",
+  "backup_manifest_sha256": "__CHANGE_ME_64_HEX__",
+  "backup_set_id": "__CHANGE_ME_BACKUP_SET_ID__",
+  "remote_uri": "s3://__CHANGE_ME_BUCKET__/__CHANGE_ME_PREFIX__/backup-set",
+  "recovery_point_at": "2026-08-06T00:05:00Z",
+  "artifact_versions": [
+    {"name": "minio.tar.gz.age", "version_id": "__CHANGE_ME_MINIO_VERSION_ID__", "etag": "__CHANGE_ME_MINIO_ETAG__", "sha256": "__CHANGE_ME_64_HEX__", "size_bytes": 1, "retained_until": "2026-09-06T00:10:00Z"},
+    {"name": "mysql.sql.gz.age", "version_id": "__CHANGE_ME_MYSQL_VERSION_ID__", "etag": "__CHANGE_ME_MYSQL_ETAG__", "sha256": "__CHANGE_ME_64_HEX__", "size_bytes": 1, "retained_until": "2026-09-06T00:10:00Z"},
+    {"name": "repos.tar.gz.age", "version_id": "__CHANGE_ME_REPOS_VERSION_ID__", "etag": "__CHANGE_ME_REPOS_ETAG__", "sha256": "__CHANGE_ME_64_HEX__", "size_bytes": 1, "retained_until": "2026-09-06T00:10:00Z"}
+  ],
+  "object_lock": {
+    "enabled": true,
+    "mode": "COMPLIANCE",
+    "retention_until": "2026-09-06T00:10:00Z",
+    "provider_receipt_id": "__CHANGE_ME_STORAGE_RECEIPT_ID__",
+    "observed_at": "2026-08-06T00:10:00Z"
+  },
+  "completed_at": "2026-08-06T00:10:00Z"
+}

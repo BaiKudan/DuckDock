@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 from app.api.v1.endpoints.control_plane import complete_execution_action, decide_approval, execute_handover, verify_handover
 from app.models.control_plane import ExecutionAction, ExecutionStatus, HandoverCase, HandoverStatus
+from app.models.namespace import NamespaceMember, NamespaceRole
 from app.models.user import SystemRole, User
 from app.schemas.control_plane import ApprovalDecision, ApprovalStatus, ExecuteHandoverRequest, ExecutionReceipt, HandoverVerifyRequest
 
@@ -43,6 +44,15 @@ async def test_handover_e2e_seed_creates_pending_case_that_can_close(async_sessi
     assert admin.system_role == SystemRole.ADMIN
     assert case is not None
     assert case.status == HandoverStatus.PENDING_APPROVAL
+    admin_membership = (
+        await async_session.execute(
+            select(NamespaceMember).where(
+                NamespaceMember.namespace_id == case.namespace_id,
+                NamespaceMember.user_id == admin.id,
+            )
+        )
+    ).scalar_one()
+    assert admin_membership.role == NamespaceRole.ADMIN
 
     for approval_id in result.approval_ids:
         await decide_approval(

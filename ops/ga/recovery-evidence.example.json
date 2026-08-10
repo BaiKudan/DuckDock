@@ -1,0 +1,102 @@
+{
+  "schema_version": "duckdock-ga-recovery-evidence-v2",
+  "scope": "target-production",
+  "status": "PASSED",
+  "passed": true,
+  "observed_at": "2026-08-06T01:00:00Z",
+  "target_environment": "__CHANGE_ME_TARGET_ID__",
+  "source_commit": "__CHANGE_ME_40_HEX_GIT_COMMIT__",
+  "images": {
+    "backend": {"name": "registry.example.invalid/duckdock/backend@sha256:__CHANGE_ME_64_HEX__"},
+    "frontend": {"name": "registry.example.invalid/duckdock/frontend@sha256:__CHANGE_ME_64_HEX__"}
+  },
+  "offsite_media": true,
+  "encrypted": true,
+  "immutable_or_object_locked": true,
+  "storage_provider": "AWS S3",
+  "rpo_seconds": 600,
+  "rto_seconds": 900,
+  "mysql_rows_verified": 1,
+  "objects_verified": 1,
+  "git_repositories_verified": true,
+  "exercise": {
+    "exercise_id": "ga-recovery-20260806",
+    "production_target_environment": "__CHANGE_ME_TARGET_ID__",
+    "restore_target_environment": "__CHANGE_ME_NON_PRODUCTION_RESTORE_TARGET__",
+    "started_at": "2026-08-06T00:05:00Z",
+    "completed_at": "2026-08-06T00:31:00Z",
+    "maximum_rpo_seconds": 900,
+    "maximum_rto_seconds": 14400
+  },
+  "backup": {
+    "manifest_schema_version": "duckdock-secure-backup-v1",
+    "path": "__CHANGE_ME_SIGNED_BACKUP_MANIFEST_PATH__",
+    "manifest_sha256": "__CHANGE_ME_64_HEX__",
+    "signer_identity": "__CHANGE_ME_BACKUP_SIGNER_IDENTITY__",
+    "allowed_signers_path": "__CHANGE_ME_BACKUP_ALLOWED_SIGNERS_PATH__",
+    "allowed_signers_sha256": "__CHANGE_ME_64_HEX__",
+    "signature_path": "__CHANGE_ME_BACKUP_MANIFEST_SIGNATURE_PATH__",
+    "decryption_key_external": true
+  },
+  "recovery_policy": {
+    "path": "__CHANGE_ME_RECOVERY_POLICY_PATH__",
+    "sha256": "__CHANGE_ME_64_HEX__",
+    "policy_id": "__CHANGE_ME_RECOVERY_POLICY_ID__",
+    "allowed_signers_path": "__CHANGE_ME_RECOVERY_ALLOWED_SIGNERS_PATH__",
+    "allowed_signers_sha256": "__CHANGE_ME_64_HEX__"
+  },
+  "media_receipt": {
+    "schema_version": "duckdock-ga-backup-media-receipt-v1",
+    "exercise_id": "ga-recovery-20260806",
+    "target_environment": "__CHANGE_ME_TARGET_ID__",
+    "storage_provider": "AWS S3",
+    "backup_manifest_sha256": "__CHANGE_ME_64_HEX__",
+    "backup_set_id": "__CHANGE_ME_BACKUP_SET_ID__",
+    "remote_uri": "s3://__CHANGE_ME_BUCKET__/__CHANGE_ME_PREFIX__/backup-set",
+    "recovery_point_at": "2026-08-06T00:05:00Z",
+    "artifact_versions": [
+      {"name": "minio.tar.gz.age", "version_id": "__CHANGE_ME_MINIO_VERSION_ID__", "etag": "__CHANGE_ME_MINIO_ETAG__", "sha256": "__CHANGE_ME_64_HEX__", "size_bytes": 1, "retained_until": "2026-09-06T00:10:00Z"},
+      {"name": "mysql.sql.gz.age", "version_id": "__CHANGE_ME_MYSQL_VERSION_ID__", "etag": "__CHANGE_ME_MYSQL_ETAG__", "sha256": "__CHANGE_ME_64_HEX__", "size_bytes": 1, "retained_until": "2026-09-06T00:10:00Z"},
+      {"name": "repos.tar.gz.age", "version_id": "__CHANGE_ME_REPOS_VERSION_ID__", "etag": "__CHANGE_ME_REPOS_ETAG__", "sha256": "__CHANGE_ME_64_HEX__", "size_bytes": 1, "retained_until": "2026-09-06T00:10:00Z"}
+    ],
+    "object_lock": {"enabled": true, "mode": "COMPLIANCE", "retention_until": "2026-09-06T00:10:00Z", "provider_receipt_id": "__CHANGE_ME_STORAGE_RECEIPT_ID__", "observed_at": "2026-08-06T00:10:00Z"},
+    "completed_at": "2026-08-06T00:10:00Z",
+    "signed_evidence": {"path": "__CHANGE_ME_MEDIA_RECEIPT_PATH__", "sha256": "__CHANGE_ME_64_HEX__", "signature_path": "__CHANGE_ME_MEDIA_SIGNATURE_PATH__", "signer_identity": "__CHANGE_ME_STORAGE_SERVICE_IDENTITY__"}
+  },
+  "restore_receipt": {
+    "schema_version": "duckdock-ga-restore-execution-receipt-v1",
+    "exercise_id": "ga-recovery-20260806",
+    "production_target_environment": "__CHANGE_ME_TARGET_ID__",
+    "restore_target_environment": "__CHANGE_ME_NON_PRODUCTION_RESTORE_TARGET__",
+    "environment_class": "recovery",
+    "backup_manifest_sha256": "__CHANGE_ME_64_HEX__",
+    "restore_receipt_id": "__CHANGE_ME_RESTORE_RECEIPT_ID__",
+    "destructive_restore": true,
+    "production_data_overwrite": false,
+    "failure_injected_at": "2026-08-06T00:15:00Z",
+    "started_at": "2026-08-06T00:16:00Z",
+    "completed_at": "2026-08-06T00:25:00Z",
+    "stages": [
+      {"name": "mysql", "command_id": "__CHANGE_ME_MYSQL_RESTORE_COMMAND_ID__", "exit_code": 0, "log_sha256": "__CHANGE_ME_64_HEX__", "completed_at": "2026-08-06T00:20:00Z"},
+      {"name": "repositories", "command_id": "__CHANGE_ME_REPOS_RESTORE_COMMAND_ID__", "exit_code": 0, "log_sha256": "__CHANGE_ME_64_HEX__", "completed_at": "2026-08-06T00:23:00Z"},
+      {"name": "object-store", "command_id": "__CHANGE_ME_OBJECT_RESTORE_COMMAND_ID__", "exit_code": 0, "log_sha256": "__CHANGE_ME_64_HEX__", "completed_at": "2026-08-06T00:25:00Z"}
+    ],
+    "signed_evidence": {"path": "__CHANGE_ME_RESTORE_RECEIPT_PATH__", "sha256": "__CHANGE_ME_64_HEX__", "signature_path": "__CHANGE_ME_RESTORE_SIGNATURE_PATH__", "signer_identity": "__CHANGE_ME_RESTORE_EXECUTOR_IDENTITY__"}
+  },
+  "verification_receipt": {
+    "schema_version": "duckdock-ga-recovery-verification-receipt-v1",
+    "exercise_id": "ga-recovery-20260806",
+    "restore_target_environment": "__CHANGE_ME_NON_PRODUCTION_RESTORE_TARGET__",
+    "environment_class": "recovery",
+    "backup_manifest_sha256": "__CHANGE_ME_64_HEX__",
+    "verification_receipt_id": "__CHANGE_ME_VERIFICATION_RECEIPT_ID__",
+    "started_at": "2026-08-06T00:26:00Z",
+    "completed_at": "2026-08-06T00:30:00Z",
+    "mysql": {"rows_verified": 1, "dataset_sha256": "__CHANGE_ME_64_HEX__"},
+    "object_store": {"objects_verified": 1, "inventory_sha256": "__CHANGE_ME_64_HEX__"},
+    "git": {"repositories_verified": 1, "refs_sha256": "__CHANGE_ME_64_HEX__"},
+    "service_readiness": {"https_probe_passed": true, "background_worker_ready": true},
+    "passed": true,
+    "signed_evidence": {"path": "__CHANGE_ME_VERIFICATION_RECEIPT_PATH__", "sha256": "__CHANGE_ME_64_HEX__", "signature_path": "__CHANGE_ME_VERIFICATION_SIGNATURE_PATH__", "signer_identity": "__CHANGE_ME_RECOVERY_VERIFIER_IDENTITY__"}
+  }
+}

@@ -1,0 +1,68 @@
+# Optional Langfuse v4 exporter overlay for openclaw-shadow.yaml.
+#
+# Load this file after the base configuration. The later pipeline exporter
+# list replaces the debug exporter while all trust-boundary processors remain
+# unchanged.
+
+extensions:
+  basicauth/langfuse:
+    client_auth:
+      username: ${env:DUCKDOCK_LANGFUSE_PUBLIC_KEY}
+      password: ${env:DUCKDOCK_LANGFUSE_SECRET_KEY}
+  file_storage/langfuse:
+    directory: /var/lib/otelcol/langfuse
+    timeout: 10s
+    max_size: ${env:DUCKDOCK_OTEL_QUEUE_MAX_BYTES}
+    fsync: true
+    create_directory: true
+    directory_permissions: "0700"
+    compaction:
+      on_start: true
+      directory: /var/lib/otelcol/langfuse-compaction
+      cleanup_on_start: true
+
+exporters:
+  otlp_http/langfuse:
+    endpoint: ${env:DUCKDOCK_LANGFUSE_OTLP_ENDPOINT}
+    auth:
+      authenticator: basicauth/langfuse
+    headers:
+      x-langfuse-ingestion-version: "4"
+    compression: gzip
+    timeout: 10s
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 30s
+      # Zero means retry indefinitely. A permanent provider rejection is still
+      # terminal and is surfaced by Collector exporter failure metrics.
+      max_elapsed_time: 0s
+    sending_queue:
+      enabled: true
+      storage: file_storage/langfuse
+      num_consumers: 1
+      block_on_overflow: true
+      sizer: requests
+      queue_size: ${env:DUCKDOCK_OTEL_QUEUE_SIZE}
+
+service:
+  telemetry:
+    metrics:
+      level: basic
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888
+                without_type_suffix: true
+                without_units: true
+  extensions:
+    - health_check
+    - basicauth/runtime
+    - basicauth/langfuse
+    - file_storage/langfuse
+  pipelines:
+    traces/openclaw-shadow:
+      exporters:
+        - otlp_http/langfuse

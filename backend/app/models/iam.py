@@ -1,18 +1,22 @@
 import enum
+import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     Enum,
     ForeignKey,
     Integer,
+    Index,
     JSON,
     String,
     Text,
     TypeDecorator,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -78,6 +82,25 @@ class EmploymentStatus(str, enum.Enum):
     ONBOARDING = "onboarding"
     LEAVE = "leave"
     OFFBOARDED = "offboarded"
+
+
+class DirectoryLifecycleAction(str, enum.Enum):
+    UPSERT = "UPSERT"
+    DISABLE = "DISABLE"
+    REENABLE = "REENABLE"
+
+
+class DirectoryLifecycleSource(str, enum.Enum):
+    SCIM = "SCIM"
+    STAGING = "STAGING"
+
+
+def directory_credential_public_id() -> str:
+    return f"dcred_{uuid.uuid4().hex}"
+
+
+def directory_event_public_id() -> str:
+    return f"idevt_{uuid.uuid4().hex}"
 
 
 class OrgUnit(Base):
@@ -286,6 +309,10 @@ class IdentityLink(Base):
     email: Mapped[str | None] = mapped_column(String(255), index=True)
     full_name: Mapped[str | None] = mapped_column(String(255))
     claims_json: Mapped[dict | None] = mapped_column(JSON)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, default=True, nullable=False, index=True, server_default=text("1")
+    )
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -334,3 +361,109 @@ class SSORoleMapping(Base):
 
     provider: Mapped[SSOProviderConfig] = relationship("SSOProviderConfig")
     role: Mapped[Role] = relationship("Role")
+
+
+class DirectoryCredential(Base):
+    """Provider-bound SCIM credential; plaintext is returned only once."""
+
+    __tablename__ = "directory_credentials"
+    __table_args__ = (
+        UniqueConstraint("public_id", name="uq_directory_credentials_public_id"),
+        UniqueConstraint("token_prefix", name="uq_directory_credentials_token_prefix"),
+        CheckConstraint(
+            "(is_active = 1 AND revoked_at IS NULL) OR "
+            "(is_active = 0 AND revoked_at IS NOT NULL)",
+            name="ck_directory_credentials_active_revoked",
+        ),
+        Index(
+            "ix_directory_credentials_provider_active_created",
+            "provider_id",
+            "is_active",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    public_id: Mapped[str] = mapped_column(
+        String(40), default=directory_credential_public_id, nullable=False
+    )
+    provider_id: Mapped[int] = mapped_column(
+        ForeignKey("sso_provider_configs.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    token_prefix: Mapped[str] = mapped_column(String(16), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    scopes_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    revoked_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), index=True
+    )
+    created_by_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+
+    provider: Mapped[SSOProviderConfig] = relationship()
+
+
+class DirectoryLifecycleEvent(Base):
+    """Immutable, content-free receipt for one directory lifecycle mutation."""
+
+    __tablename__ = "directory_lifecycle_events"
+    __table_args__ = (
+        UniqueConstraint("public_id", name="uq_directory_lifecycle_events_public_id"),
+        UniqueConstraint(
+            "provider_id", "external_event_id", name="uq_directory_lifecycle_events_provider_event"
+        ),
+        Index(
+            "ix_directory_lifecycle_events_user_occurred",
+            "user_id",
+            "occurred_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    public_id: Mapped[str] = mapped_column(
+        String(40), default=directory_event_public_id, nullable=False
+    )
+    provider_id: Mapped[int] = mapped_column(
+        ForeignKey("sso_provider_configs.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    credential_id: Mapped[int | None] = mapped_column(
+        ForeignKey("directory_credentials.id", ondelete="RESTRICT"), index=True
+    )
+    external_event_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    subject_digest: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    payload_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    action: Mapped[DirectoryLifecycleAction] = mapped_column(
+        Enum(DirectoryLifecycleAction, name="directory_lifecycle_action"),
+        nullable=False,
+        index=True,
+    )
+    source: Mapped[DirectoryLifecycleSource] = mapped_column(
+        Enum(DirectoryLifecycleSource, name="directory_lifecycle_source"),
+        nullable=False,
+        index=True,
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    user_was_active: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    credentials_revoked: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    runtime_tokens_revoked: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    memberships_removed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    role_bindings_removed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    handover_case_ids_json: Mapped[list[int]] = mapped_column(JSON, nullable=False)
+    outcome_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+
+    provider: Mapped[SSOProviderConfig] = relationship()
+    credential: Mapped[DirectoryCredential | None] = relationship()
+    user: Mapped["User"] = relationship()

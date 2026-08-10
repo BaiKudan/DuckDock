@@ -14,6 +14,7 @@ const EXTERNAL_BASE = process.env.E2E_BASE_URL;
 
 export default defineConfig({
   testDir: "./e2e",
+  outputDir: process.env.E2E_OUTPUT_DIR ?? "test-results",
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,

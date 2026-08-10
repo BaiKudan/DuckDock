@@ -23,6 +23,10 @@ celery_app = Celery(
         "app.workers.webhook_tasks",
         "app.workers.report_upload_tasks",
         "app.workers.agent_insight_tasks",
+        "app.workers.outbox_dispatcher",
+        "app.workers.evaluation_tasks",
+        "app.workers.annotation_tasks",
+        "app.workers.semantic_monitor_tasks",
     ],
 )
 
@@ -52,6 +56,22 @@ celery_settings = dict(
         "run-retention-gc": {
             "task": "run_retention_gc",
             "schedule": settings.RETENTION_GC_SCHEDULE_SECONDS,
+        },
+        "dispatch-transactional-outbox": {
+            "task": "dispatch_outbox",
+            "schedule": settings.OUTBOX_DISPATCH_SCHEDULE_SECONDS,
+        },
+        "dispatch-due-evaluations": {
+            "task": "dispatch_due_evaluations",
+            "schedule": settings.EVALUATION_DISPATCH_SCHEDULE_SECONDS,
+        },
+        "dispatch-due-annotation-syncs": {
+            "task": "dispatch_due_annotation_syncs",
+            "schedule": settings.ANNOTATION_QUEUE_DISPATCH_SCHEDULE_SECONDS,
+        },
+        "dispatch-due-semantic-monitors": {
+            "task": "dispatch_due_semantic_monitors",
+            "schedule": settings.SEMANTIC_MONITOR_DISPATCH_SCHEDULE_SECONDS,
         },
     },
 )

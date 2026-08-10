@@ -1,0 +1,65 @@
+{
+  "schema_version": "duckdock-ga-state-services-verification-receipt-v1",
+  "target_environment": "__CHANGE_ME_TARGET_ID__",
+  "source_commit": "__CHANGE_ME_40_HEX_GIT_COMMIT__",
+  "images": {
+    "backend": {"name": "registry.example.invalid/duckdock/backend@sha256:__CHANGE_ME_64_HEX__"},
+    "frontend": {"name": "registry.example.invalid/duckdock/frontend@sha256:__CHANGE_ME_64_HEX__"}
+  },
+  "exercise_id": "__CHANGE_ME_STATE_HA_EXERCISE_ID__",
+  "observed_at": "2026-08-06T00:20:00Z",
+  "services": {
+    "mysql": {
+      "failover_event_id": "__CHANGE_ME_MATCHING_PROVIDER_EVENT_ID__",
+      "verification_id": "__CHANGE_ME_VERIFICATION_ID__",
+      "verified_at": "2026-08-06T00:15:00Z",
+      "pre_failover_data_sha256": "__CHANGE_ME_64_HEX__",
+      "post_failover_data_sha256": "__CHANGE_ME_SAME_64_HEX__",
+      "write_probe_sha256": "__CHANGE_ME_64_HEX__",
+      "read_back_sha256": "__CHANGE_ME_SAME_64_HEX__",
+      "read_probe_passed": true,
+      "write_probe_passed": true,
+      "data_integrity_passed": true,
+      "verification_log_sha256": "__CHANGE_ME_64_HEX__"
+    },
+    "redis": {
+      "failover_event_id": "__CHANGE_ME_MATCHING_PROVIDER_EVENT_ID__",
+      "verification_id": "__CHANGE_ME_VERIFICATION_ID__",
+      "verified_at": "2026-08-06T00:15:00Z",
+      "pre_failover_data_sha256": "__CHANGE_ME_64_HEX__",
+      "post_failover_data_sha256": "__CHANGE_ME_SAME_64_HEX__",
+      "write_probe_sha256": "__CHANGE_ME_64_HEX__",
+      "read_back_sha256": "__CHANGE_ME_SAME_64_HEX__",
+      "read_probe_passed": true,
+      "write_probe_passed": true,
+      "data_integrity_passed": true,
+      "verification_log_sha256": "__CHANGE_ME_64_HEX__"
+    },
+    "object_store": {
+      "failover_event_id": "__CHANGE_ME_MATCHING_PROVIDER_EVENT_ID__",
+      "verification_id": "__CHANGE_ME_VERIFICATION_ID__",
+      "verified_at": "2026-08-06T00:15:00Z",
+      "pre_failover_data_sha256": "__CHANGE_ME_64_HEX__",
+      "post_failover_data_sha256": "__CHANGE_ME_SAME_64_HEX__",
+      "write_probe_sha256": "__CHANGE_ME_64_HEX__",
+      "read_back_sha256": "__CHANGE_ME_SAME_64_HEX__",
+      "read_probe_passed": true,
+      "write_probe_passed": true,
+      "data_integrity_passed": true,
+      "verification_log_sha256": "__CHANGE_ME_64_HEX__"
+    },
+    "rwx_repository_storage": {
+      "failover_event_id": "__CHANGE_ME_MATCHING_PROVIDER_EVENT_ID__",
+      "verification_id": "__CHANGE_ME_VERIFICATION_ID__",
+      "verified_at": "2026-08-06T00:15:00Z",
+      "pre_failover_data_sha256": "__CHANGE_ME_64_HEX__",
+      "post_failover_data_sha256": "__CHANGE_ME_SAME_64_HEX__",
+      "write_probe_sha256": "__CHANGE_ME_64_HEX__",
+      "read_back_sha256": "__CHANGE_ME_SAME_64_HEX__",
+      "read_probe_passed": true,
+      "write_probe_passed": true,
+      "data_integrity_passed": true,
+      "verification_log_sha256": "__CHANGE_ME_64_HEX__"
+    }
+  }
+}

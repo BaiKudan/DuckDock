@@ -1,0 +1,150 @@
+{
+  "authorization_scope": "repository baseline only; target substitution and fault injection remain mandatory",
+  "block_count": 0,
+  "checks": [
+    {
+      "expected": "only tls-gateway 0.0.0.0:443",
+      "key": "public_ports",
+      "observed": "[('tls-gateway', '0.0.0.0', 443)]",
+      "passed": true,
+      "status": "PASS"
+    },
+    {
+      "expected": "MySQL/Redis unbound; MinIO/UI/monitoring loopback only",
+      "key": "data_store_loopback",
+      "observed": "[('alertmanager', '127.0.0.1', 9093), ('frontend', '127.0.0.1', 8080), ('minio', '127.0.0.1', 9000), ('minio', '127.0.0.1', 9001), ('prometheus', '127.0.0.1', 9090)]",
+      "passed": true,
+      "status": "PASS"
+    },
+    {
+      "expected": "app_internal, data_internal and observability_internal are internal",
+      "key": "network_segmentation",
+      "observed": "['app_internal', 'data_internal', 'observability_internal']",
+      "passed": true,
+      "status": "PASS"
+    },
+    {
+      "expected": "state services and trusted app jobs only; no frontend/gateway",
+      "key": "data_network_membership",
+      "observed": "['backend', 'beat', 'migrate', 'minio', 'minio-init', 'mysql', 'redis', 'worker']",
+      "passed": true,
+      "status": "PASS"
+    },
+    {
+      "expected": "every third-party production image is digest pinned",
+      "key": "pinned_third_party_images",
+      "observed": "['image: mysql:8.4@sha256:c36050afdca850f23cef85703f84c7531a5ae155a11b5ee1c60acb09937c4084', 'image: redis:7.4.10-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2', 'image: minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e', 'image: minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727', 'image: prom/prometheus:v3.13.2@sha256:508729e0e2d18e11fd742a5a5ca70e557b940a93948c3c95fd0123a6fd538b69']",
+      "passed": true,
+      "status": "PASS"
+    },
+    {
+      "expected": "exact source commit; fixed crypto/gRPC; minimal non-root runtime",
+      "key": "patched_alertmanager_supply_chain",
+      "observed": "upstream commit plus post-release dependency fixes; scratch/non-root runtime",
+      "passed": true,
+      "status": "PASS"
+    },
+    {
+      "expected": "notification target and meta-alerts configured",
+      "key": "alert_delivery_wiring",
+      "observed": "Prometheus -> Alertmanager plus delivery failure alerts",
+      "passed": true,
+      "status": "PASS"
+    },
+    {
+      "expected": ">=1 PodDisruptionBudget",
+      "key": "ha_poddisruptionbudget",
+      "observed": "3",
+      "passed": true,
+      "status": "PASS"
+    },
+    {
+      "expected": ">=1 HorizontalPodAutoscaler",
+      "key": "ha_horizontalpodautoscaler",
+      "observed": "3",
+      "passed": true,
+      "status": "PASS"
+    },
+    {
+      "expected": ">=1 NetworkPolicy",
+      "key": "ha_networkpolicy",
+      "observed": "5",
+      "passed": true,
+      "status": "PASS"
+    },
+    {
+      "expected": ">=1 Ingress",
+      "key": "ha_ingress",
+      "observed": "1",
+      "passed": true,
+      "status": "PASS"
+    },
+    {
+      "expected": "3 baseline replicas",
+      "key": "ha_backend_replicas",
+      "observed": "replicas=3",
+      "passed": true,
+      "status": "PASS"
+    },
+    {
+      "expected": "3 baseline replicas",
+      "key": "ha_frontend_replicas",
+      "observed": "replicas=3",
+      "passed": true,
+      "status": "PASS"
+    },
+    {
+      "expected": "3 baseline replicas",
+      "key": "ha_worker_replicas",
+      "observed": "replicas=3",
+      "passed": true,
+      "status": "PASS"
+    },
+    {
+      "expected": ">=3 zone spread constraints",
+      "key": "ha_cross_zone_spread",
+      "observed": "3",
+      "passed": true,
+      "status": "PASS"
+    },
+    {
+      "expected": ">=3 taint-aware and ReplicaSet-revision-aware zone constraints",
+      "key": "ha_fault_domain_outage_scheduling",
+      "observed": "taint-aware=3, revision-aware=3",
+      "passed": true,
+      "status": "PASS"
+    },
+    {
+      "expected": "all workloads disable service-account token automount",
+      "key": "ha_no_service_account_tokens",
+      "observed": "6",
+      "passed": true,
+      "status": "PASS"
+    },
+    {
+      "expected": "target must replace image/domain/egress placeholders before authorization",
+      "key": "ha_template_requires_target_substitution",
+      "observed": "fail-closed placeholders retained",
+      "passed": true,
+      "status": "PASS"
+    },
+    {
+      "expected": "numeric non-root image users accepted by Kubernetes runAsNonRoot",
+      "key": "ha_numeric_non_root_images",
+      "observed": "backend=10001:10001, frontend=101:101",
+      "passed": true,
+      "status": "PASS"
+    },
+    {
+      "expected": "repeatable local rehearsal cannot be mistaken for target-production evidence",
+      "key": "ha_local_rehearsal_fail_closed",
+      "observed": "local-only scope; state/policy non-authorizing; Kubernetes Service proxy",
+      "passed": true,
+      "status": "PASS"
+    }
+  ],
+  "observed_at": "2026-08-05T08:53:22.800013+00:00",
+  "pass_count": 20,
+  "schema_version": "duckdock-production-baseline-v1",
+  "status": "PASS"
+}

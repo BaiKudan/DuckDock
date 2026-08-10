@@ -1,0 +1,159 @@
+{
+  "report_schema": "duckdock-adapter-conformance/1.0",
+  "report_id": "g2-adapter-conformance-20260730",
+  "generated_at": "2026-07-30T12:50:00+08:00",
+  "workspace": {
+    "repository": "BaiKudan/DuckDock",
+    "base_commit": "674bc928ee0e213ce1356db4e20f98efca5921ea",
+    "branch": "main",
+    "working_tree_dirty": true
+  },
+  "server": {
+    "contract_version": "2.0.0-draft",
+    "migration_head": "20260730_0037",
+    "protocol_version": "duckdock-adapter/1.0",
+    "canonicalizer_version": "duckdock-canonical-json-v1",
+    "normalizers": [
+      "duckdock-openclaw-v1",
+      "duckdock-generic-otlp-v1",
+      "duckdock-atif-v1"
+    ]
+  },
+  "environment": {
+    "mysql": "8.4.9",
+    "otel_collector_contrib": "0.157.0",
+    "minio": "RELEASE.2025-09-07T16-13-09Z",
+    "object_store_protocol": "S3-compatible",
+    "development_stack": [
+      "backend",
+      "worker",
+      "beat",
+      "mysql",
+      "redis",
+      "minio",
+      "frontend",
+      "otel-collector"
+    ]
+  },
+  "fixture_corpus": {
+    "revision": "674bc928ee0e213ce1356db4e20f98efca5921ea+rt08-working-tree",
+    "shared_c0": "backend/tests/foundation/test_adapter_fleet.py",
+    "openclaw": [
+      "backend/tests/foundation/test_execution_api_v2.py",
+      "tools/duckdock-runtime-mcp/tests/test_duckdock_runtime_mcp.py"
+    ],
+    "generic_otlp": "backend/tests/foundation/test_generic_otlp_bridge.py",
+    "pack_atif": "backend/tests/foundation/test_pack_atif_import.py",
+    "contract": "backend/tests/test_duckdock_v2_openapi_contract.py"
+  },
+  "profiles": [
+    {
+      "profile": "openclaw-reporter",
+      "adapter_version": "runtime-mcp/0.3.0",
+      "source_schema_versions": [
+        "openclaw-run/2026-07",
+        "OTel GenAI 1.40.0",
+        "OpenInference"
+      ],
+      "claimed_capability_level": "DD-C3",
+      "accepted_capabilities": [
+        "session_control",
+        "run_control",
+        "otel_trace_correlation",
+        "durable_replay"
+      ],
+      "result": "PASS"
+    },
+    {
+      "profile": "generic-otlp-bridge",
+      "adapter_version": "otelcol-contrib/0.157.0",
+      "source_schema_versions": [
+        "OTLP/HTTP JSON 1.0"
+      ],
+      "claimed_capability_level": "DD-C2",
+      "accepted_capabilities": [
+        "otel_trace_correlation",
+        "metadata_projection"
+      ],
+      "result": "PASS"
+    },
+    {
+      "profile": "pack-atif-import",
+      "adapter_version": "duckdock-pack/1.0",
+      "source_schema_versions": [
+        "ATIF-v1.0",
+        "ATIF-v1.1",
+        "ATIF-v1.2",
+        "ATIF-v1.3",
+        "ATIF-v1.4",
+        "ATIF-v1.5",
+        "ATIF-v1.6",
+        "ATIF-v1.7"
+      ],
+      "claimed_capability_level": "DD-C1+ARTIFACT",
+      "accepted_capabilities": [
+        "artifact_import",
+        "partial_loss"
+      ],
+      "rejected_capabilities": [
+        "resumable_upload"
+      ],
+      "result": "PASS"
+    }
+  ],
+  "shared_c0_results": {
+    "CONF-C0-001": "PASS",
+    "CONF-C0-002": "PASS",
+    "CONF-C0-003": "PASS",
+    "CONF-C0-004": "PASS",
+    "CONF-C0-005": "PASS",
+    "CONF-C0-006": "PASS",
+    "CONF-C0-007": "PASS"
+  },
+  "test_results": {
+    "focused_three_profile_default": "61 passed, 2 skipped",
+    "focused_real_mysql": "1 passed",
+    "focused_live_minio": "1 passed",
+    "foundation": "224 passed, 14 skipped",
+    "backend_full": "890 passed, 18 skipped",
+    "frontend": "35 passed",
+    "ruff": "PASS",
+    "mypy": "82 errors, baseline 82, no RT-08-file errors",
+    "compile_import": "PASS",
+    "alembic": "0037 downgrade/upgrade/check PASS"
+  },
+  "default_lane_skips": [
+    {
+      "test": "test_fleet_history_projection_runs_on_real_mysql",
+      "reason": "destructive TEST_MYSQL_URL is opt-in",
+      "separate_result": "PASS"
+    },
+    {
+      "test": "test_pack_import_real_minio_put_verify_and_materialize",
+      "reason": "RUN_MINIO_INTEGRATION is opt-in",
+      "separate_result": "PASS"
+    }
+  ],
+  "policies": {
+    "content_capture": "metadata_only",
+    "trust": "ReporterCredential-derived CHANNEL_AUTHENTICATED; handshake does not attest workload",
+    "identity": "Namespace and Runtime are server-derived; public responses use opaque rt_/hs_ IDs",
+    "loss": "partial and declared loss remain explicit; Pack completeness never upgrades implicitly",
+    "sampling": "no server-side sampling in the control projection",
+    "canary": "Secret Canary is rejected before configured sinks or final object registration"
+  },
+  "known_limits": [
+    "Pack/ATIF does not claim full DD-C3",
+    "ATIF export is not implemented",
+    "resumable multipart upload is not implemented",
+    "durable batch acknowledgement/cursor for Pack import is not implemented",
+    "evaluation replay is not implemented",
+    "formal Product/Architecture Owner G2 approval remains pending"
+  ],
+  "integrity": {
+    "algorithm": "sha256",
+    "sidecar": "g2-adapter-conformance-report-20260730.sha256",
+    "signature": null,
+    "signature_reason": "Local technical evidence uses a checksum sidecar; no owner signing key is configured."
+  }
+}

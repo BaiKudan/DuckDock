@@ -10,11 +10,10 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy import delete, or_, select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 
 from app.core.deps import (
-    AdminUser,
     AssetManagerUser,
     AssetReaderUser,
     CurrentUser,
@@ -49,7 +48,7 @@ from app.schemas.control_plane import (
     WorkTraceRevealRequest,
 )
 from app.core.config import settings
-from app.core.security import hash_password
+from app.core.api_token_security import hash_reporter_token_secret
 from app.models.user import SystemRole
 from app.models.control_plane import (
     AIAsset,
@@ -63,7 +62,6 @@ from app.models.control_plane import (
     CollectionTriggerType,
     Criticality,
     ExecutionAction,
-    ExecutionMode,
     ExecutionStatus,
     HandoverAction,
     HandoverCase,
@@ -82,7 +80,6 @@ from app.models.control_plane import (
     ProviderPrincipal,
     RawCollectionRecord,
     RuntimeCapabilitySnapshot,
-    RuntimeBinding,
     WorkTrace,
     WorkArtifact,
     EvidenceItem,
@@ -103,7 +100,6 @@ from app.schemas.control_plane import (
     AssetOwnershipCreate,
     AssetOwnershipOut,
     CollectionJobOut,
-    DemoDataCleanupOut,
     ExecuteHandoverRequest,
     ExecutionActionOut,
     EvidenceItemOut,
@@ -143,6 +139,7 @@ from app.schemas.control_plane import (
 )
 from app.services.audit_service import audit
 from app.services.adapter_collection_service import ingest_openclaw_backup
+from app.services.reporter_identity_service import EXECUTION_WRITE_SCOPE
 from app.services.report_upload_service import (
     ReporterAuthContext,
     authenticate_runtime_report_token,
@@ -175,50 +172,21 @@ def _tenant_write_http_exception(exc: Exception) -> HTTPException:
     return HTTPException(status_code=422, detail="Tenant-scoped write rejected")
 
 
-def _capability(provider: RuntimeProvider) -> AdapterCapabilityOut:
-    matrix: dict[RuntimeProvider, dict[str, bool | str]] = {
-        RuntimeProvider.OPENCLAW: {
-            "asset_sync": True,
-            "worktrace_sync": True,
-            "artifact_sync": True,
-            "backup_create": True,
-            "restore": "manual",
-            "browser_fallback": False,
-        },
-        RuntimeProvider.JVS: {
-            "asset_sync": True,
-            "worktrace_sync": True,
-            "artifact_sync": True,
-            "backup_create": False,
-            "restore": False,
-            "browser_fallback": False,
-        },
-        RuntimeProvider.ARKCLAW: {
-            "asset_sync": "provider_confirmation_required",
-            "worktrace_sync": "provider_confirmation_required",
-            "artifact_sync": "provider_confirmation_required",
-            "backup_create": "provider_confirmation_required",
-            "restore": "provider_confirmation_required",
-            "browser_fallback": "fallback_only",
-        },
-        RuntimeProvider.WORKBUDDY: {
-            "asset_sync": "browser_or_private_api",
-            "worktrace_sync": "browser_or_private_api",
-            "artifact_sync": "browser_or_private_api",
-            "backup_create": False,
-            "restore": False,
-            "browser_fallback": True,
-        },
-        RuntimeProvider.CUSTOM: {
-            "asset_sync": "adapter_required",
-            "worktrace_sync": "adapter_required",
-            "artifact_sync": "adapter_required",
-            "backup_create": "adapter_required",
-            "restore": "adapter_required",
-            "browser_fallback": "adapter_required",
-        },
-    }
-    return AdapterCapabilityOut(provider=provider, **matrix[provider])
+def _unverified_capability(
+    provider: RuntimeProvider,
+) -> AdapterCapabilityOut:
+    """Legacy v1 shape that deliberately makes no availability claim."""
+
+    unavailable = "dynamic_handshake_required"
+    return AdapterCapabilityOut(
+        provider=provider,
+        asset_sync=unavailable,
+        worktrace_sync=unavailable,
+        artifact_sync=unavailable,
+        backup_create=unavailable,
+        restore=unavailable,
+        browser_fallback=unavailable,
+    )
 
 
 async def _get_runtime(db: DB, runtime_id: int) -> RuntimeInstance:
@@ -622,7 +590,12 @@ def _reporter_credential_metadata(body: ReporterEnrollmentCreate) -> dict[str, A
 
 def _reporter_scopes(existing: list | None = None) -> list[str]:
     scopes = [item for item in (existing or []) if isinstance(item, str)]
-    for required in ("report.upload", "report.structured", "report.heartbeat"):
+    for required in (
+        "report.upload",
+        "report.structured",
+        "report.heartbeat",
+        EXECUTION_WRITE_SCOPE,
+    ):
         if required not in scopes:
             scopes.append(required)
     return scopes
@@ -642,10 +615,6 @@ async def _get_reporter_credential_for_user(db: DB, credential_id: int, current_
     if current_user.system_role != SystemRole.ADMIN and credential.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="You can only manage your own reporter credentials")
     return credential
-
-
-def _is_demo_metadata(value: dict | None) -> bool:
-    return isinstance(value, dict) and value.get("demo") is True
 
 
 def _asset_user_feedback(asset: AIAsset, user_id: int) -> dict | None:
@@ -796,7 +765,7 @@ def _build_readiness(
             reviewed_assets=0,
             total_assets=0,
             missing_items=["DuckDock has not collected assets or work traces linked to you yet."],
-            next_actions=["Ask your OpenClaw or WorkBuddy runtime to install duckdock_reporter and run a dry-run report."],
+            next_actions=["Ask your OpenClaw or WorkBuddy runtime to install duckdock_reporter and submit a minimal validation report."],
         )
 
     reviewed_assets = sum(1 for asset in assets if _asset_user_feedback(asset, user_id) is not None)
@@ -819,7 +788,7 @@ def _build_readiness(
         next_actions.append("Prioritize high or critical assets before offboarding.")
     if not any(item.state == "healthy" for item in reporter_statuses):
         missing_items.append("No healthy reporter upload was found in the last 8 days.")
-        next_actions.append("Run duckdock_reporter dry-run and upload a pack from your runtime.")
+        next_actions.append("Run a Reporter validation upload and submit a minimal pack from your runtime.")
     if len(traces) < 3:
         missing_items.append("Recent work trace coverage is still thin.")
         next_actions.append("Keep periodic reporting enabled so project context is not lost.")
@@ -833,65 +802,12 @@ def _build_readiness(
     )
 
 
-def _is_demo_runtime(runtime: RuntimeInstance) -> bool:
-    if _is_demo_metadata(runtime.metadata_json):
-        return True
-    return (
-        runtime.provider == RuntimeProvider.OPENCLAW
-        and runtime.base_url == "https://openclaw.example.internal"
-        and (runtime.credential_ref or "").startswith("vault://duckdock/demo")
-        and ("Demo Runtime" in (runtime.name or "") or (runtime.name or "").startswith("演示"))
-    )
-
-
-def _is_demo_asset(asset: AIAsset, demo_runtime_ids: set[int]) -> bool:
-    if _is_demo_metadata(asset.metadata_json):
-        return True
-    external_id = asset.external_id or ""
-    if external_id.startswith("demo-skill-") or external_id.startswith("skill-demo-"):
-        return True
-    if asset.content_hash == "demo-sha256":
-        return True
-    return (
-        asset.source_runtime_id in demo_runtime_ids
-        and asset.name == "离职交接摘要 Skill"
-        and asset.source_provider == RuntimeProvider.OPENCLAW
-    )
-
-
-def _runtime_ids_from_summary(value: dict | None) -> set[int]:
-    if not isinstance(value, dict):
-        return set()
-    ids = value.get("runtime_ids")
-    if not isinstance(ids, list):
-        return set()
-    result: set[int] = set()
-    for item in ids:
-        try:
-            result.add(int(item))
-        except (TypeError, ValueError):
-            continue
-    return result
-
-
-def _is_demo_handover(case: HandoverCase, demo_runtime_ids: set[int]) -> bool:
-    if _is_demo_metadata(case.summary_json):
-        return True
-    title = case.title or ""
-    has_demo_title = title.startswith("演示") or title.startswith("Demo") or title.startswith("婕旂ず")
-    return has_demo_title and bool(_runtime_ids_from_summary(case.summary_json) & demo_runtime_ids)
-
-
-async def _delete_where(db: DB, model, *conditions) -> int:
-    if not conditions:
-        return 0
-    result = await db.execute(delete(model).where(*conditions))
-    return int(result.rowcount or 0)
-
-
 @router.get("/adapters/capabilities", response_model=dict[RuntimeProvider, AdapterCapabilityOut])
 async def adapter_capabilities(current_user: RuntimeReaderUser):
-    return {provider: _capability(provider) for provider in RuntimeProvider}
+    return {
+        provider: _unverified_capability(provider)
+        for provider in RuntimeProvider
+    }
 
 
 @router.get("/runtimes", response_model=list[RuntimeInstanceOut])
@@ -926,7 +842,7 @@ async def create_runtime(body: RuntimeInstanceCreate, db: DB, current_user: Runt
         deploy_type=body.deploy_type,
         credential_ref=credential_ref,
         metadata_json=body.metadata_json,
-        capabilities=_capability(body.provider).model_dump(mode="json"),
+        capabilities=None,
     )
     db.add(runtime)
     await db.flush()
@@ -979,7 +895,7 @@ async def update_runtime(runtime_id: int, body: RuntimeInstanceUpdate, db: DB, c
         action="runtime.updated",
         resource_type="runtime",
         resource_id=runtime.id,
-        # 审计绝不携带明文凭证 — 只记是否轮换(FR-016/原则 V)
+        # 审计绝不携带明文凭证，只记录是否发生轮换。
         details={
             **body.model_dump(exclude_unset=True, exclude={"credential"}, mode="json"),
             "credential_rotated": bool(plaintext_credential),
@@ -990,7 +906,7 @@ async def update_runtime(runtime_id: int, body: RuntimeInstanceUpdate, db: DB, c
 
 @router.post("/runtimes/{runtime_id}/test", response_model=RuntimeConnectionTestOut)
 async def test_runtime(runtime_id: int, db: DB, current_user: RuntimeManagerUser):
-    """Push-only(specs/001 T080):上报链路自检——不再外联厂商,检查 Reporter 凭证与最近上报。"""
+    """检查 Reporter 凭证可用性与最近上报状态，不主动连接运行时厂商。"""
     runtime = await _get_runtime(db, runtime_id)
     active_tokens = (
         await db.execute(
@@ -1027,7 +943,7 @@ async def test_runtime(runtime_id: int, db: DB, current_user: RuntimeManagerUser
     return RuntimeConnectionTestOut(
         status=check_status,
         provider=runtime.provider,
-        capabilities=_capability(runtime.provider),
+        capabilities=_unverified_capability(runtime.provider),
         message=message,
     )
 
@@ -1067,7 +983,7 @@ async def enroll_reporter_endpoint(body: ReporterEnrollmentCreate, db: DB, curre
         device_id=body.device_id,
         name=f"DuckDock Reporter ({body.device_id})",
         token_prefix=prefix,
-        token_hash=hash_password(secret),
+        token_hash=hash_reporter_token_secret(secret),
         scopes=_reporter_scopes(),
         expires_at=body.expires_at,
         metadata_json=_reporter_credential_metadata(body),
@@ -1219,7 +1135,7 @@ async def rotate_reporter_credential(
         device_id=old.device_id,
         name=old.name,
         token_prefix=prefix,
-        token_hash=hash_password(secret),
+        token_hash=hash_reporter_token_secret(secret),
         scopes=_reporter_scopes(old.scopes),
         expires_at=body.expires_at if body.expires_at is not None else old.expires_at,
         rotated_from_id=old.id,
@@ -1302,7 +1218,7 @@ async def create_runtime_report_token(
         runtime_id=runtime.id,
         name=body.name,
         token_prefix=prefix,
-        token_hash=hash_password(secret),
+        token_hash=hash_reporter_token_secret(secret),
         expires_at=body.expires_at,
         created_by=current_user.id,
     )
@@ -1487,269 +1403,6 @@ async def ingest_report_upload_session_endpoint(report_id: str, db: DB, current_
         details={"report_id": session.report_id, "status": session.status.value},
     )
     return _report_session_out(session)
-
-
-@router.delete("/demo-data", response_model=DemoDataCleanupOut)
-async def cleanup_demo_data(db: DB, current_user: AdminUser):
-    runtimes = (await db.execute(select(RuntimeInstance))).scalars().all()
-    demo_runtime_ids = {row.id for row in runtimes if _is_demo_runtime(row)}
-
-    assets = (await db.execute(select(AIAsset))).scalars().all()
-    demo_asset_ids = {
-        row.id
-        for row in assets
-        if _is_demo_asset(row, demo_runtime_ids)
-    }
-    protected_runtime_asset_ids = {
-        row.id
-        for row in assets
-        if row.source_runtime_id in demo_runtime_ids and row.id not in demo_asset_ids
-    }
-    deletable_runtime_ids = {
-        runtime_id
-        for runtime_id in demo_runtime_ids
-        if not any(row.source_runtime_id == runtime_id for row in assets if row.id in protected_runtime_asset_ids)
-    }
-
-    handovers = (await db.execute(select(HandoverCase))).scalars().all()
-    demo_handover_ids = {
-        row.id
-        for row in handovers
-        if _is_demo_handover(row, demo_runtime_ids)
-    }
-
-    jobs = (await db.execute(select(CollectionJob))).scalars().all()
-    demo_job_ids = {
-        row.id
-        for row in jobs
-        if row.runtime_id in demo_runtime_ids or _is_demo_metadata(row.scope_json)
-    }
-
-    demo_raw_asset_external_ids: set[str] = set()
-    demo_raw_trace_external_ids: set[str] = set()
-    if demo_job_ids:
-        raw_records_for_demo_jobs = (
-            await db.execute(select(RawCollectionRecord).where(RawCollectionRecord.collection_job_id.in_(demo_job_ids)))
-        ).scalars().all()
-        for row in raw_records_for_demo_jobs:
-            payload = row.payload_json or {}
-            external_id = row.external_id or payload.get("external_id") or payload.get("id")
-            if not external_id:
-                continue
-            if row.normalized_type == "ai_asset":
-                demo_raw_asset_external_ids.add(str(external_id))
-            if row.normalized_type == "work_trace":
-                demo_raw_trace_external_ids.add(str(external_id))
-
-    if demo_raw_asset_external_ids:
-        demo_asset_ids.update(
-            row.id
-            for row in assets
-            if row.source_runtime_id in demo_runtime_ids and (row.external_id or "") in demo_raw_asset_external_ids
-        )
-        protected_runtime_asset_ids = {
-            row.id
-            for row in assets
-            if row.source_runtime_id in demo_runtime_ids and row.id not in demo_asset_ids
-        }
-        deletable_runtime_ids = {
-            runtime_id
-            for runtime_id in demo_runtime_ids
-            if not any(row.source_runtime_id == runtime_id for row in assets if row.id in protected_runtime_asset_ids)
-        }
-
-    report_sessions = (await db.execute(select(ReportUploadSession))).scalars().all()
-    demo_report_session_ids = {
-        row.id
-        for row in report_sessions
-        if row.runtime_id in demo_runtime_ids
-        or row.collection_job_id in demo_job_ids
-        or _is_demo_metadata(row.metadata_json)
-    }
-
-    traces = (await db.execute(select(WorkTrace))).scalars().all()
-    demo_trace_ids = {
-        row.id
-        for row in traces
-        if row.asset_id in demo_asset_ids
-        or ((row.external_session_id or "") in demo_raw_trace_external_ids and row.runtime_id in demo_runtime_ids)
-        or (
-            row.runtime_id in demo_runtime_ids
-            and (
-                _is_demo_metadata(row.metadata_json)
-                or (row.external_session_id or "").startswith("demo-")
-                or (row.external_session_id or "").startswith("session-demo-")
-            )
-        )
-    }
-    protected_runtime_trace_ids = {
-        row.id
-        for row in traces
-        if row.runtime_id in demo_runtime_ids and row.id not in demo_trace_ids
-    }
-    deletable_runtime_ids = {
-        runtime_id
-        for runtime_id in deletable_runtime_ids
-        if not any(row.runtime_id == runtime_id for row in traces if row.id in protected_runtime_trace_ids)
-    }
-
-    handover_items = (await db.execute(select(HandoverItem))).scalars().all()
-    demo_item_ids = {
-        row.id
-        for row in handover_items
-        if row.handover_case_id in demo_handover_ids or row.asset_id in demo_asset_ids
-    }
-
-    deleted: dict[str, int] = {}
-    if demo_item_ids:
-        deleted["execution_actions"] = await _delete_where(
-            db,
-            ExecutionAction,
-            ExecutionAction.handover_item_id.in_(demo_item_ids),
-        )
-    if demo_handover_ids:
-        deleted["execution_actions"] = deleted.get("execution_actions", 0) + await _delete_where(
-            db,
-            ExecutionAction,
-            ExecutionAction.handover_case_id.in_(demo_handover_ids),
-        )
-        deleted["approval_tasks"] = await _delete_where(
-            db,
-            ApprovalTask,
-            ApprovalTask.handover_case_id.in_(demo_handover_ids),
-        )
-    if demo_item_ids:
-        deleted["handover_items"] = await _delete_where(
-            db,
-            HandoverItem,
-            HandoverItem.id.in_(demo_item_ids),
-        )
-    if demo_handover_ids:
-        deleted["handover_cases"] = await _delete_where(
-            db,
-            HandoverCase,
-            HandoverCase.id.in_(demo_handover_ids),
-        )
-    if demo_trace_ids:
-        deleted["work_artifacts"] = await _delete_where(
-            db,
-            WorkArtifact,
-            WorkArtifact.trace_id.in_(demo_trace_ids),
-        )
-    if demo_asset_ids:
-        deleted["work_artifacts"] = deleted.get("work_artifacts", 0) + await _delete_where(
-            db,
-            WorkArtifact,
-            WorkArtifact.asset_id.in_(demo_asset_ids),
-        )
-        deleted["runtime_bindings"] = await _delete_where(
-            db,
-            RuntimeBinding,
-            RuntimeBinding.asset_id.in_(demo_asset_ids),
-        )
-        deleted["asset_ownerships"] = await _delete_where(
-            db,
-            AssetOwnership,
-            AssetOwnership.asset_id.in_(demo_asset_ids),
-        )
-    if demo_trace_ids:
-        deleted["work_traces"] = await _delete_where(
-            db,
-            WorkTrace,
-            WorkTrace.id.in_(demo_trace_ids),
-        )
-    if demo_report_session_ids:
-        deleted["report_upload_sessions"] = await _delete_where(
-            db,
-            ReportUploadSession,
-            ReportUploadSession.id.in_(demo_report_session_ids),
-        )
-    if demo_job_ids:
-        deleted["adapter_run_steps"] = await _delete_where(
-            db,
-            AdapterRunStep,
-            AdapterRunStep.collection_job_id.in_(demo_job_ids),
-        )
-        deleted["evidence_items"] = await _delete_where(
-            db,
-            EvidenceItem,
-            EvidenceItem.collection_job_id.in_(demo_job_ids),
-        )
-        deleted["raw_collection_records"] = await _delete_where(
-            db,
-            RawCollectionRecord,
-            RawCollectionRecord.collection_job_id.in_(demo_job_ids),
-        )
-        deleted["adapter_errors"] = await _delete_where(
-            db,
-            AdapterError,
-            AdapterError.collection_job_id.in_(demo_job_ids),
-        )
-        deleted["collection_jobs"] = await _delete_where(
-            db,
-            CollectionJob,
-            CollectionJob.id.in_(demo_job_ids),
-        )
-    if demo_asset_ids:
-        deleted["ai_assets"] = await _delete_where(
-            db,
-            AIAsset,
-            AIAsset.id.in_(demo_asset_ids),
-        )
-    if deletable_runtime_ids:
-        deleted["raw_collection_records"] = deleted.get("raw_collection_records", 0) + await _delete_where(
-            db,
-            RawCollectionRecord,
-            RawCollectionRecord.runtime_id.in_(deletable_runtime_ids),
-        )
-        deleted["adapter_errors"] = deleted.get("adapter_errors", 0) + await _delete_where(
-            db,
-            AdapterError,
-            AdapterError.runtime_id.in_(deletable_runtime_ids),
-        )
-        deleted["adapter_cursors"] = await _delete_where(
-            db,
-            AdapterCursor,
-            AdapterCursor.runtime_id.in_(deletable_runtime_ids),
-        )
-        deleted["provider_principals"] = await _delete_where(
-            db,
-            ProviderPrincipal,
-            ProviderPrincipal.runtime_id.in_(deletable_runtime_ids),
-        )
-        deleted["runtime_capability_snapshots"] = await _delete_where(
-            db,
-            RuntimeCapabilitySnapshot,
-            RuntimeCapabilitySnapshot.runtime_id.in_(deletable_runtime_ids),
-        )
-        deleted["runtime_instances"] = await _delete_where(
-            db,
-            RuntimeInstance,
-            RuntimeInstance.id.in_(deletable_runtime_ids),
-        )
-
-    await audit(
-        db,
-        user=current_user,
-        action="control_plane.demo_data.cleaned",
-        resource_type="control_plane",
-        details={
-            "deleted": deleted,
-            "protected": {
-                "runtime_instances": len(demo_runtime_ids - deletable_runtime_ids),
-                "non_demo_assets_on_demo_runtimes": len(protected_runtime_asset_ids),
-                "non_demo_traces_on_demo_runtimes": len(protected_runtime_trace_ids),
-            },
-        },
-    )
-    return DemoDataCleanupOut(
-        deleted={key: value for key, value in deleted.items() if value},
-        protected={
-            "runtime_instances": len(demo_runtime_ids - deletable_runtime_ids),
-            "non_demo_assets_on_demo_runtimes": len(protected_runtime_asset_ids),
-            "non_demo_traces_on_demo_runtimes": len(protected_runtime_trace_ids),
-        },
-    )
 
 
 @router.get("/collection-jobs/{job_id}/steps", response_model=list[AdapterRunStepOut])
@@ -2121,11 +1774,10 @@ _SENSITIVE_EVIDENCE_LEVELS = {EvidenceVisibility.SENSITIVE, EvidenceVisibility.R
 
 
 async def _has_elevated_read(db: DB, user, permission_key: str) -> bool:
-    """系统 admin 或持指定提权键者 → 不受敏感行 ownership 过滤限制(specs/003 FR-002)。
+    """判断用户是否可以越过敏感数据的归属过滤。
 
-    与 reveal/decide/verify 同形态:admin 直接放行,否则确保内置 RBAC 后查 has_permission。
-    范围维度 = **仅归属**(actor_user_id / created_by);org_unit 细分按 2026-06-12 单租户
-    决策暂缓(SaaS 多租户 P2 时再引入),故此处不做 org_unit 过滤。
+    系统管理员直接放行，其他用户必须持有指定权限。当前范围按记录归属
+    (actor_user_id / created_by)判定，不额外按 org_unit 过滤。
     """
     if user.system_role == SystemRole.ADMIN:
         return True
@@ -2134,7 +1786,7 @@ async def _has_elevated_read(db: DB, user, permission_key: str) -> bool:
 
 
 def _trace_summary_out(trace: WorkTrace) -> WorkTraceOut:
-    """FR-008:默认仅摘要——敏感级 trace 的 metadata_json 遮蔽,完整内容走 reveal。"""
+    """返回摘要视图，并遮蔽敏感轨迹的 metadata_json。"""
     out = WorkTraceOut.model_validate(trace)
     if trace.sensitivity in _SENSITIVE_TRACE_LEVELS:
         out.metadata_json = None
@@ -2153,7 +1805,7 @@ async def list_work_traces(
         stmt = stmt.where(WorkTrace.asset_id == asset_id)
     if actor_user_id is not None:
         stmt = stmt.where(WorkTrace.actor_user_id == actor_user_id)
-    # FR-002:敏感级 trace 仅本人(actor)可见;持 worktrace.content.read / admin 不受限。
+    # 敏感轨迹仅本人可见；持 worktrace.content.read 的用户和管理员不受限。
     # 非提权者整行排除他人的敏感 trace(含 actor 为空者)——比单纯遮蔽更强的最小暴露。
     if not await _has_elevated_read(db, current_user, "worktrace.content.read"):
         stmt = stmt.where(
@@ -2170,10 +1822,10 @@ async def get_work_trace(trace_id: int, db: DB, current_user: WorktraceReaderUse
     trace = (await db.execute(select(WorkTrace).where(WorkTrace.id == trace_id))).scalar_one_or_none()
     if trace is None:
         raise HTTPException(status_code=404, detail="Work trace not found")
-    # FR-002:他人的敏感 trace 按 id 直取也不返回(404,不暴露存在性);提权者/admin 例外。
+    # 他人的敏感轨迹按 id 直取也返回 404，避免暴露记录是否存在。
     if trace.sensitivity in _SENSITIVE_TRACE_LEVELS and trace.actor_user_id != current_user.id:
         if not await _has_elevated_read(db, current_user, "worktrace.content.read"):
-            # FR-003:跨边界访问尝试必须留痕。显式 commit——随后抛 404 会触发 get_db rollback。
+            # 跨边界访问尝试必须留痕；显式提交避免随后异常触发事务回滚。
             await audit(
                 db,
                 user=current_user,
@@ -2189,14 +1841,14 @@ async def get_work_trace(trace_id: int, db: DB, current_user: WorktraceReaderUse
 
 @router.post("/worktraces/{trace_id}/reveal", response_model=WorkTraceDetailOut)
 async def reveal_work_trace(trace_id: int, body: WorkTraceRevealRequest, db: DB, current_user: CurrentUser):
-    """FR-008:查看完整内容必须 reason + 审计;本人(actor)或 worktrace.content.read 可揭。"""
+    """向记录归属人或获授权读者展示完整轨迹，并审计访问原因。"""
     trace = (await db.execute(select(WorkTrace).where(WorkTrace.id == trace_id))).scalar_one_or_none()
     if trace is None:
         raise HTTPException(status_code=404, detail="Work trace not found")
     if current_user.system_role != SystemRole.ADMIN and trace.actor_user_id != current_user.id:
         await ensure_builtin_rbac(db)
         if not await has_permission(db, user=current_user, permission_key="worktrace.content.read"):
-            # FR-003:越权揭示尝试必须留痕。显式 commit——随后抛 403 会触发 get_db rollback。
+            # 越权揭示尝试必须留痕；显式提交避免随后异常触发事务回滚。
             await audit(
                 db,
                 user=current_user,
@@ -2237,7 +1889,7 @@ async def list_evidence(db: DB, current_user: EvidenceReaderUser, collection_job
     stmt = select(EvidenceItem).order_by(EvidenceItem.created_at.desc())
     if collection_job_id is not None:
         stmt = stmt.where(EvidenceItem.collection_job_id == collection_job_id)
-    # FR-002:敏感/受限证据仅创建者可见;持 evidence.sensitive.read / admin 不受限。
+    # 敏感或受限证据仅创建者可见；获授权读者和管理员不受限。
     if not await _has_elevated_read(db, current_user, "evidence.sensitive.read"):
         stmt = stmt.where(
             or_(
@@ -2252,7 +1904,7 @@ async def list_evidence(db: DB, current_user: EvidenceReaderUser, collection_job
 async def issue_evidence_download_link(
     evidence_id: int, body: EvidenceDownloadLinkRequest, db: DB, current_user: EvidenceReaderUser
 ):
-    """FR-009:为证据对象签发**限时**下载 URL(原则 V:权限 + 原因 + 审计;对外签名 URL 必带过期)。
+    """为证据对象签发带有效期的下载 URL，并审计申请原因。
 
     敏感级证据(SENSITIVE/RESTRICTED)在 evidence.read 之上额外要求 evidence.sensitive.read
     (系统 admin 例外)。报告包内部证据签名的是所在归档对象,响应回传 archive 内路径。
@@ -2268,11 +1920,11 @@ async def issue_evidence_download_link(
     if (
         evidence.visibility in {EvidenceVisibility.SENSITIVE, EvidenceVisibility.RESTRICTED}
         and current_user.system_role != SystemRole.ADMIN
-        and evidence.created_by != current_user.id  # FR-002:创建者本人可取自己的敏感证据(与 worktrace reveal 对齐)
+        and evidence.created_by != current_user.id  # 创建者可获取自己的敏感证据。
     ):
         await ensure_builtin_rbac(db)
         if not await has_permission(db, user=current_user, permission_key="evidence.sensitive.read"):
-            # 敏感证据的越权尝试也留痕(原则 V:敏感访问全程可审计,授予与拒绝皆记)。
+            # 敏感证据的越权尝试也必须留痕。
             # 必须显式 commit:随后抛 403 会触发 get_db 的 rollback,否则该审计会被回滚丢失。
             await audit(
                 db,
@@ -2359,6 +2011,7 @@ async def create_handover(body: HandoverCaseCreate, db: DB, current_user: Handov
         subject_user_id=body.subject_user_id,
         namespace_id=namespace.id,
         receiver_user_id=body.receiver_user_id,
+        fallback_owner_user_id=body.fallback_owner_user_id,
         due_at=body.due_at,
         created_by=current_user.id,
         summary_json=summary,
@@ -2398,6 +2051,9 @@ async def update_handover(case_id: int, body: HandoverCaseUpdate, db: DB, curren
     if "receiver_user_id" in fields:
         case.receiver_user_id = body.receiver_user_id
         changed["receiver_user_id"] = body.receiver_user_id
+    if "fallback_owner_user_id" in fields:
+        case.fallback_owner_user_id = body.fallback_owner_user_id
+        changed["fallback_owner_user_id"] = body.fallback_owner_user_id
     if "due_at" in fields:
         case.due_at = body.due_at
         changed["due_at"] = body.due_at.isoformat() if body.due_at else None
@@ -2622,7 +2278,7 @@ async def analyze_handover(
         rationale = rec.rationale if rec else "未获顾问建议,回落 MANUAL_REVIEW,需人工复核。"
         recommended_action = rec.recommended_action if rec else HandoverAction.MANUAL_REVIEW
         confidence = rec.confidence if rec else 0.0
-        # FR-009:每条生成的 HandoverItem 关联一条溯源证据(顾问/分析阶段产物),供审批人核对建议来源。
+        # 每条交接建议关联溯源证据，供审批人核对建议来源。
         evidence = build_evidence_item(
             namespace_id=namespace_id,
             source_type=EvidenceSourceType.LLM_ANALYSIS,
@@ -2753,7 +2409,7 @@ async def decide_approval(
         raise HTTPException(status_code=404, detail="Approval task not found")
     if task.status != ApprovalStatus.PENDING:
         raise HTTPException(status_code=409, detail="Approval task has already been decided")
-    # US-005: 指派审批任务本身是一个 case-scoped 写授权，保留既有“受派人可决”
+    # 指派审批任务本身是 case 范围内的写授权，受派人可以作出决定。
     # 语义；其他 handover manager 仍必须同时拥有该 Namespace 的写权限。
     is_assigned_approver = task.approver_user_id == current_user.id
     if current_user.system_role != SystemRole.ADMIN and not is_assigned_approver:
@@ -2800,11 +2456,6 @@ async def execute_handover(case_id: int, body: ExecuteHandoverRequest, db: DB, c
     )
     if existing_actions is not None:
         return existing_actions
-    if body.execution_mode == ExecutionMode.AUTO:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="auto 执行(探针 lease)尚未实现,见 specs/001 T085;请用 manual",
-        )
     if case.status != HandoverStatus.APPROVED:
         raise HTTPException(status_code=409, detail="Handover case must be approved before execution")
     stmt = select(HandoverItem).where(HandoverItem.handover_case_id == case.id).order_by(HandoverItem.id)
@@ -2895,7 +2546,7 @@ async def complete_execution_action(
     db: DB,
     current_user: HandoverManagerUser,
 ):
-    """FR-019 manual 回执:人工在厂商平台执行后提交结果+说明 → 审计 + USER_CONFIRM 证据。"""
+    """记录外部人工执行结果，并生成不可变回执证据与审计记录。"""
     case = await _get_handover(db, case_id)
     action = (
         await db.execute(
@@ -3021,7 +2672,7 @@ async def complete_execution_action(
 
 @router.post("/handovers/{case_id}/verify", response_model=HandoverCaseOut)
 async def verify_handover(case_id: int, body: HandoverVerifyRequest, db: DB, current_user: CurrentUser):
-    """US-006 验收归档:接收人或 handover.manage 确认验收 → COMPLETED + 证据 + 审计。"""
+    """由接收人或交接管理员验收终态操作，并归档证据与审计记录。"""
     case = await _get_handover(db, case_id)
     namespace_id = await _require_handover_namespace_write(db, current_user, case)
     if current_user.system_role != SystemRole.ADMIN and case.receiver_user_id != current_user.id:
@@ -3107,7 +2758,7 @@ async def verify_handover(case_id: int, body: HandoverVerifyRequest, db: DB, cur
     return case
 
 
-# FR-012:对外交接包仅在执行回执完成并进入验收后才允许构建,避免 APPROVED 阶段预览泄露未落地交接。
+# 对外交接包仅在执行回执完成并进入验收后构建，避免泄露尚未落地的交接内容。
 _PACKAGE_ALLOWED_STATES = {
     HandoverStatus.VERIFYING,
     HandoverStatus.COMPLETED,
@@ -3132,7 +2783,7 @@ async def _latest_package_evidence(db: DB, case_id: int) -> EvidenceItem | None:
 
 @router.post("/handovers/{case_id}/package", response_model=EvidenceItemOut, status_code=status.HTTP_201_CREATED)
 async def create_handover_package(case_id: int, db: DB, current_user: HandoverManagerUser):
-    """FR-012:构建精简对外交接包(资产/建议/回执/摘要 + 证据引用)→ 返回可下载的 EvidenceItem。
+    """构建脱敏后的对外交接包并返回可下载的证据对象。
 
     仅在 case 已进入 VERIFYING/COMPLETED 时允许;包内不含明文凭证,
     敏感工作历史只放遮蔽摘要(见 handover_package_service)。
@@ -3159,7 +2810,7 @@ async def create_handover_package(case_id: int, db: DB, current_user: HandoverMa
 async def download_handover_package_link(
     case_id: int, body: EvidenceDownloadLinkRequest, db: DB, current_user: EvidenceReaderUser
 ):
-    """FR-012:为最近一次交接包签发**限时**下载 URL(复用证据下载链路)。
+    """为最近一次交接包签发带有效期的下载 URL。
 
     权限 + 原因 + 审计(原则 V):敏感级包在 evidence.read 之上额外要求 evidence.sensitive.read
     (创建者本人 / 系统 admin 例外);拒签文案保持通用,不外泄内部桶名。
@@ -3176,7 +2827,7 @@ async def download_handover_package_link(
     ):
         await ensure_builtin_rbac(db)
         if not await has_permission(db, user=current_user, permission_key="evidence.sensitive.read"):
-            # 越权尝试也留痕(原则 V);显式 commit——随后抛 403 会触发 get_db rollback。
+            # 越权尝试也留痕；显式提交避免随后异常触发事务回滚。
             await audit(
                 db,
                 user=current_user,

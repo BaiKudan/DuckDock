@@ -3,6 +3,8 @@ import {
   BrainCircuit,
   ChevronRight,
   FileClock,
+  FlaskConical,
+  Activity,
   Gauge,
   Globe2,
   Hexagon,
@@ -10,13 +12,16 @@ import {
   LogOut,
   Network,
   Puzzle,
+  PackageCheck,
+  RadioTower,
+  Rocket,
   ShieldCheck,
   TerminalSquare,
   UserRound,
   Users2,
 } from "lucide-react";
 import { useEffect } from "react";
-import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useNavigate } from "../router";
 import { iamApi } from "../api/client";
 import { canAccessIam, canAccessManagement, canAccessNamespaceTools } from "../authRoutes";
 import { useI18n } from "../i18n";
@@ -50,7 +55,12 @@ export default function Layout() {
   const myAssetsLabel = zh ? "我的 AI 资产" : "My AI Assets";
   const reporterSetupLabel = zh ? "接入 SOP" : "Setup SOP";
   const controlPlaneLabel = zh ? "Agent 控制平面" : "Agent Control";
+  const fleetLabel = zh ? "Runtime Fleet" : "Runtime Fleet";
+  const evalHubLabel = zh ? "Eval Hub" : "Eval Hub";
+  const packageRegistryLabel = zh ? "Agent Packages" : "Agent Packages";
+  const releaseControlLabel = zh ? "Release Control" : "Release Control";
   const componentLabel = zh ? "组件管理" : "Components";
+  const operationsLabel = zh ? "可观测与运维" : "Operations & SLO";
   const iamLabel = zh ? "身份与 SSO" : "Identity SSO";
 
   const nav = [
@@ -58,6 +68,11 @@ export default function Layout() {
     { to: "/reporter-setup", label: reporterSetupLabel, icon: TerminalSquare },
     ...(canUseManagement ? [{ to: "/dashboard", label: t("nav.overview"), icon: Gauge }] : []),
     ...(canUseManagement ? [{ to: "/control-plane", label: controlPlaneLabel, icon: Network }] : []),
+    ...(canUseManagement ? [{ to: "/fleet", label: fleetLabel, icon: Activity }] : []),
+    ...(canUseManagement ? [{ to: "/eval-hub", label: evalHubLabel, icon: FlaskConical }] : []),
+    ...(canUseManagement ? [{ to: "/packages", label: packageRegistryLabel, icon: PackageCheck }] : []),
+    ...(canUseManagement ? [{ to: "/release-control", label: releaseControlLabel, icon: Rocket }] : []),
+    ...(canManageComponents ? [{ to: "/operations", label: operationsLabel, icon: RadioTower }] : []),
     ...(canUseManagement ? [{ to: "/analysis", label: zh ? "分析控制台" : "Analysis", icon: BrainCircuit }] : []),
     { to: "/public", label: t("nav.public"), icon: Globe2 },
     ...(canUseNamespaceTools ? [{ to: "/namespaces", label: t("nav.namespaces"), icon: Boxes }] : []),
@@ -73,6 +88,11 @@ export default function Layout() {
     "my-assets": myAssetsLabel,
     "reporter-setup": reporterSetupLabel,
     "control-plane": controlPlaneLabel,
+    fleet: fleetLabel,
+    "eval-hub": evalHubLabel,
+    packages: packageRegistryLabel,
+    "release-control": releaseControlLabel,
+    operations: operationsLabel,
     analysis: zh ? "分析控制台" : "Analysis",
     namespaces: t("nav.namespaces"),
     clinic: t("nav.clinic"),

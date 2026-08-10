@@ -1,0 +1,31 @@
+{
+  "schema_version": "duckdock-ga-network-trust-policy-v1",
+  "policy_id": "duckdock-target-network-authority",
+  "organization": "__CHANGE_ME_RELEASE_AUTHORITY__",
+  "allowed_signers_path": "__CHANGE_ME_ABSOLUTE_NETWORK_ALLOWED_SIGNERS_PATH__",
+  "allowed_signers_sha256": "__CHANGE_ME_64_HEX__",
+  "probe_operator_identities": [
+    "__CHANGE_ME_EXTERNAL_NETWORK_PROBE_SIGNER_IDENTITY__"
+  ],
+  "approved_probe_ids": [
+    "__CHANGE_ME_EXTERNAL_NETWORK_PROBE_ID__"
+  ],
+  "approved_vantage_ids": [
+    "__CHANGE_ME_EXTERNAL_NETWORK_VANTAGE_ID__"
+  ],
+  "approved_vantage_classes": [
+    "external-internet"
+  ],
+  "approved_source_cidrs": [
+    "__CHANGE_ME_GLOBALLY_ROUTABLE_PROBE_SOURCE_CIDR__"
+  ],
+  "approved_cluster_contexts": [
+    "__CHANGE_ME_EXACT_TARGET_KUBE_CONTEXT__"
+  ],
+  "approved_namespaces": [
+    "duckdock"
+  ],
+  "approved_cni_daemonsets": [
+    "kube-system/__CHANGE_ME_CNI_DAEMONSET__"
+  ]
+}

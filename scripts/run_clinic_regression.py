@@ -89,7 +89,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run Clinic regression fixtures.")
     parser.add_argument(
         "--fixtures",
-        default=str(BACKEND_ROOT / "app" / "clinic_assets" / "fixtures" / "clinic_golden_set.v1.jsonl"),
+        default=str(BACKEND_ROOT / "tests" / "fixtures" / "clinic_golden_set.v1.jsonl"),
         help="Path to Clinic fixture JSONL file.",
     )
     parser.add_argument("--case", help="Run only one fixture id.")

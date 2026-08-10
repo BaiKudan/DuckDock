@@ -24,5 +24,7 @@ DuckDock 2.0 Foundation 决策：
 | 0209 | 内容采集默认关闭 |
 | 0210 | 业务事件使用 Transactional Outbox |
 | 0211 | Evidence 使用可空 typed WorkTrace link |
+| 0212 | 历史租户归属使用逐 ID 显式 remediation manifest |
+| 0213 | 采集内核从过程遥测转向成果物知识服务（Proposed） |
 
 每个 ADR 必须包含状态、背景、决策、后果和验证方式。改变 Accepted 决策时新增 ADR，不覆盖历史原因。

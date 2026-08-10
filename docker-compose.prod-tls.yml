@@ -1,0 +1,40 @@
+# Mandatory production edge overlay: TLS 1.2/1.3 is the only public listener.
+services:
+  tls-gateway:
+    build:
+      context: ./ops/tls-gateway
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      DUCKDOCK_PUBLIC_HOST: ${DUCKDOCK_PUBLIC_HOST:?set DUCKDOCK_PUBLIC_HOST}
+      DUCKDOCK_MINIO_PUBLIC_HOST: ${DUCKDOCK_MINIO_PUBLIC_HOST:?set DUCKDOCK_MINIO_PUBLIC_HOST}
+    secrets:
+      - duckdock_tls_cert
+      - duckdock_tls_key
+    ports:
+      - "${HTTPS_BIND_ADDRESS:-0.0.0.0}:${HTTPS_PORT:-443}:8443"
+    networks: [app_internal, ingress]
+    depends_on:
+      frontend:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- --no-check-certificate https://127.0.0.1:8443/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: ${TLS_GATEWAY_MEM_LIMIT:-256m}
+
+secrets:
+  duckdock_tls_cert:
+    file: ${DUCKDOCK_TLS_CERT_FILE:?set DUCKDOCK_TLS_CERT_FILE}
+  duckdock_tls_key:
+    file: ${DUCKDOCK_TLS_KEY_FILE:?set DUCKDOCK_TLS_KEY_FILE}
+
+networks:
+  ingress:

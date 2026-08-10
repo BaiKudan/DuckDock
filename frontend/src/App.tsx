@@ -1,28 +1,35 @@
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { lazy, Suspense } from "react";
+import { BrowserRouter, Navigate, Route, Routes } from "./router";
 import Layout from "./components/Layout";
-import AnalysisControlPage from "./pages/AnalysisControlPage";
-import AgentRuntimeOverviewPage from "./pages/AgentRuntimeOverviewPage";
-import AuditPage from "./pages/AuditPage";
-import ClinicPage from "./pages/ClinicPage";
-import ClinicReportPage from "./pages/ClinicReportPage";
-import ComponentManagementPage from "./pages/ComponentManagementPage";
-import ControlPlanePage from "./pages/ControlPlanePage";
-import DashboardPage from "./pages/DashboardPage";
-import HandoverDetailPage from "./pages/HandoverDetailPage";
-import IamPage from "./pages/IamPage";
-import LoginPage from "./pages/LoginPage";
-import NamespaceDetailPage from "./pages/NamespaceDetailPage";
-import NamespacesPage from "./pages/NamespacesPage";
-import PeopleHandoverPage from "./pages/PeopleHandoverPage";
-import PersonalWorkspacePage from "./pages/PersonalWorkspacePage";
-import PublishSkillPage from "./pages/PublishSkillPage";
-import PublicRegistryPage from "./pages/PublicRegistryPage";
-import RegisterPage from "./pages/RegisterPage";
-import ReporterSetupPage from "./pages/ReporterSetupPage";
-import SkillDetailPage from "./pages/SkillDetailPage";
-import SsoCallbackPage from "./pages/SsoCallbackPage";
 import { canAccessIam, canAccessManagement, defaultRouteForUser } from "./authRoutes";
 import { useAuthStore } from "./store/auth";
+
+const AnalysisControlPage = lazy(() => import("./pages/AnalysisControlPage"));
+const AgentRuntimeOverviewPage = lazy(() => import("./pages/AgentRuntimeOverviewPage"));
+const AuditPage = lazy(() => import("./pages/AuditPage"));
+const ClinicPage = lazy(() => import("./pages/ClinicPage"));
+const ClinicReportPage = lazy(() => import("./pages/ClinicReportPage"));
+const ComponentManagementPage = lazy(() => import("./pages/ComponentManagementPage"));
+const ControlPlanePage = lazy(() => import("./pages/ControlPlanePage"));
+const DashboardPage = lazy(() => import("./pages/DashboardPage"));
+const EvalHubPage = lazy(() => import("./pages/EvalHubPage"));
+const FleetPage = lazy(() => import("./pages/FleetPage"));
+const HandoverDetailPage = lazy(() => import("./pages/HandoverDetailPage"));
+const IamPage = lazy(() => import("./pages/IamPage"));
+const LoginPage = lazy(() => import("./pages/LoginPage"));
+const NamespaceDetailPage = lazy(() => import("./pages/NamespaceDetailPage"));
+const NamespacesPage = lazy(() => import("./pages/NamespacesPage"));
+const OperationsPage = lazy(() => import("./pages/OperationsPage"));
+const PeopleHandoverPage = lazy(() => import("./pages/PeopleHandoverPage"));
+const PackageRegistryPage = lazy(() => import("./pages/PackageRegistryPage"));
+const PersonalWorkspacePage = lazy(() => import("./pages/PersonalWorkspacePage"));
+const PublishSkillPage = lazy(() => import("./pages/PublishSkillPage"));
+const PublicRegistryPage = lazy(() => import("./pages/PublicRegistryPage"));
+const RegisterPage = lazy(() => import("./pages/RegisterPage"));
+const ReleaseControlPage = lazy(() => import("./pages/ReleaseControlPage"));
+const ReporterSetupPage = lazy(() => import("./pages/ReporterSetupPage"));
+const SkillDetailPage = lazy(() => import("./pages/SkillDetailPage"));
+const SsoCallbackPage = lazy(() => import("./pages/SsoCallbackPage"));
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const token = useAuthStore((state) => state.accessToken);
@@ -84,7 +91,8 @@ function RequireAdminAccess({ children }: { children: React.ReactNode }) {
 export default function App() {
   return (
     <BrowserRouter>
-      <Routes>
+      <Suspense fallback={<div className="app-page text-sm text-slate-500">Loading DuckDock...</div>}>
+        <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/login/sso/callback" element={<SsoCallbackPage />} />
         <Route path="/register" element={<RegisterPage />} />
@@ -112,6 +120,46 @@ export default function App() {
               <RequireManagementAccess>
                 <ControlPlanePage />
               </RequireManagementAccess>
+            }
+          />
+          <Route
+            path="/fleet"
+            element={
+              <RequireManagementAccess>
+                <FleetPage />
+              </RequireManagementAccess>
+            }
+          />
+          <Route
+            path="/eval-hub"
+            element={
+              <RequireManagementAccess>
+                <EvalHubPage />
+              </RequireManagementAccess>
+            }
+          />
+          <Route
+            path="/packages"
+            element={
+              <RequireManagementAccess>
+                <PackageRegistryPage />
+              </RequireManagementAccess>
+            }
+          />
+          <Route
+            path="/release-control"
+            element={
+              <RequireManagementAccess>
+                <ReleaseControlPage />
+              </RequireManagementAccess>
+            }
+          />
+          <Route
+            path="/operations"
+            element={
+              <RequireAdminAccess>
+                <OperationsPage />
+              </RequireAdminAccess>
             }
           />
           <Route
@@ -178,7 +226,8 @@ export default function App() {
             }
           />
         </Route>
-      </Routes>
+        </Routes>
+      </Suspense>
     </BrowserRouter>
   );
 }

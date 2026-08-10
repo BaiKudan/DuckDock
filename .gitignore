@@ -28,6 +28,10 @@ frontend/.tmp_start_frontend.ps1
 backend/.pytest_cache/
 backend/.mypy_cache/
 
+# This project locks pip inputs in requirements*.lock; a local uv project lock
+# is incompatible because backend has no pyproject and production targets 3.12.
+backend/uv.lock
+
 .DS_Store
 Thumbs.db
 

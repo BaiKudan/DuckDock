@@ -1,0 +1,94 @@
+from fastapi import APIRouter
+
+from app.api.v2.endpoints import (
+    compatibility,
+    executions,
+    evaluations,
+    fleet,
+    generic_otlp,
+    handovers,
+    identity_security,
+    operations,
+    outbox,
+    package_registry,
+    pack_imports,
+    release_control,
+    release_evidence,
+    telemetry,
+)
+
+
+api_router = APIRouter()
+api_router.include_router(executions.reporter_router)
+api_router.include_router(evaluations.dataset_router)
+api_router.include_router(evaluations.dataset_materialization_router)
+api_router.include_router(evaluations.dataset_curation_router)
+api_router.include_router(evaluations.trace_candidate_router)
+api_router.include_router(evaluations.sampling_policy_router)
+api_router.include_router(evaluations.sampling_policy_version_router)
+api_router.include_router(evaluations.sampling_run_router)
+api_router.include_router(evaluations.annotation_queue_binding_router)
+api_router.include_router(evaluations.annotation_dispatch_router)
+api_router.include_router(evaluations.promotion_policy_router)
+api_router.include_router(evaluations.promotion_policy_version_router)
+api_router.include_router(evaluations.promotion_run_router)
+api_router.include_router(evaluations.case_routing_policy_router)
+api_router.include_router(evaluations.case_routing_policy_version_router)
+api_router.include_router(evaluations.case_routing_run_router)
+api_router.include_router(evaluations.semantic_clustering_policy_router)
+api_router.include_router(evaluations.semantic_clustering_policy_version_router)
+api_router.include_router(evaluations.semantic_clustering_run_router)
+api_router.include_router(evaluations.semantic_regression_policy_router)
+api_router.include_router(evaluations.semantic_regression_comparison_router)
+api_router.include_router(evaluations.semantic_monitor_router)
+api_router.include_router(evaluations.semantic_monitor_run_router)
+api_router.include_router(evaluations.semantic_monitor_alert_router)
+api_router.include_router(evaluations.failure_taxonomy_policy_router)
+api_router.include_router(evaluations.failure_taxonomy_policy_version_router)
+api_router.include_router(evaluations.experience_extraction_run_router)
+api_router.include_router(evaluations.experience_candidate_router)
+api_router.include_router(evaluations.experience_asset_router)
+api_router.include_router(evaluations.experience_asset_version_router)
+api_router.include_router(evaluations.experience_activation_router)
+api_router.include_router(evaluations.evaluator_router)
+api_router.include_router(evaluations.experiment_router)
+api_router.include_router(evaluations.evaluation_router)
+api_router.include_router(evaluations.regression_policy_router)
+api_router.include_router(evaluations.evaluation_comparison_router)
+api_router.include_router(release_evidence.binding_router)
+api_router.include_router(release_evidence.gate_router)
+api_router.include_router(release_control.environment_router)
+api_router.include_router(release_control.policy_router)
+api_router.include_router(release_control.policy_version_router)
+api_router.include_router(release_control.candidate_router)
+api_router.include_router(release_control.decision_router)
+api_router.include_router(release_control.exception_router)
+api_router.include_router(release_control.promotion_router)
+api_router.include_router(release_control.environment_release_router)
+api_router.include_router(release_control.rollback_router)
+api_router.include_router(release_control.canary_router)
+api_router.include_router(release_control.receipt_router)
+api_router.include_router(release_control.receipt_credential_router)
+api_router.include_router(release_control.reporter_receipt_router)
+api_router.include_router(handovers.snapshot_router)
+api_router.include_router(handovers.obligation_router)
+api_router.include_router(handovers.acceptance_router)
+api_router.include_router(handovers.package_router)
+api_router.include_router(identity_security.directory_router)
+api_router.include_router(identity_security.scim_router)
+api_router.include_router(identity_security.workload_router)
+api_router.include_router(package_registry.package_router)
+api_router.include_router(package_registry.version_router)
+api_router.include_router(package_registry.signing_key_router)
+api_router.include_router(package_registry.manifest_router)
+api_router.include_router(fleet.reporter_router)
+api_router.include_router(generic_otlp.router)
+api_router.include_router(pack_imports.router)
+api_router.include_router(pack_imports.transfer_router)
+api_router.include_router(executions.management_router)
+api_router.include_router(fleet.management_router)
+api_router.include_router(telemetry.sink_router)
+api_router.include_router(telemetry.artifact_router)
+api_router.include_router(outbox.router)
+api_router.include_router(operations.router)
+api_router.include_router(compatibility.router)

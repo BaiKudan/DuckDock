@@ -1,0 +1,81 @@
+{
+  "database": "duckdock_ga_capacity_perf",
+  "finished_at": "2026-08-05T04:37:12.593926+00:00",
+  "gate": "G1 Run control envelope",
+  "idempotency": {
+    "passed": true,
+    "same_key_different_payload_status": 409,
+    "same_key_same_payload_status": 201
+  },
+  "materialization": {
+    "agent_run_registered_events": 67399,
+    "agent_run_started_audits": 67399,
+    "agent_runs": 67399,
+    "database_size_bytes": 179683328,
+    "expected": 72000,
+    "minimum_materialized_runs": 50000,
+    "passed": false
+  },
+  "passed": false,
+  "phases": [
+    {
+      "completion_rate": 59.999,
+      "drain_seconds": 0.020151,
+      "duration_seconds": 900.0,
+      "elapsed_seconds": 900.020151,
+      "error_codes": {},
+      "failure_count": 0,
+      "max_ms": 248.244,
+      "maximum_drain_seconds": 1,
+      "maximum_p95_ms": 1000,
+      "maximum_schedule_lag_ms": 100,
+      "minimum_completion_rate": 57.0,
+      "name": "sustained",
+      "p50_ms": 6.684,
+      "p95_ms": 8.712,
+      "p99_ms": 17.138,
+      "passed": true,
+      "request_count": 54000,
+      "schedule_lag_ms": 1.99,
+      "success_count": 54000,
+      "target_rate": 60.0
+    },
+    {
+      "completion_rate": 222.623,
+      "drain_seconds": 20.854171,
+      "duration_seconds": 60.0,
+      "elapsed_seconds": 80.854171,
+      "error_codes": {
+        "exception_TimeoutError": 4601
+      },
+      "failure_count": 4601,
+      "max_ms": 36635.613,
+      "maximum_drain_seconds": 2,
+      "maximum_p95_ms": 2000,
+      "maximum_schedule_lag_ms": 100,
+      "minimum_completion_rate": 0.0,
+      "name": "burst",
+      "p50_ms": 24253.812,
+      "p95_ms": 32632.501,
+      "p99_ms": 33045.205,
+      "passed": false,
+      "request_count": 18000,
+      "schedule_lag_ms": 68.679,
+      "success_count": 13399,
+      "target_rate": 300.0
+    }
+  ],
+  "post_growth_timeline_query": {
+    "maximum_p95_ms": 250.0,
+    "p50_ms": 16.801,
+    "p95_ms": 22.116,
+    "p99_ms": 31.548,
+    "passed": false,
+    "sample_count": 100,
+    "success_count": 0
+  },
+  "profile": "reference-small-ga",
+  "schema_version": "duckdock-capacity-gate-v1",
+  "started_at": "2026-08-05T04:20:44.034508+00:00",
+  "transport": "FastAPI ASGI HTTP with real MySQL"
+}

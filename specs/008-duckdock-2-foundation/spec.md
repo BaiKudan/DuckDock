@@ -2,7 +2,7 @@
 
 **Feature Branch**: `008-duckdock-2-foundation`
 
-**Status**: G0 approved; S1-C implemented; contract/non-null deferred
+**Status**: G0 approved; S1-D tenant contract implemented; remaining Foundation work in progress
 
 **Created**: 2026-07-17
 
@@ -139,7 +139,7 @@ DuckDock 仍是企业治理事实源（system of record）。OpenTelemetry/Langf
 ### 7.2 Immutable deployment inventory
 
 - **FR-008**: 系统必须提供 `AgentDeployment`，记录 Namespace、Runtime、可选 Agent Asset、environment、external deployment ID、revision、configuration digest 和生命周期。
-- **FR-009**: 系统必须提供 `DeploymentComponent`，记录 component role、Asset/SkillVersion 引用、external version、content digest 和配置摘要。
+- **FR-009**: 系统必须提供 `DeploymentComponent`，记录 deployment-local `component_key`、component role、Asset/SkillVersion 引用、external version、content digest 和配置摘要。
 - **FR-010**: Deployment 从 `REGISTERED` 激活为 `ACTIVE` 后，其 identity、revision、digest、Runtime 和 components 不可修改。
 - **FR-011**: Deployment 仅允许 `REGISTERED -> ACTIVE -> RETIRED`，激活失败可进入 `FAILED`；退役不可恢复。
 - **FR-012**: 激活前必须验证所有关联对象同租户，且每个组件至少存在一个可验证的版本引用或 content digest。
@@ -192,6 +192,9 @@ DuckDock 仍是企业治理事实源（system of record）。OpenTelemetry/Langf
 - **FR-038**: WorkTrace API 和既有 structured report 流程保持兼容；AgentRun 不替代 WorkTrace。
 - **FR-039**: Foundation implementation 不改变现有 Release Gate 结果，但必须在服务边界预留“按 release candidate 固定证据读取”的接口。
 - **FR-040**: 后续 Release Gate 不得读取“Namespace 最新一次评测”作为候选版本证据；该限制必须作为架构决策和回归测试待办记录。
+  EH-05/revision 0044 已通过 exact-selector
+  `ReleaseCandidateEvaluationBinding` 和 fail-closed Candidate Release Gate
+  实现该后续契约；旧 Skill/Clinic Gate 仍保持 Foundation 兼容行为。
 - **FR-041**: 默认 Compose 不启动 observability profile，未安装可选 Provider 时核心 API 必须可用。
 
 ## 8. Security and Privacy Requirements

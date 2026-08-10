@@ -1,0 +1,259 @@
+name: Publish authorized DuckDock GA
+
+on:
+  workflow_dispatch:
+    inputs:
+      draft_release_id:
+        description: Numeric ID of the existing v2.0.0 draft release
+        required: true
+        type: string
+      archive_asset_name:
+        description: Authorized archive asset already attached to the draft
+        required: true
+        default: duckdock-2.0.0-ga-bundle.tar.gz
+        type: string
+      manifest_asset_name:
+        description: Detached archive manifest already attached to the draft
+        required: true
+        default: duckdock-2.0.0-ga-bundle.manifest.json
+        type: string
+      expected_archive_sha256:
+        description: Archive digest copied from the independent immutable channel
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: duckdock-v2.0.0-ga-publication
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Verify GA authorization and publish protected draft
+    if: github.repository == 'BaiKudan/DuckDock'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: ga-production-publication
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout the immutable final tag
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: v2.0.0
+          fetch-depth: 0
+
+      - name: Validate signed tag and exact draft release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRAFT_RELEASE_ID: ${{ inputs.draft_release_id }}
+          ARCHIVE_ASSET_NAME: ${{ inputs.archive_asset_name }}
+          MANIFEST_ASSET_NAME: ${{ inputs.manifest_asset_name }}
+          EXPECTED_ARCHIVE_SHA256: ${{ inputs.expected_archive_sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$DRAFT_RELEASE_ID" =~ ^[0-9]+$ ]]
+          [[ "$EXPECTED_ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$ARCHIVE_ASSET_NAME" =~ ^[A-Za-z0-9._-]+\.tar\.gz$ ]]
+          [[ "$MANIFEST_ASSET_NAME" =~ ^[A-Za-z0-9._-]+\.manifest\.json$ ]]
+          test "$ARCHIVE_ASSET_NAME" != "$MANIFEST_ASSET_NAME"
+
+          tag_object="$(git rev-parse refs/tags/v2.0.0)"
+          release_commit="$(git rev-parse 'refs/tags/v2.0.0^{}')"
+          test "$(git cat-file -t "$tag_object")" = tag
+          gh api "repos/$GITHUB_REPOSITORY/git/tags/$tag_object" > "$RUNNER_TEMP/tag.json"
+          jq -e \
+            --arg commit "$release_commit" \
+            '.tag == "v2.0.0" and .object.type == "commit" and
+             .object.sha == $commit and .verification.verified == true' \
+            "$RUNNER_TEMP/tag.json" >/dev/null
+
+          gh api "repos/$GITHUB_REPOSITORY/releases/$DRAFT_RELEASE_ID" \
+            > "$RUNNER_TEMP/release-before.json"
+          jq -e \
+            --arg archive "$ARCHIVE_ASSET_NAME" \
+            --arg manifest "$MANIFEST_ASSET_NAME" \
+            '.draft == true and .tag_name == "v2.0.0" and
+             (([.assets[].name] | sort) == ([$archive, $manifest] | sort) or
+              ([.assets[].name] | sort) ==
+                ([$archive, $manifest,
+                  "duckdock-2.0.0-ga-publication-authorization.json",
+                  "duckdock-2.0.0-ga-publication-authorization.sha256"] | sort))' \
+            "$RUNNER_TEMP/release-before.json" >/dev/null
+
+          archive_id="$(jq -er --arg name "$ARCHIVE_ASSET_NAME" \
+            '.assets | map(select(.name == $name)) | if length == 1 then .[0].id else error("archive asset is not unique") end' \
+            "$RUNNER_TEMP/release-before.json")"
+          manifest_id="$(jq -er --arg name "$MANIFEST_ASSET_NAME" \
+            '.assets | map(select(.name == $name)) | if length == 1 then .[0].id else error("manifest asset is not unique") end' \
+            "$RUNNER_TEMP/release-before.json")"
+          draft_release_url="$(jq -er '.html_url' "$RUNNER_TEMP/release-before.json")"
+          has_receipt="$(jq -r 'any(.assets[].name; . == "duckdock-2.0.0-ga-publication-authorization.json")' "$RUNNER_TEMP/release-before.json")"
+
+          gh api -H 'Accept: application/octet-stream' \
+            "repos/$GITHUB_REPOSITORY/releases/assets/$archive_id" \
+            > "$RUNNER_TEMP/$ARCHIVE_ASSET_NAME"
+          gh api -H 'Accept: application/octet-stream' \
+            "repos/$GITHUB_REPOSITORY/releases/assets/$manifest_id" \
+            > "$RUNNER_TEMP/$MANIFEST_ASSET_NAME"
+          if test "$has_receipt" = true; then
+            receipt_id="$(jq -er '.assets | map(select(.name == "duckdock-2.0.0-ga-publication-authorization.json")) | if length == 1 then .[0].id else error("receipt asset is not unique") end' "$RUNNER_TEMP/release-before.json")"
+            receipt_digest_id="$(jq -er '.assets | map(select(.name == "duckdock-2.0.0-ga-publication-authorization.sha256")) | if length == 1 then .[0].id else error("receipt digest asset is not unique") end' "$RUNNER_TEMP/release-before.json")"
+            gh api -H 'Accept: application/octet-stream' \
+              "repos/$GITHUB_REPOSITORY/releases/assets/$receipt_id" \
+              > "$RUNNER_TEMP/existing-publication-authorization.json"
+            gh api -H 'Accept: application/octet-stream' \
+              "repos/$GITHUB_REPOSITORY/releases/assets/$receipt_digest_id" \
+              > "$RUNNER_TEMP/existing-publication-authorization.sha256"
+            expected_receipt_digest="$(sed -n 's/^\([0-9a-f]\{64\}\)  duckdock-2.0.0-ga-publication-authorization.json$/\1/p' "$RUNNER_TEMP/existing-publication-authorization.sha256")"
+            test -n "$expected_receipt_digest"
+            test "$(sha256sum "$RUNNER_TEMP/existing-publication-authorization.json" | cut -d' ' -f1)" = "$expected_receipt_digest"
+            jq -e \
+              --arg archive_sha "$EXPECTED_ARCHIVE_SHA256" \
+              --arg commit "$release_commit" \
+              --arg release_id "$DRAFT_RELEASE_ID" \
+              --arg repository "$GITHUB_REPOSITORY" \
+              '.schema_version == "duckdock-ga-publication-authorization-v1" and
+               .status == "GA_PUBLICATION_AUTHORIZED" and
+               .does_not_prove_external_publication == true and
+               .release.git_tag == "v2.0.0" and .release.git_commit == $commit and
+               .authorized_archive.archive_sha256 == $archive_sha and
+               .publication.draft_release_id == $release_id and
+               .publication.workflow_repository == $repository and
+               (.release_build.workflow_run_id | test("^[0-9]+$"))' \
+              "$RUNNER_TEMP/existing-publication-authorization.json" >/dev/null
+          fi
+
+          {
+            echo "release_commit=$release_commit"
+            echo "archive_id=$archive_id"
+            echo "manifest_id=$manifest_id"
+            echo "draft_release_url=$draft_release_url"
+            echo "has_receipt=$has_receipt"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Independently authorize the exact publication
+        env:
+          ARCHIVE_ASSET_NAME: ${{ inputs.archive_asset_name }}
+          MANIFEST_ASSET_NAME: ${{ inputs.manifest_asset_name }}
+          EXPECTED_ARCHIVE_SHA256: ${{ inputs.expected_archive_sha256 }}
+          DRAFT_RELEASE_ID: ${{ inputs.draft_release_id }}
+          RELEASE_COMMIT: ${{ steps.release.outputs.release_commit }}
+          DRAFT_RELEASE_URL: ${{ steps.release.outputs.draft_release_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 backend/scripts/authorize_ga_publication.py \
+            --archive "$RUNNER_TEMP/$ARCHIVE_ASSET_NAME" \
+            --manifest "$RUNNER_TEMP/$MANIFEST_ASSET_NAME" \
+            --expected-sha256 "$EXPECTED_ARCHIVE_SHA256" \
+            --expected-git-commit "$RELEASE_COMMIT" \
+            --source-repository "https://github.com/$GITHUB_REPOSITORY" \
+            --workflow-repository "$GITHUB_REPOSITORY" \
+            --workflow-run-id "$GITHUB_RUN_ID" \
+            --workflow-run-url "https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --actor "$GITHUB_ACTOR" \
+            --draft-release-id "$DRAFT_RELEASE_ID" \
+            --draft-release-url "$DRAFT_RELEASE_URL" \
+            --output "$RUNNER_TEMP/duckdock-2.0.0-ga-publication-authorization.json" \
+            --digest-output "$RUNNER_TEMP/duckdock-2.0.0-ga-publication-authorization.sha256"
+
+      - name: Reconfirm the archived final-tag CI run succeeded
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ steps.release.outputs.release_commit }}
+          HAS_RECEIPT: ${{ steps.release.outputs.has_receipt }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          receipt="$RUNNER_TEMP/duckdock-2.0.0-ga-publication-authorization.json"
+          if test "$HAS_RECEIPT" = true; then
+            receipt="$RUNNER_TEMP/existing-publication-authorization.json"
+          fi
+          build_run_id="$(jq -er '.release_build.workflow_run_id' "$receipt")"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$build_run_id" \
+            > "$RUNNER_TEMP/release-build-run.json"
+          jq -e \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg commit "$RELEASE_COMMIT" \
+            '.status == "completed" and .conclusion == "success" and
+             .event == "push" and .head_sha == $commit and
+             .path == ".github/workflows/ci.yml" and
+             .head_repository.full_name == $repository' \
+            "$RUNNER_TEMP/release-build-run.json" >/dev/null
+
+      - name: Attach immutable receipt and publish the same draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRAFT_RELEASE_ID: ${{ inputs.draft_release_id }}
+          ARCHIVE_ASSET_NAME: ${{ inputs.archive_asset_name }}
+          MANIFEST_ASSET_NAME: ${{ inputs.manifest_asset_name }}
+          ARCHIVE_ASSET_ID: ${{ steps.release.outputs.archive_id }}
+          MANIFEST_ASSET_ID: ${{ steps.release.outputs.manifest_id }}
+          HAS_RECEIPT: ${{ steps.release.outputs.has_receipt }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          receipt="$RUNNER_TEMP/duckdock-2.0.0-ga-publication-authorization.json"
+          receipt_digest="$RUNNER_TEMP/duckdock-2.0.0-ga-publication-authorization.sha256"
+          if test "$HAS_RECEIPT" = true; then
+            receipt="$RUNNER_TEMP/existing-publication-authorization.json"
+            receipt_digest="$RUNNER_TEMP/existing-publication-authorization.sha256"
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/releases/$DRAFT_RELEASE_ID" \
+            > "$RUNNER_TEMP/release-prepublish.json"
+          jq -e \
+            --arg archive "$ARCHIVE_ASSET_NAME" \
+            --arg manifest "$MANIFEST_ASSET_NAME" \
+            --argjson archive_id "$ARCHIVE_ASSET_ID" \
+            --argjson manifest_id "$MANIFEST_ASSET_ID" \
+            --arg has_receipt "$HAS_RECEIPT" \
+            '.draft == true and .tag_name == "v2.0.0" and
+             ((($has_receipt == "false") and
+               ([.assets[].name] | sort) == ([$archive, $manifest] | sort)) or
+              (($has_receipt == "true") and
+               ([.assets[].name] | sort) ==
+                 ([$archive, $manifest,
+                   "duckdock-2.0.0-ga-publication-authorization.json",
+                   "duckdock-2.0.0-ga-publication-authorization.sha256"] | sort))) and
+             (.assets | any(.name == $archive and .id == $archive_id)) and
+             (.assets | any(.name == $manifest and .id == $manifest_id))' \
+            "$RUNNER_TEMP/release-prepublish.json" >/dev/null
+
+          if test "$HAS_RECEIPT" = false; then
+            gh release upload v2.0.0 "$receipt" "$receipt_digest"
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/releases/$DRAFT_RELEASE_ID" \
+            > "$RUNNER_TEMP/release-with-receipt.json"
+          jq -e \
+            --arg archive "$ARCHIVE_ASSET_NAME" \
+            --arg manifest "$MANIFEST_ASSET_NAME" \
+            --argjson archive_id "$ARCHIVE_ASSET_ID" \
+            --argjson manifest_id "$MANIFEST_ASSET_ID" \
+            '.draft == true and .tag_name == "v2.0.0" and
+             ([.assets[].name] | sort) ==
+               ([$archive, $manifest,
+                 "duckdock-2.0.0-ga-publication-authorization.json",
+                 "duckdock-2.0.0-ga-publication-authorization.sha256"] | sort) and
+             (.assets | any(.name == $archive and .id == $archive_id)) and
+             (.assets | any(.name == $manifest and .id == $manifest_id))' \
+            "$RUNNER_TEMP/release-with-receipt.json" >/dev/null
+
+          receipt_id="$(jq -er '.assets | map(select(.name == "duckdock-2.0.0-ga-publication-authorization.json")) | if length == 1 then .[0].id else error("receipt asset is not unique") end' "$RUNNER_TEMP/release-with-receipt.json")"
+          gh api -H 'Accept: application/octet-stream' \
+            "repos/$GITHUB_REPOSITORY/releases/assets/$receipt_id" \
+            > "$RUNNER_TEMP/downloaded-publication-receipt.json"
+          cmp "$receipt" "$RUNNER_TEMP/downloaded-publication-receipt.json"
+
+          gh release edit v2.0.0 --draft=false
+          gh api "repos/$GITHUB_REPOSITORY/releases/$DRAFT_RELEASE_ID" \
+            > "$RUNNER_TEMP/release-published.json"
+          jq -e '.draft == false and .tag_name == "v2.0.0"' \
+            "$RUNNER_TEMP/release-published.json" >/dev/null
+          echo "Published protected DuckDock v2.0.0 after GA archive verification." \
+            >> "$GITHUB_STEP_SUMMARY"

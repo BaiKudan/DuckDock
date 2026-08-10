@@ -1,0 +1,142 @@
+{
+  "schema_version": "duckdock-ga-alerting-evidence-v2",
+  "scope": "target-production",
+  "status": "PASS",
+  "passed": true,
+  "observed_at": "2026-08-06T01:00:00Z",
+  "target_environment": "__CHANGE_ME_TARGET_ID__",
+  "source_commit": "__CHANGE_ME_40_HEX_GIT_COMMIT__",
+  "images": {
+    "backend": {"name": "registry.example.invalid/duckdock/backend@sha256:__CHANGE_ME_64_HEX__"},
+    "frontend": {"name": "registry.example.invalid/duckdock/frontend@sha256:__CHANGE_ME_64_HEX__"}
+  },
+  "test_notification_delivered": true,
+  "resolved_notification_delivered": true,
+  "oncall_schedule": "__CHANGE_ME_ONCALL_SCHEDULE__",
+  "alerting_policy": {
+    "path": "__CHANGE_ME_ALERTING_POLICY_PATH__",
+    "sha256": "__CHANGE_ME_64_HEX__",
+    "policy_id": "__CHANGE_ME_ALERTING_POLICY_ID__",
+    "allowed_signers_path": "__CHANGE_ME_ALERTING_ALLOWED_SIGNERS_PATH__",
+    "allowed_signers_sha256": "__CHANGE_ME_64_HEX__"
+  },
+  "alert_exercise": {
+    "exercise_id": "ga-20260806-001",
+    "alert_name": "DuckDockGA_ga-20260806-001",
+    "labels": {
+      "alertname": "DuckDockGA_ga-20260806-001",
+      "severity": "critical",
+      "duckdock_target": "__CHANGE_ME_TARGET_ID__",
+      "duckdock_exercise": "ga-20260806-001"
+    },
+    "alertmanager_url": "https://alerts.example.invalid",
+    "started_at": "2026-08-06T00:40:00Z",
+    "firing_expires_at": "2026-08-06T00:55:00Z",
+    "resolve_requested_at": "2026-08-06T00:50:00Z",
+    "firing_api": {
+      "observed_at": "2026-08-06T00:40:01Z",
+      "http_status": 200,
+      "response_bytes": 0,
+      "response_sha256": "__CHANGE_ME_64_HEX__",
+      "request_sha256": "__CHANGE_ME_64_HEX__",
+      "raw_response_body": "__CHANGE_ME_RAW_RESPONSE_BODY__",
+      "raw_request_body": "__CHANGE_ME_RAW_REQUEST_BODY__",
+      "request_payload": [{"labels": {"alertname": "DuckDockGA_ga-20260806-001", "severity": "critical", "duckdock_target": "__CHANGE_ME_TARGET_ID__", "duckdock_exercise": "ga-20260806-001"}, "annotations": {"summary": "DuckDock GA signed on-call delivery exercise"}, "startsAt": "2026-08-06T00:40:00+00:00", "endsAt": "2026-08-06T00:55:00+00:00"}]
+    },
+    "active_observation": {
+      "observed_at": "2026-08-06T00:40:02Z",
+      "http_status": 200,
+      "response_bytes": 2,
+      "response_sha256": "__CHANGE_ME_64_HEX__",
+      "request_sha256": "__CHANGE_ME_64_HEX__",
+      "raw_response_body": "__CHANGE_ME_RAW_RESPONSE_BODY__",
+      "raw_request_body": "",
+      "matching_alerts": 1,
+      "label_selector_sha256": "__CHANGE_ME_64_HEX__",
+      "expected_active": true,
+      "passed": true
+    },
+    "resolved_api": {
+      "observed_at": "2026-08-06T00:50:01Z",
+      "http_status": 200,
+      "response_bytes": 0,
+      "response_sha256": "__CHANGE_ME_64_HEX__",
+      "request_sha256": "__CHANGE_ME_DIFFERENT_64_HEX__",
+      "raw_response_body": "__CHANGE_ME_RAW_RESPONSE_BODY__",
+      "raw_request_body": "__CHANGE_ME_DIFFERENT_RAW_REQUEST_BODY__",
+      "request_payload": [{"labels": {"alertname": "DuckDockGA_ga-20260806-001", "severity": "critical", "duckdock_target": "__CHANGE_ME_TARGET_ID__", "duckdock_exercise": "ga-20260806-001"}, "annotations": {"summary": "DuckDock GA signed on-call delivery exercise"}, "startsAt": "2026-08-06T00:40:00+00:00", "endsAt": "2026-08-06T00:50:00+00:00"}]
+    },
+    "inactive_observation": {
+      "observed_at": "2026-08-06T00:50:02Z",
+      "http_status": 200,
+      "response_bytes": 2,
+      "response_sha256": "__CHANGE_ME_64_HEX__",
+      "request_sha256": "__CHANGE_ME_64_HEX__",
+      "raw_response_body": "[]",
+      "raw_request_body": "",
+      "matching_alerts": 0,
+      "label_selector_sha256": "__CHANGE_ME_64_HEX__",
+      "expected_active": false,
+      "passed": true
+    }
+  },
+  "firing_receipt": {
+    "schema_version": "duckdock-ga-alert-delivery-receipt-v1",
+    "exercise_id": "ga-20260806-001",
+    "target_environment": "__CHANGE_ME_TARGET_ID__",
+    "alert_name": "DuckDockGA_ga-20260806-001",
+    "event": "firing",
+    "receipt_id": "__CHANGE_ME_FIRING_RECEIPT_ID__",
+    "deliveries": [
+      {"channel": "oncall-webhook", "receiver": "__CHANGE_ME_ONCALL_RECEIVER__", "provider_receipt_id": "__CHANGE_ME_FIRING_PROVIDER_ID_1__", "delivered_at": "2026-08-06T00:40:59Z"},
+      {"channel": "pager", "receiver": "__CHANGE_ME_PAGER_RECEIVER__", "provider_receipt_id": "__CHANGE_ME_FIRING_PROVIDER_ID_2__", "delivered_at": "2026-08-06T00:41:00Z"}
+    ],
+    "schedule": "__CHANGE_ME_ONCALL_SCHEDULE__",
+    "delivered": true,
+    "delivered_at": "2026-08-06T00:41:00Z",
+    "signed_evidence": {
+      "path": "__CHANGE_ME_FIRING_RECEIPT_PATH__",
+      "sha256": "__CHANGE_ME_64_HEX__",
+      "signature_path": "__CHANGE_ME_FIRING_SIGNATURE_PATH__",
+      "signer_identity": "__CHANGE_ME_DELIVERY_IDENTITY__"
+    }
+  },
+  "oncall_acknowledgement": {
+    "schema_version": "duckdock-ga-oncall-acknowledgement-v1",
+    "exercise_id": "ga-20260806-001",
+    "target_environment": "__CHANGE_ME_TARGET_ID__",
+    "alert_name": "DuckDockGA_ga-20260806-001",
+    "receipt_id": "__CHANGE_ME_ACK_RECEIPT_ID__",
+    "schedule": "__CHANGE_ME_ONCALL_SCHEDULE__",
+    "acknowledged": true,
+    "acknowledged_by": "__CHANGE_ME_ONCALL_IDENTITY__",
+    "acknowledged_at": "2026-08-06T00:45:00Z",
+    "signed_evidence": {
+      "path": "__CHANGE_ME_ACK_RECEIPT_PATH__",
+      "sha256": "__CHANGE_ME_64_HEX__",
+      "signature_path": "__CHANGE_ME_ACK_SIGNATURE_PATH__",
+      "signer_identity": "__CHANGE_ME_ONCALL_IDENTITY__"
+    }
+  },
+  "resolved_receipt": {
+    "schema_version": "duckdock-ga-alert-delivery-receipt-v1",
+    "exercise_id": "ga-20260806-001",
+    "target_environment": "__CHANGE_ME_TARGET_ID__",
+    "alert_name": "DuckDockGA_ga-20260806-001",
+    "event": "resolved",
+    "receipt_id": "__CHANGE_ME_RESOLVED_RECEIPT_ID__",
+    "deliveries": [
+      {"channel": "oncall-webhook", "receiver": "__CHANGE_ME_ONCALL_RECEIVER__", "provider_receipt_id": "__CHANGE_ME_RESOLVED_PROVIDER_ID_1__", "delivered_at": "2026-08-06T00:50:59Z"},
+      {"channel": "pager", "receiver": "__CHANGE_ME_PAGER_RECEIVER__", "provider_receipt_id": "__CHANGE_ME_RESOLVED_PROVIDER_ID_2__", "delivered_at": "2026-08-06T00:51:00Z"}
+    ],
+    "schedule": "__CHANGE_ME_ONCALL_SCHEDULE__",
+    "delivered": true,
+    "delivered_at": "2026-08-06T00:51:00Z",
+    "signed_evidence": {
+      "path": "__CHANGE_ME_RESOLVED_RECEIPT_PATH__",
+      "sha256": "__CHANGE_ME_64_HEX__",
+      "signature_path": "__CHANGE_ME_RESOLVED_SIGNATURE_PATH__",
+      "signer_identity": "__CHANGE_ME_DELIVERY_IDENTITY__"
+    }
+  }
+}

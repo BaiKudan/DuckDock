@@ -1,0 +1,15 @@
+{
+  "schema_version": "duckdock-ga-alert-delivery-receipt-v1",
+  "exercise_id": "ga-20260806-001",
+  "target_environment": "__CHANGE_ME_TARGET_ID__",
+  "alert_name": "DuckDockGA_ga-20260806-001",
+  "event": "firing",
+  "receipt_id": "__CHANGE_ME_PROVIDER_RECEIPT_ID__",
+  "deliveries": [
+    {"channel": "oncall-webhook", "receiver": "__CHANGE_ME_ONCALL_RECEIVER__", "provider_receipt_id": "__CHANGE_ME_PROVIDER_RECEIPT_ID_1__", "delivered_at": "2026-08-06T00:40:59Z"},
+    {"channel": "pager", "receiver": "__CHANGE_ME_PAGER_RECEIVER__", "provider_receipt_id": "__CHANGE_ME_PROVIDER_RECEIPT_ID_2__", "delivered_at": "2026-08-06T00:41:00Z"}
+  ],
+  "schedule": "__CHANGE_ME_ONCALL_SCHEDULE__",
+  "delivered": true,
+  "delivered_at": "2026-08-06T00:41:00Z"
+}

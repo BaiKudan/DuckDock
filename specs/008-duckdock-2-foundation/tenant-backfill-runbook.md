@@ -146,9 +146,9 @@ non-NULL relationship validation.
 
 ## 7. Remediation Rules
 
-- `AIAsset unresolved`: create or correct explicit `AssetOwnership` evidence.
-  `VERIFIED_TYPED_SOURCE` is reserved until a concrete source FK/rule is
-  approved and implemented; never insert a guessed tenant.
+- `AIAsset unresolved`: create or correct explicit `AssetOwnership` evidence,
+  or use the ADR-0212 per-ID remediation manifest after administrator approval.
+  Never insert a guessed/default tenant.
 - `AIAsset conflict`: reconcile the explicit AssetOwnership records through an
   approved ownership decision.
 - `Runtime unresolved/conflict`: remediate every bound Asset first.
@@ -158,9 +158,70 @@ non-NULL relationship validation.
   fallback only when no Asset relation exists.
 - `EvidenceItem unresolved`: do not infer. Populate the ADR-0211
   `work_trace_id` only from trustworthy lineage evidence, then rerun the
-  resolver. If no trustworthy WorkTrace exists, leave the row unresolved.
+  resolver. If no trustworthy WorkTrace exists, an ADR-0212 per-ID manifest
+  may establish direct historical Namespace ownership without fabricating a
+  WorkTrace relationship.
 
 After remediation, discard the completed pass cursor, rerun dry-run from the
-beginning, and archive the reports. Do not run FND-019 contract migration until
-the full preflight reports zero blockers and non-NULL relationships have also
-been validated.
+beginning, and archive the reports. Revision `20260728_0029` refuses all
+contract DDL until the full preflight reports zero blockers and non-NULL
+relationships have also been validated.
+
+## 8. Explicit Manifest Remediation
+
+When approved typed relations do not exist, use
+[`specs/009-foundation-tenant-contract`](../009-foundation-tenant-contract/spec.md).
+The manifest must enumerate every target ID; selectors, wildcards and a default
+Namespace are not supported.
+
+```powershell
+python scripts/remediate_foundation_tenants.py `
+  --manifest .state/approved-tenant-remediation.json `
+  --dry-run `
+  --json
+
+python scripts/remediate_foundation_tenants.py `
+  --manifest .state/approved-tenant-remediation.json `
+  --apply `
+  --ack-write-quiescence `
+  --json
+```
+
+Apply validates the complete planned relationship graph before the first write.
+Each changed target and its audit receipt commit in the same transaction.
+Same-value replay is a no-op; a different existing value fails without
+overwrite.
+
+### Disposable development data exception
+
+An Owner may classify unresolved rows as disposable non-production test data.
+In that case exact deletion may replace manifest assignment only after a
+verified full database backup, explicit write quiescence, documented row counts
+and expected FK cascades. Production data and data with uncertain provenance
+must use the typed evidence or per-ID manifest path. Always rerun backfill and
+preflight from the beginning after cleanup.
+
+## 9. Contract Preflight
+
+After the remediation apply and a complete backfill pass, run:
+
+```powershell
+python scripts/check_foundation_tenant_contract.py --json
+```
+
+Exit code `0` and `total_blockers=0` are necessary but not by themselves
+sufficient for production DDL approval. Retain the manifest hash, apply report,
+complete backfill reports and preflight report with the change ticket.
+
+With relationship writers still paused, apply the contract and validate schema
+drift:
+
+```powershell
+alembic upgrade head
+alembic check
+python scripts/check_foundation_tenant_contract.py --json
+```
+
+Revision `20260728_0029` makes all five Foundation `namespace_id` columns
+non-null, adds tenant-scoped query indexes, and enforces a unique Binding tenant
+key. Restart writers only after the post-upgrade preflight is still clean.

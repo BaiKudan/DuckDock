@@ -1,0 +1,51 @@
+{
+  "schema_version": "duckdock-ga-capacity-growth-receipt-v1",
+  "exercise_id": "ga-capacity-20260806",
+  "target_environment": "__CHANGE_ME_TARGET_ENVIRONMENT__",
+  "namespace_id": 123,
+  "run_tag": "abcdef123456",
+  "source_commit": "__CHANGE_ME_40_HEX__",
+  "images": {
+    "backend": {
+      "name": "__CHANGE_ME_BACKEND_IMAGE_AT_SHA256__"
+    },
+    "frontend": {
+      "name": "__CHANGE_ME_FRONTEND_IMAGE_AT_SHA256__"
+    }
+  },
+  "database_provider": "__CHANGE_ME_APPROVED_MANAGED_MYSQL_PROVIDER__",
+  "provider_receipt_id": "__CHANGE_ME_STORAGE_PROVIDER_RECEIPT_ID__",
+  "baseline": {
+    "phase": "baseline",
+    "snapshot_id": "__CHANGE_ME_BASELINE_SNAPSHOT_ID__",
+    "captured_at": "2026-08-06T00:00:00Z",
+    "query_sha256": "__CHANGE_ME_64_HEX__",
+    "mysql": {
+      "agent_runs_rows": 100,
+      "audit_logs_rows": 200,
+      "outbox_events_rows": 200,
+      "tagged_agent_runs_rows": 0,
+      "pending_outbox_events": 0,
+      "data_bytes": 10000000,
+      "index_bytes": 2000000,
+      "replica_lag_seconds": 0
+    }
+  },
+  "post_growth": {
+    "phase": "post-growth",
+    "snapshot_id": "__CHANGE_ME_POST_GROWTH_SNAPSHOT_ID__",
+    "captured_at": "2026-08-06T00:20:00Z",
+    "query_sha256": "__CHANGE_ME_64_HEX__",
+    "mysql": {
+      "agent_runs_rows": 50100,
+      "audit_logs_rows": 50200,
+      "outbox_events_rows": 50200,
+      "tagged_agent_runs_rows": 50000,
+      "pending_outbox_events": 0,
+      "data_bytes": 14000000,
+      "index_bytes": 3000000,
+      "replica_lag_seconds": 2
+    }
+  },
+  "completed_at": "2026-08-06T00:21:00Z"
+}

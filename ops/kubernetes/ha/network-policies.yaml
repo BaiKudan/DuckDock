@@ -1,0 +1,73 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: default-deny, labels: {app.kubernetes.io/name: duckdock}}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: allow-dns, labels: {app.kubernetes.io/name: duckdock}}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: frontend-ingress-and-backend, labels: {app.kubernetes.io/name: duckdock}}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: duckdock, app.kubernetes.io/component: frontend}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {duckdock.io/ingress: "true"}
+      ports: [{protocol: TCP, port: 8080}]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: duckdock, app.kubernetes.io/component: backend}
+      ports: [{protocol: TCP, port: 8801}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: backend-from-frontend, labels: {app.kubernetes.io/name: duckdock}}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: duckdock, app.kubernetes.io/component: backend}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: duckdock, app.kubernetes.io/component: frontend}
+        - namespaceSelector:
+            matchLabels: {duckdock.io/monitoring: "true"}
+      ports: [{protocol: TCP, port: 8801}]
+---
+# Portable NetworkPolicy cannot restrict egress by FQDN. The target overlay must
+# replace this broad CIDR with the approved managed-MySQL/Redis/S3/provider CIDRs,
+# or use a CNI FQDN policy. The production gate rejects an unmodified target report.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: controlled-external-egress, labels: {app.kubernetes.io/name: duckdock}}
+spec:
+  podSelector:
+    matchExpressions:
+      - {key: app.kubernetes.io/component, operator: In, values: [backend, worker, beat, migrate]}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock: {cidr: 0.0.0.0/0, except: [169.254.0.0/16]}
+      ports:
+        - {protocol: TCP, port: 3306}
+        - {protocol: TCP, port: 6379}
+        - {protocol: TCP, port: 9000}
+        - {protocol: TCP, port: 443}

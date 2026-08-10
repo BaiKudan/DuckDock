@@ -13,7 +13,7 @@
 
 当前黄金样例集位于：
 
-- [`clinic_golden_set.v1.jsonl`](../backend/app/clinic_assets/fixtures/clinic_golden_set.v1.jsonl)
+- [`clinic_golden_set.v1.jsonl`](../backend/tests/fixtures/clinic_golden_set.v1.jsonl)
 
 每条 fixture 当前支持以下字段：
 

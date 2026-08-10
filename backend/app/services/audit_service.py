@@ -8,9 +8,15 @@ AuditService — 轻量级操作审计
                 namespace_id=ns.id, details={"tag": body.tag})
 """
 
+import logging
+
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.models.audit import AuditLog
 from app.models.user import User
+
+
+logger = logging.getLogger(__name__)
 
 
 async def audit(
@@ -51,4 +57,7 @@ async def audit(
         db.add(log)
         # We intentionally do NOT commit here — the caller's transaction commits it
     except Exception:
-        pass  # audit must never break the main flow
+        # Audit remains best-effort for callers, but a write-path failure must
+        # still be visible to operators. Avoid logging details because they may
+        # contain user-provided or security-sensitive fields.
+        logger.exception("Failed to stage audit log entry")

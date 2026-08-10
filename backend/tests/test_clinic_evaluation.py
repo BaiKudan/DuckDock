@@ -42,6 +42,7 @@ def _clear_llm_keys(monkeypatch):
         monkeypatch.setattr(settings, name, "")
     monkeypatch.setattr(settings, "CLINIC_LLM_PROVIDER", "openai_compatible")
     monkeypatch.setattr(settings, "CLINIC_EVAL_MODE", "hybrid")
+    monkeypatch.setattr(settings, "CLINIC_LANGFUSE_ENABLED", False)
 
 
 def _sample_skills() -> list[dict[str, Any]]:

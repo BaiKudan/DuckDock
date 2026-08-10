@@ -13,15 +13,15 @@ providers:
 tests:
   - vars:
       case_id: deterministic-strong-quality
-      fixture_path: ../backend/app/clinic_assets/fixtures/clinic_golden_set.v1.jsonl
+      fixture_path: ../backend/tests/fixtures/clinic_golden_set.v1.jsonl
       mode: deterministic
   - vars:
       case_id: deterministic-security-failure
-      fixture_path: ../backend/app/clinic_assets/fixtures/clinic_golden_set.v1.jsonl
+      fixture_path: ../backend/tests/fixtures/clinic_golden_set.v1.jsonl
       mode: deterministic
   - vars:
       case_id: hybrid-live-quality
-      fixture_path: ../backend/app/clinic_assets/fixtures/clinic_golden_set.v1.jsonl
+      fixture_path: ../backend/tests/fixtures/clinic_golden_set.v1.jsonl
       mode: hybrid
 
 commandLineOptions:

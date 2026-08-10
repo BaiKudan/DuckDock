@@ -1,6 +1,7 @@
 # DuckDock Runtime MCP Adapter
 
-`duckdock-runtime-mcp` is a local MCP adapter for deploying DuckDock Reporter into desktop AI runtimes.
+`duckdock-runtime-mcp` is a local MCP adapter for deploying DuckDock Reporter
+and governed execution lifecycle instrumentation into desktop AI runtimes.
 
 The first implementation targets Tencent WorkBuddy on Windows and macOS. It keeps DuckDock's main services decoupled from WorkBuddy internals:
 
@@ -18,6 +19,11 @@ The first implementation targets Tencent WorkBuddy on Windows and macOS. It keep
 | `duckdock.reporter.install` | Install or update `duckdock/duckdock-reporter` from DuckDock private registry. |
 | `duckdock.reporter.configure` | Store DuckDock API base, runtime id, provider, and optional Reporter Credential locally. |
 | `duckdock.reporter.run_structured` | Submit one privacy-preserving daily/weekly structured report from the local WorkBuddy runtime. |
+| `duckdock.execution.session_start` / `session_complete` | Persist stable OpenClaw-like external Session correlation without transcripts. |
+| `duckdock.execution.run_start` / `run_complete` | Persist external Run + OTel trace/span correlation and terminal metadata-only counters. |
+| `duckdock.execution.buffer_status` | Inspect the durable ack cursor, pending age/count/bytes, retry state, pressure, and loss markers. |
+| `duckdock.execution.buffer_flush` | Replay pending lifecycle envelopes in stable local sequence using the current Runtime credential. |
+| `duckdock.execution.buffer_discard` | Explicitly discard an exact pending range and emit a durable `PARTIAL` / `DECLARED_LOSS` marker. |
 | `duckdock.reporter.dry_run` | Create a one-time WorkBuddy automation for structured Reporter validation. |
 | `duckdock.reporter.schedule` | Create a recurring WorkBuddy automation, defaulting to Friday 16:00. |
 | `duckdock.reporter.status` | Return local install/config and WorkBuddy automation summaries. |
@@ -60,6 +66,12 @@ duckdock.runtime.detect
 duckdock.reporter.install
 duckdock.reporter.configure
 duckdock.reporter.run_structured
+duckdock.execution.session_start
+duckdock.execution.run_start
+duckdock.execution.run_complete
+duckdock.execution.session_complete
+duckdock.execution.buffer_status
+duckdock.execution.buffer_flush
 duckdock.reporter.dry_run
 duckdock.reporter.schedule
 duckdock.reporter.status
@@ -80,6 +92,37 @@ The self-test only detects local state. It does not upload data.
 
 Direct `duckdock.reporter.run_structured` submission and WorkBuddy automation create/delete have been validated in an isolated test environment. Full recurring autonomous execution requires registering this MCP server in WorkBuddy and reloading WorkBuddy.
 
+## Durable offline execution queue
+
+Runtime MCP v0.3.0 stores every metadata-only Session/Run lifecycle envelope
+in `execution-buffer.sqlite3` before its first network attempt. SQLite WAL,
+`synchronous=FULL`, stable queue sequences and stable idempotency keys allow a
+new MCP process to resume ordered delivery after a crash.
+
+If a Session or Run start is offline, its result contains `queued=true` and a
+`queue_sequence`. Pass that sequence as `session_queue_sequence` or
+`run_queue_sequence` to dependent lifecycle calls. During replay the adapter
+resolves the acknowledged server public ID before sending the dependent item.
+
+```text
+session_start -> queue_sequence 41
+run_start(session_queue_sequence=41) -> queue_sequence 42
+run_complete(run_queue_sequence=42) -> queue_sequence 43
+buffer_flush -> ack_cursor 43
+```
+
+The default limits are 10,000 pending envelopes and 64 MiB. Override them with
+`DUCKDOCK_EXECUTION_BUFFER_MAX_ITEMS` and
+`DUCKDOCK_EXECUTION_BUFFER_MAX_BYTES`. The queue never evicts automatically:
+hard-limit admission fails visibly. An operator discard requires an exact
+range, a safe reason code and `confirm=true`; discarded payloads are blanked
+and a durable range/count/reason loss marker remains.
+
+This is at-least-once replay, not exactly-once transport. DuckDock's server-side
+idempotency contract prevents duplicate domain facts. Credentials are loaded
+at send time and are never stored in queue rows; a rotated credential may
+replay only rows belonging to the same configured Runtime.
+
 ## Security boundary
 
 - The adapter does not expose MinIO credentials.
@@ -88,3 +131,11 @@ Direct `duckdock.reporter.run_structured` submission and WorkBuddy automation cr
 - The adapter only uses WorkBuddy's high-level automation MCP bridge for scheduling. It does not rely on WorkBuddy remote-control filesystem or PTY APIs as a product contract.
 - User content collection must remain inside `duckdock-reporter` privacy rules.
 - Daily/weekly reports must stay summary/index oriented. Use `duckdock-pack-v1` only for explicit handover, audit, or evidence packages.
+- Lifecycle tools require timezone-aware event timestamps so a retry reuses the
+  same envelope and idempotency key. The Runtime must inject the same
+  `external_run_id`, `external_session_id`, OTel trace ID and root span ID into
+  its root span; DuckDock will not guess a Run boundary from content.
+- The durable buffer contains metadata identifiers and timestamps. Deploy it
+  only on storage protected by the organization's endpoint/disk-encryption
+  policy. `duckdock.reporter.uninstall` preserves the buffer to avoid silently
+  deleting unacknowledged envelopes.

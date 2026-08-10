@@ -1,0 +1,19 @@
+{
+  "schema_version": "duckdock-ga-restore-execution-receipt-v1",
+  "exercise_id": "ga-recovery-20260806",
+  "production_target_environment": "__CHANGE_ME_TARGET_ID__",
+  "restore_target_environment": "__CHANGE_ME_NON_PRODUCTION_RESTORE_TARGET__",
+  "environment_class": "recovery",
+  "backup_manifest_sha256": "__CHANGE_ME_64_HEX__",
+  "restore_receipt_id": "__CHANGE_ME_RESTORE_RECEIPT_ID__",
+  "destructive_restore": true,
+  "production_data_overwrite": false,
+  "failure_injected_at": "2026-08-06T00:15:00Z",
+  "started_at": "2026-08-06T00:16:00Z",
+  "completed_at": "2026-08-06T00:25:00Z",
+  "stages": [
+    {"name": "mysql", "command_id": "__CHANGE_ME_MYSQL_RESTORE_COMMAND_ID__", "exit_code": 0, "log_sha256": "__CHANGE_ME_64_HEX__", "completed_at": "2026-08-06T00:20:00Z"},
+    {"name": "repositories", "command_id": "__CHANGE_ME_REPOS_RESTORE_COMMAND_ID__", "exit_code": 0, "log_sha256": "__CHANGE_ME_64_HEX__", "completed_at": "2026-08-06T00:23:00Z"},
+    {"name": "object-store", "command_id": "__CHANGE_ME_OBJECT_RESTORE_COMMAND_ID__", "exit_code": 0, "log_sha256": "__CHANGE_ME_64_HEX__", "completed_at": "2026-08-06T00:25:00Z"}
+  ]
+}

@@ -96,7 +96,14 @@ case "${1:-up}" in
   logs)          "${DC[@]}" logs -f --tail=100 "${@:2}" ;;
   shell)         "${DC[@]}" exec "${2:-backend}" bash ;;
   observability) "${DC[@]}" --profile observability up -d; echo "Langfuse: http://localhost:3200" ;;
-  worker)        "${DC[@]}" --profile analysis-worker up -d analysis-worker ;;
+  worker)
+    ensure_env
+    "${DC[@]}" up -d mysql redis
+    wait_mysql_healthy
+    migrate
+    "${DC[@]}" run --rm backend python scripts/seed_analysis_worker_dev.py
+    "${DC[@]}" --profile analysis-worker up -d analysis-worker
+    ;;
   reset)
     read -r -p "⚠ 将删除全部容器 + 数据卷(MySQL/MinIO 数据清空),确认?(yes/N) " ans
     [ "$ans" = "yes" ] && "${DC[@]}" down -v || echo "已取消"

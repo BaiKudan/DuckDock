@@ -57,6 +57,21 @@
     ]
   },
   "evaluation_policy_id": "quality-policy-agent-default-v1",
+  "component_graph": {
+    "edges": [
+      {
+        "from_component": "skill:skill-web-research:skill-web-research-v12",
+        "to_component": "prompt:prompt-research-system:prompt-research-system-v8",
+        "relationship": "uses"
+      }
+    ]
+  },
+  "sbom": {
+    "format": "cyclonedx-json",
+    "spec_version": "1.6",
+    "document_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "media_type": "application/vnd.cyclonedx+json"
+  },
   "annotations": {
     "owner": "research-platform",
     "data_classification": "internal"

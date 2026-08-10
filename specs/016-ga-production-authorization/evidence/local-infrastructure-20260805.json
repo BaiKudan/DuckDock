@@ -1,0 +1,173 @@
+{
+  "alert_delivery": {
+    "passed": true,
+    "receipt_count": 2,
+    "receipt_statuses": [
+      "firing",
+      "resolved"
+    ]
+  },
+  "cleanup": "isolated project and all dedicated volumes removed by trap",
+  "isolated_compose_project": "duckdock_ga_infrastructure",
+  "observed_at": "2026-08-05T05:36:00.050567+00:00",
+  "schema_version": "duckdock-ga-local-infrastructure-v1",
+  "services": [
+    {
+      "health": "healthy",
+      "service": "alertmanager",
+      "state": "running"
+    },
+    {
+      "health": "healthy",
+      "service": "backend",
+      "state": "running"
+    },
+    {
+      "health": "healthy",
+      "service": "beat",
+      "state": "running"
+    },
+    {
+      "health": "healthy",
+      "service": "frontend",
+      "state": "running"
+    },
+    {
+      "health": "healthy",
+      "service": "minio",
+      "state": "running"
+    },
+    {
+      "health": "healthy",
+      "service": "mysql",
+      "state": "running"
+    },
+    {
+      "health": "healthy",
+      "service": "prometheus",
+      "state": "running"
+    },
+    {
+      "health": "healthy",
+      "service": "redis",
+      "state": "running"
+    },
+    {
+      "health": "healthy",
+      "service": "tls-gateway",
+      "state": "running"
+    },
+    {
+      "health": "healthy",
+      "service": "worker",
+      "state": "running"
+    }
+  ],
+  "status": "PASS",
+  "tls": {
+    "application_url": "https://duckdock.localtest.me:18443/health",
+    "certificate_days_remaining": 89,
+    "endpoints": {
+      "application": {
+        "handshakes": {
+          "TLSv1.2": {
+            "certificate_days_remaining": 89,
+            "cipher": "ECDHE-RSA-AES256-GCM-SHA384",
+            "expires_at": "2026-11-03T05:35:09+00:00",
+            "hostname_verified": true,
+            "ok": true,
+            "protocol": "TLSv1.2"
+          },
+          "TLSv1.3": {
+            "certificate_days_remaining": 89,
+            "cipher": "TLS_AES_256_GCM_SHA384",
+            "expires_at": "2026-11-03T05:35:09+00:00",
+            "hostname_verified": true,
+            "ok": true,
+            "protocol": "TLSv1.3"
+          }
+        },
+        "host": "duckdock.localtest.me",
+        "http": {
+          "hsts": "max-age=31536000; includeSubDomains",
+          "hsts_max_age_seconds": 31536000,
+          "ok": true,
+          "status_code": 200
+        },
+        "legacy_protocols": {
+          "TLSv1": {
+            "openssl_exit_code": 1,
+            "rejected": true,
+            "result": "rejected"
+          },
+          "TLSv1.1": {
+            "openssl_exit_code": 1,
+            "rejected": true,
+            "result": "rejected"
+          }
+        },
+        "passed": true,
+        "path": "/health",
+        "port": 18443
+      },
+      "object_store": {
+        "handshakes": {
+          "TLSv1.2": {
+            "certificate_days_remaining": 89,
+            "cipher": "ECDHE-RSA-AES256-GCM-SHA384",
+            "expires_at": "2026-11-03T05:35:09+00:00",
+            "hostname_verified": true,
+            "ok": true,
+            "protocol": "TLSv1.2"
+          },
+          "TLSv1.3": {
+            "certificate_days_remaining": 89,
+            "cipher": "TLS_AES_256_GCM_SHA384",
+            "expires_at": "2026-11-03T05:35:09+00:00",
+            "hostname_verified": true,
+            "ok": true,
+            "protocol": "TLSv1.3"
+          }
+        },
+        "host": "objects.duckdock.localtest.me",
+        "http": {
+          "hsts": "max-age=31536000; includeSubDomains, max-age=31536000; includeSubDomains",
+          "hsts_max_age_seconds": 31536000,
+          "ok": true,
+          "status_code": 200
+        },
+        "legacy_protocols": {
+          "TLSv1": {
+            "openssl_exit_code": 1,
+            "rejected": true,
+            "result": "rejected"
+          },
+          "TLSv1.1": {
+            "openssl_exit_code": 1,
+            "rejected": true,
+            "result": "rejected"
+          }
+        },
+        "passed": true,
+        "path": "/minio/health/live",
+        "port": 18443
+      }
+    },
+    "hostname_verified": true,
+    "hsts_max_age_seconds": 31536000,
+    "legacy_protocols_rejected": [
+      "TLSv1",
+      "TLSv1.1"
+    ],
+    "minimum_certificate_days": 30,
+    "minimum_hsts_max_age_seconds": 31536000,
+    "negotiated_protocols": [
+      "TLSv1.2",
+      "TLSv1.3"
+    ],
+    "object_store_url": "https://objects.duckdock.localtest.me:18443/minio/health/live",
+    "observed_at": "2026-08-05T05:35:53.773645+00:00",
+    "schema_version": "duckdock-ga-tls-probe-v1",
+    "status": "PASS"
+  }
+}

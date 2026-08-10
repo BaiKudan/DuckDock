@@ -132,7 +132,7 @@ flowchart LR
   LFW --> PG & CH & RD & MI
 ```
 
-默认 dev `docker compose up` 只起 `mysql · redis · minio · backend · worker · beat · frontend`；prod 默认多一次性 `migrate` 和 `minio-init`。`analysis-worker` 与 `observability`（Langfuse + Postgres + ClickHouse）是可选 profile。
+默认 dev `docker compose up` 只起 `mysql · redis · minio · backend · worker · beat · frontend`；prod 默认多一次性 `migrate` 和 `minio-init`。`analysis-worker`、`observability`（Langfuse + Postgres + ClickHouse）、`telemetry`（debug Collector）与 `telemetry-langfuse`（带 file-storage WAL 的 provider exporter）均为可选 profile。
 
 ---
 
@@ -219,13 +219,13 @@ stateDiagram-v2
   cancelled --> [*]
 ```
 
-证据规则（锁定决策）：`ExecutionAction` 标 `succeeded` 前，当资产 `Criticality ∈ {high, critical}` **或** 关联 `WorkTrace.sensitivity ≥ INTERNAL`（默认即 INTERNAL）时必须附证据，否则 `422`。完成的 case 可产出**对外交接包**（FR-012）：脱敏 zip → MinIO，签名 URL 下载。相关枚举：`HandoverItemStatus`、`ApprovalStatus`、`ExecutionStatus`、`ExecutionMode = manual(默认)/auto`。
+证据规则（锁定决策）：`ExecutionAction` 标 `succeeded` 前，当资产 `Criticality ∈ {high, critical}` **或** 关联 `WorkTrace.sensitivity ≥ INTERNAL`（默认即 INTERNAL）时必须附证据，否则 `422`。完成的 case 可产出脱敏后的对外交接包：zip 写入 MinIO，并通过限时签名 URL 下载。公开执行请求当前只接受 `manual`；数据库枚举中的 `auto` 仅为历史记录兼容保留。
 
 ---
 
 ## 7. 数据模型概览
 
-50+ 张表（18 个模型域，迁移 head `0026`）。两个枢纽：`users`（约 38 处 FK，actor/owner）与 `namespaces`（约 16 处，作用域）。核心实体与关系：
+业务表按领域拆分，准确数量与迁移头以当前代码中的 Alembic metadata、`alembic heads` 和 `alembic current` 为准，不在文档中固化易漂移的计数。`users`（actor/owner）与 `namespaces`（作用域）是两个主要枢纽。核心实体与关系：
 
 ```mermaid
 erDiagram
@@ -249,20 +249,35 @@ erDiagram
   execution_actions ||--o{ evidence_items : evidence
   runtime_instances ||--o{ collection_jobs : runs
   runtime_instances ||--o{ reporter_credentials : credentials
+  runtime_instances ||--o{ agent_deployments : deployments
+  namespaces ||--o{ agent_deployments : scopes
+  agent_deployments ||--o{ deployment_components : pins
+  ai_assets ||--o{ deployment_components : components
+  skill_versions ||--o{ deployment_components : components
+  runtime_instances ||--o{ agent_sessions : sessions
+  runtime_instances ||--o{ agent_runs : runs
+  agent_sessions ||--o{ agent_runs : groups
+  agent_deployments ||--o{ agent_runs : executed_as
+  agent_runs ||--o{ agent_run_artifacts : produces
+  runtime_instances ||--o{ pack_imports : authenticates
+  agent_runs ||--o{ pack_imports : correlates
+  pack_imports ||--o{ pack_import_artifacts : verifies
+  agent_run_artifacts ||--o{ pack_import_artifacts : indexes
   runtime_instances ||--o{ agent_insight_jobs : insights
   users ||--o{ agent_insight_jobs : owns
   collection_jobs ||--o{ report_upload_sessions : ingests
 ```
 
-六个域聚类：
+七个域聚类：
 
 | 域 | 关键表 |
 |---|---|
 | identity & access | `users` · `identity_links` · `org_units` · `roles` · `role_permissions` · `permissions` · `role_bindings` · `sso_provider_configs` · `sso_role_mappings` · `robot_accounts` · `user_affiliations` |
 | registry & release | `namespaces` · `namespace_members` · `skills` · `skill_versions` · `scan_results` · `sandbox_validation_runs` · `public_skill_releases` · `namespace_governance_policies` |
 | assets & traces | `ai_assets` · `asset_ownerships` · `work_traces` · `work_artifacts` · `provider_principals` · `memory_candidates` |
-| runtime & collection | `runtime_instances` · `runtime_bindings` · `collection_jobs` · `raw_collection_records` · `report_upload_sessions` · `reporter_credentials` · `analysis_workers` · `analysis_result_artifacts` · `agent_insight_jobs` |
+| runtime & collection | `runtime_instances` · `runtime_bindings` · `agent_deployments` · `deployment_components` · `agent_sessions` · `agent_runs` · `agent_run_artifacts` · `telemetry_sinks` · `trace_backend_refs` · `generic_trace_projections` · `pack_imports` · `pack_import_artifacts` · `collection_jobs` · `raw_collection_records` · `report_upload_sessions` · `reporter_credentials` · `analysis_workers` · `analysis_result_artifacts` · `agent_insight_jobs` |
 | handover | `handover_cases` · `handover_items` · `approval_tasks` · `execution_actions` · `evidence_items` · `user_handover_profiles` |
+| evaluation & flywheel | `evaluation_datasets` · `evaluation_dataset_versions` · `evaluation_dataset_curation_batches` · `evaluation_sampling_policies` · `evaluation_sampling_policy_versions` · `evaluation_sampling_runs` · `evaluation_annotation_queue_bindings` · `evaluation_annotation_dispatches` · `evaluation_promotion_policies` · `evaluation_promotion_policy_versions` · `evaluation_promotion_runs` · `evaluators` · `evaluator_versions` · `evaluation_experiments` · `evaluations` · `evaluation_result_manifests` · `evaluation_comparisons` |
 | quality & ops | `clinic_evaluations` · `audit_logs` · `retention_policies` · `webhooks` · `webhook_deliveries` · `registry_sync_events` · `replication_jobs` |
 
 > 迁移红线：空 MySQL 必须能 `alembic upgrade head`；`0009` 用活模型建表，给控制平面表加列的迁移必须幂等（inspector 守卫，见 `0021`/`0023`）。
@@ -307,21 +322,24 @@ DuckDock/
 │       │   ├── registry · clawhub · clinic · components
 │       │   ├── control_plane · agent_overview · people · analysis
 │       │   └── robots · replication · webhooks · audit · lifecycle
-│       ├── models/                       # 18 模型域（枚举 + 表）
+│       ├── api/v2/                       # Reporter Session/Run ingestion + governed AgentRun reads
+│       ├── models/                       # 20 模型域（枚举 + 表）
 │       ├── services/                     # ~28 领域服务
 │       │   ├── git_service · artifact_service · scanner_service
 │       │   ├── sandbox_validation_service · clinic_service · release_gate_service
 │       │   ├── report_upload_service · structured_report_service · agent_overview_service
 │       │   ├── adapter_collection_service · analysis_service
+│       │   ├── reporter_identity_service · execution_service · execution_query_service
 │       │   ├── handover_advisor_service · handover_package_service · evidence_service
 │       │   ├── iam_service · sso_service · credential_service · ssrf
 │       │   └── public_release_service · webhook_service · audit_service · langfuse_service · llm_http
 │       ├── workers/                      # scan · clinic · analysis · report_upload · agent_insight · webhook · lifecycle + celery_app
 │       └── core/ deps.py config.py security.py database.py ratelimit.py
 ├── frontend/                             # React 18 + AntD 5 + Tailwind
-│   ├── src/pages/                        # 19 页（registry · clinic · control-plane · iam · audit · …）
+│   ├── src/pages/                        # 20 页（registry · clinic · control-plane · eval-hub · iam · audit · …）
 │   └── e2e/                              # Playwright 闭环 E2E（P3-11，CI 阻塞）
-├── backend/alembic/versions/             # 26 迁移，head 0026
+├── ops/otel-collector/                    # OpenClaw/Generic OTLP metadata-only Collector、Langfuse 与 durable queue boundary
+├── backend/alembic/versions/             # 55 迁移，head 0055
 ├── docs/
 │   ├── architecture.md                   # 本文件
 │   ├── production-deployment.md          # Compose + SOPS/age 上线 + 恢复演练
@@ -338,6 +356,7 @@ DuckDock/
 ```bash
 docker compose up -d mysql redis minio           # 基础设施
 docker compose --profile observability up -d     # 需 Langfuse 时
+docker compose --profile telemetry up -d otel-collector  # OpenClaw debug shadow
 cd backend && alembic upgrade head               # 迁移
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8801
 celery -A app.workers.celery_app worker --loglevel=info --pool=solo
@@ -353,11 +372,17 @@ cd frontend && npm install && npm run dev         # → http://127.0.0.1:5174
 
 | 维度 | 结果 |
 |---|---|
-| Python SDK / 服务端 | `langfuse==4.0.6` / `langfuse/langfuse:3` |
+| Python SDK / 服务端 | Python SDK `4.14.2` / Langfuse Web + Worker `4.1.0` |
+| ClickHouse | `25.12.11.4` |
 | `auth_check()` · span/generation · `flush()` | ✅ |
-| `trace.list` roundtrip · `get_trace_url` | ✅ |
+| Observations API v2 · raw IO · `get_trace_url` | ✅ |
+| Trace2Dataset source link · Dataset version pin | ✅ |
+| Metadata-only candidate query · governed batch curation | ✅ |
+| OTel ingestion v4 · Secret Canary | ✅ |
 
-**兼容性注意事项**：Langfuse v3 不会自动创建 S3 bucket；bucket 缺失时 ingest 可能失败，而 SDK 不一定向调用方抛出异常。Compose 使用 `langfuse-minio-init` 幂等建桶，`langfuse-worker` 与 `web` 均依赖该初始化任务成功。升级前运行 `backend/scripts/verify_langfuse.py`；`ClinicEvaluation.trace_id` 用于将评估结果关联到 trace。
+**兼容性注意事项**：Compose 使用 `events_only` / native OTel `direct`，旧的 trace/session/observation read API 在 v4 会返回 404。DuckDock 使用 Observations API v2：一般确认只请求 `core,basic,metadata`，候选队列只请求不含 IO 的 `core,basic,time`，Trace2Dataset provider adapter 才在 1 MiB/字段的内存边界内显式请求 `core,basic,time,io`，并把内容直接写回 Langfuse；Scores API v3/Experiments API 继续承担结果边界。Collector 固定发送 `x-langfuse-ingestion-version: 4`。`langfuse-minio-init` 仍负责幂等建桶。版本由 `langfuse-v4` compatibility profile fail-closed 控制；升级必须运行 `bash scripts/verify-langfuse-upgrade.sh`，详见 [`langfuse-upgrade-runbook.zh-CN.md`](langfuse-upgrade-runbook.zh-CN.md)。
+
+Eval Hub 采用 **Langfuse-first、DuckDock-governed**：Dataset item、Experiment trace、annotation value 和 score detail 留在 Langfuse；MySQL 只保存 Namespace、不可变版本/digest、target pin、provider ref 与有界结果摘要。候选检索先以 metadata-only 过滤形成最多 20 项的不可变选择批次，独立 APPROVED/REJECTED 评审后才允许物化；批准批次在 provider adapter 内将每个 Langfuse Observation 的 input/output 直接写为确定性 Langfuse Dataset item，并把整个批次一次性固定为一个 DuckDock DatasetVersion。版本化生产采样策略显式绑定 Dataset/时间窗口，以稳定哈希选择尚未治理的来源并只生成 `PENDING_REVIEW` 批次。Annotation Queue 是采样事务之外的独立 adapter：DuckDock 先持久化 dispatch intent，再由 lease-protected Worker 校验绑定时的 Score Config 快照、先对账后创建 Observation item，并独立回写 `PENDING/COMPLETED` 进度；Langfuse 完成状态不会自动批准 DuckDock 批次。版本化 Promotion policy 在派发 100% 完成后，通过 Scores API v3 精确读取 `ANNOTATION`/Queue/Config/Trace/Observation 评分，在 adapter 内瞬时计算质量条件并只读取 Observation metadata 形成多样性摘要；MySQL 只保存 `RECOMMENDED/BLOCKED`、原因码、布尔和 digest，推荐结果仍不能自动创建 review/materialization。跨批次 Case Routing 再消费这些已持久化布尔/digest，以确定性 cluster round-robin 从同一 Promotion 版本的多个不重叠运行中生成 Golden 与 Bad Case 两个独立 `PENDING_REVIEW` 批次；它不调用 Langfuse，也不自动审批或物化。可选语义聚类通过独立 provider port 瞬时读取所选 Bad Case 的 Langfuse IO，并调用独立 OpenAI-compatible embedding 端点；确定性 cosine/centroid 聚类只把 source、content/embedding digest、相似度和簇成员写入 DuckDock，原文与向量不持久化。离线语义门禁再以 DuckDock-only 方式比较同一 Case Routing source/content 集的 baseline/candidate 冻结结果，输出成员一致度、簇数量变化、合格簇比例下降和 centroid similarity 下降；比较不重读 Provider IO、不调用 embedding，来源或内容不一致时 fail closed。Failure Taxonomy 可精确 pin 该语义版本与运行，也可继续使用 metadata 兼容路径。版本化 Failure Taxonomy 生成带精确 lineage 的 `PENDING_REVIEW` Experience 候选；批准候选仍不会生成指令正文、Memory 或生产变更。Experience 治理允许操作员从已批准候选创建 DuckDock 专属 Experience 资产和不可变人工正文版本，激活必须由不同于作者及请求人的第二位成员审批；批准仅把精确版本标记为 `ACTIVE` 并退役旧版本，不写入 Langfuse、Hermes 或任何生产 Agent。正文、适用边界、申请说明与评语不进入 Audit/Outbox，事件只传播 digest 与状态。DuckDock 只回写来源引用、item ref、manifest digest、评审证据和固定时间点版本。Langfuse-backed Evaluation 通过同事务 Outbox 和恢复扫描进入 Celery，以数据库租约、心跳、过期接管、稳定 execution key、指数退避和协作取消保证可恢复执行；Runner 固定 Dataset version，并使用 Langfuse v4 Experiment SDK 产生 provider-native item trace/score。契约见 [`specs/009-evaluation-hub/spec.md`](../specs/009-evaluation-hub/spec.md)。
 
 ---
 

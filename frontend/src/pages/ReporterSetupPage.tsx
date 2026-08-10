@@ -59,7 +59,7 @@ function runtimeGuides(apiBase: string): RuntimeGuide[] {
   const commonSchedule =
     "请创建 DuckDock Reporter 定时任务：每周五 16:00 执行一次。首次运行时先登录 DuckDock，选择一个有写权限的 Namespace ID 并调用 /reporters/enroll 自助登记 runtime endpoint，保存一次性返回的 dkr_report_* Reporter Credential；之后生成 duckdock-pack-v1.zip，使用 DuckDock 上传会话直传对象存储，并在上传后 finalize。";
   const commonCheck =
-    "请立刻执行一次 DuckDock Reporter dry-run 上传检查：生成最小测试包，创建上传会话，上传到 DuckDock，finalize 后返回 report_id、pack_sha256、status 和错误信息。";
+    "请立刻执行一次 DuckDock Reporter 校验上报（命令使用 --dry-run 模式）：生成最小校验包，创建上传会话，上传到 DuckDock，finalize 后返回 report_id、pack_sha256、status 和错误信息。";
 
   return [
     {
@@ -80,7 +80,7 @@ function runtimeGuides(apiBase: string): RuntimeGuide[] {
       registryInstruction: `请先把 DuckDock 私有 Skills Registry 配置为当前 OpenClaw 的私有技能库地址：${registryUrl}。如果支持 SkillHub/ClawHub registry，请把它登记为 duckdock-private 并同步索引。`,
       installInstruction: `请安装 ${reporterSkill}，并允许它定位本实例的 skills、agents、prompts、workflows、memory index、session summary 和 artifact index。${commonScope}`,
       scheduleInstruction: `${commonSchedule} 如果本实例支持 backup create/export，请优先利用原生导出结果生成 DuckDock pack。DUCKDOCK_API_BASE=${apiBase}，DUCKDOCK_RUNTIME_ID=<runtime_id>，DUCKDOCK_REPORTER_CREDENTIAL=<dkr_report_*>。`,
-      uploadCheckInstruction: `${commonCheck} 如果 dry-run 成功，请在 DuckDock 个人工作台刷新 Reporter 自报状态。`,
+      uploadCheckInstruction: `${commonCheck} 如果校验上报成功，请在 DuckDock 个人工作台刷新 Reporter 自报状态。`,
       cliTemplate: `openclaw registry add duckdock-private ${registryUrl}
 openclaw skill install duckdock/duckdock-reporter --registry duckdock-private
 openclaw task schedule duckdock-reporter-weekly "0 16 * * 5" \\
@@ -97,7 +97,7 @@ openclaw skill run duckdock/duckdock-reporter --dry-run --upload-check`,
       primaryMode: "复制到 ArkClaw 对话框",
       registryInstruction: `请先把 DuckDock 私有 Skills Registry 配置为当前 ArkClaw 的私有技能库地址：${registryUrl}。如果 ArkClaw 当前只支持自定义 skill 源，请使用这个地址作为 DuckDock 镜像源并同步索引。`,
       installInstruction: `请安装 ${reporterSkill}，并检查 ArkClaw 是否允许读取技能、智能体、提示词、工作流、会话摘要和任务产物索引。${commonScope}`,
-      scheduleInstruction: `${commonSchedule} 运行时类型请标记为 arkclaw，DUCKDOCK_API_BASE=${apiBase}；如 ArkClaw 暂不支持直传，请先生成本地 pack 并返回上传阻塞原因。`,
+      scheduleInstruction: `${commonSchedule} 运行时类型请标记为 arkclaw，DUCKDOCK_API_BASE=${apiBase}；若目标 ArkClaw 实例不提供直传能力，请先生成本地 pack 并返回上传阻塞原因。`,
       uploadCheckInstruction: `${commonCheck} 请明确返回 ArkClaw 当前可用的导出/API 能力，以及不能采集的字段清单。`,
     },
   ];
@@ -136,7 +136,7 @@ export default function ReporterSetupPage() {
 DuckDock API: ${apiBase}
 如果本机还没有 DuckDock runtime，请先登录，选择有写权限的 Namespace ID，并在 /reporters/enroll 请求中显式传 namespace_id 完成自助登记。
 Reporter Credential: <enroll 后一次性返回的 dkr_report_*>
-请安装 DuckDock Reporter，做一次 dry-run 上传检查，并创建每周五 16:00 的周期上报任务。`;
+请安装 DuckDock Reporter，做一次最小校验上报，并创建每周五 16:00 的周期上报任务。`;
 
   async function copy(value: string, label: string) {
     try {
@@ -155,7 +155,7 @@ Reporter Credential: <enroll 后一次性返回的 dkr_report_*>
             <div className="section-kicker">REPORTER SETUP SOP</div>
             <h1 className="mt-3 text-3xl font-bold tracking-tight text-slate-950">DuckDock 探针接入 SOP</h1>
             <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-500">
-              面向 WorkBuddy、OpenClaw、ArkClaw 使用者。复制下面的一句话到对应客户端，让它完成私有 Skills Registry 配置、安装 DuckDock Reporter、创建周期任务并做一次 dry-run 上传检查。
+              面向 WorkBuddy、OpenClaw、ArkClaw 使用者。复制下面的一句话到对应客户端，让它完成私有 Skills Registry 配置、安装 DuckDock Reporter、创建周期任务并做一次最小校验上报。
             </p>
             <div className="mt-6 flex flex-wrap gap-2">
               {guides.map((guide) => (
@@ -199,7 +199,7 @@ Reporter Credential: <enroll 后一次性返回的 dkr_report_*>
 
       <Card
         title="标准 MCP 接入（推荐产品化路线）"
-        description="SOP 仍然保留作兜底；如果 WorkBuddy 支持配置 MCP，优先接入 duckdock-runtime-mcp，让安装、配置、dry-run、定时和状态检查都走结构化工具。"
+        description="SOP 仍然保留作兜底；如果 WorkBuddy 支持配置 MCP，优先接入 duckdock-runtime-mcp，让安装、配置、校验上报、定时和状态检查都走结构化工具。"
         action={
           <Button
             variant="secondary"
@@ -257,7 +257,7 @@ Reporter Credential: <enroll 后一次性返回的 dkr_report_*>
             <StepMarker index="01" icon={Settings2} title="配置私有 Registry" />
             <StepMarker index="02" icon={Clipboard} title="安装 Reporter Skill" />
             <StepMarker index="03" icon={RefreshCw} title="创建周期任务" />
-            <StepMarker index="04" icon={UploadCloud} title="dry-run 上传检查" />
+            <StepMarker index="04" icon={UploadCloud} title="最小校验上报" />
           </div>
           <div className="mt-5 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-700">
             注意：员工或 Agent 可以自助 enroll 获取长期 Reporter Credential；管理员手工 token 只作为运维兜底。
@@ -303,7 +303,7 @@ Reporter Credential: <enroll 后一次性返回的 dkr_report_*>
               <CopyStep
                 index="04"
                 title="主动上传检查"
-                description="用 dry-run 验证 credential、上传会话、对象存储直传和 finalize 是否正常。"
+                description="用最小校验包验证 credential、上传会话、对象存储直传和 finalize 是否正常。"
                 value={selected.uploadCheckInstruction}
                 onCopy={copy}
               />

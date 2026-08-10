@@ -9,7 +9,7 @@ email-validator>=2.0.0
 PyJWT[crypto]>=2.13.0
 passlib[bcrypt]>=1.7.4
 python-multipart>=0.0.20
-gitpython>=3.1.0
+dulwich>=0.24.0
 redis>=5.0.0
 celery>=5.5.0
 httpx>=0.27.0
@@ -17,4 +17,4 @@ ldap3>=2.9.1
 anthropic>=0.40.0
 boto3>=1.35.0
 PyYAML>=6.0.2
-langfuse>=3.0.0
+langfuse==4.14.2

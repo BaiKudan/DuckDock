@@ -1,0 +1,122 @@
+{
+  "resourceSpans": [
+    {
+      "schemaUrl": "GENERIC_SECRET_CANARY_DO_NOT_EXPORT",
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {"stringValue": "generic-harness"}
+          },
+          {
+            "key": "duckdock.namespace.public_id",
+            "value": {"stringValue": "forged-namespace"}
+          },
+          {
+            "key": "duckdock.runtime.public_id",
+            "value": {"stringValue": "forged-runtime"}
+          },
+          {
+            "key": "duckdock.trust.level",
+            "value": {"stringValue": "PRODUCER_ATTESTED"}
+          },
+          {
+            "key": "secret.token",
+            "value": {"stringValue": "GENERIC_SECRET_CANARY_DO_NOT_EXPORT"}
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "schemaUrl": "GENERIC_SECRET_CANARY_DO_NOT_EXPORT",
+          "scope": {
+            "name": "private-scope-GENERIC_SECRET_CANARY_DO_NOT_EXPORT",
+            "attributes": [
+              {
+                "key": "prompt",
+                "value": {"stringValue": "GENERIC_SECRET_CANARY_DO_NOT_EXPORT"}
+              }
+            ]
+          },
+          "spans": [
+            {
+              "traceId": "0123456789abcdef0123456789abcdef",
+              "spanId": "0123456789abcdef",
+              "name": "private user request GENERIC_SECRET_CANARY_DO_NOT_EXPORT",
+              "kind": 2,
+              "startTimeUnixNano": "1785398400000000000",
+              "endTimeUnixNano": "1785398401000000000",
+              "attributes": [
+                {
+                  "key": "duckdock.external_run_id",
+                  "value": {"stringValue": "generic-run-smoke-001"}
+                },
+                {
+                  "key": "duckdock.namespace.public_id",
+                  "value": {"stringValue": "forged-namespace"}
+                },
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {"stringValue": "invoke_agent"}
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {"stringValue": "qwen-generic-safe"}
+                },
+                {
+                  "key": "gen_ai.input.messages",
+                  "value": {"stringValue": "GENERIC_SECRET_CANARY_DO_NOT_EXPORT"}
+                },
+                {
+                  "key": "tool.arguments",
+                  "value": {"stringValue": "GENERIC_SECRET_CANARY_DO_NOT_EXPORT"}
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1785398400500000000",
+                  "name": "GENERIC_SECRET_CANARY_DO_NOT_EXPORT",
+                  "attributes": [
+                    {
+                      "key": "message",
+                      "value": {
+                        "stringValue": "GENERIC_SECRET_CANARY_DO_NOT_EXPORT"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "status": {
+                "message": "GENERIC_SECRET_CANARY_DO_NOT_EXPORT",
+                "code": 1
+              }
+            },
+            {
+              "traceId": "0123456789abcdef0123456789abcdef",
+              "spanId": "1111111111111111",
+              "parentSpanId": "0123456789abcdef",
+              "name": "private child GENERIC_SECRET_CANARY_DO_NOT_EXPORT",
+              "kind": 3,
+              "startTimeUnixNano": "1785398400200000000",
+              "endTimeUnixNano": "1785398400800000000",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {"stringValue": "execute_tool"}
+                },
+                {
+                  "key": "tool.result",
+                  "value": {"stringValue": "GENERIC_SECRET_CANARY_DO_NOT_EXPORT"}
+                }
+              ],
+              "status": {
+                "message": "GENERIC_SECRET_CANARY_DO_NOT_EXPORT",
+                "code": 1
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
