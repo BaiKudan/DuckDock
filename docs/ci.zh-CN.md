@@ -9,19 +9,35 @@ CI 配置位于 `.github/workflows/ci.yml`。
 当前触发条件：
 
 - push 到 `main`
+- push 签名 tag `v2.0.0`（执行完整门禁后才允许推送最终 GHCR 镜像）
 - 针对 `main` 的 pull request
 - GitHub 页面手动执行 `workflow_dispatch`
 
 ## 2. 检查矩阵
 
-CI 分为四个阻塞 job。
+CI 分为五个阻塞 job。
 
 | Job | 目的 | 关键命令 |
 |---|---|---|
-| `backend` | 校验 FastAPI 后端 lint/type/test/import、MySQL Alembic 迁移可在空库执行 | `ruff check`、`mypy`、`pytest`、`python -m compileall app alembic`、`python -m alembic -c alembic.ini upgrade head` |
-| `frontend` | 校验 React / TypeScript 前端 lint/unit/build | `npm ci`、`npm run lint`、`npm test`、`npm run build` |
+| `backend` | 校验 FastAPI 后端锁定依赖、漏洞、lint/type/test/import、MySQL Alembic 与冻结契约 | `pip install --require-hashes`、`pip-audit`、`ruff check`、`mypy`、`pytest`、`alembic upgrade/check`、OpenAPI drift check |
+| `frontend` | 校验 React / TypeScript 锁定依赖、漏洞、lint/unit/build | `npm ci`、`npm audit`、`npm run lint -- --max-warnings=0`、`npm test`、`npm run build` |
 | `e2e` | 启动完整 DuckDock dev 栈，运行 Playwright auth smoke 与 seeded P3-11 交接闭环 | `bash scripts/dev.sh up`、`npx playwright test` |
-| `compose` | 校验默认 Docker Compose 只包含 DuckDock 核心服务，`analysis-worker` / Langfuse 只在对应 profile 中出现 | `docker compose config --services`、`docker compose --profile analysis-worker config --services`、`docker compose --profile observability config --services` |
+| `compose` | 校验开发与生产 Compose，确保可选组件只在对应 profile 中出现 | `docker compose config`、`docker compose -f docker-compose.prod.yml config --quiet` |
+| `release-images` | 等待 backend/frontend/e2e/compose 全部通过；构建带 provenance/SBOM 的 commit 候选索引并阻断 Critical/High，保留四份原始 SARIF，`v2.0.0` 的四镜像全通过后才晋升最终 GHCR tag，流水线拒绝覆盖已有 tag | Buildx、Docker Scout CVE gate、Actions artifact |
+
+最终 tag 前可在开发机运行
+`backend/.venv/bin/python scripts/run_ga_local_preflight.py --profile integrated --output-dir <new-path>`，
+一次复验仓库门禁和本地集成门禁并生成内容寻址回执。它是非授权预检；最终 tag CI、
+真实目标环境证据和组织签字仍必须独立执行。
+
+普通 `ci.yml` 的 `release-images` 只证明候选镜像可构建且当次扫描未触发阻断，不能直接
+充当 2.0 GA provenance。正式 `v2.0.0` 必须由受控 `.github/workflows/ci.yml`
+构建并推送 commit 候选索引；四镜像扫描全部通过且最终 tag 尚不存在时才晋升最终
+GHCR tag。四份 Docker Scout SARIF 作为不可覆盖的 Actions artifact 保留 90 天，
+summary 会输出 artifact URL 与 digest；发布机构必须在过期前将其中 backend/frontend
+原始 SARIF 复制到受控长期证据库。随后导出归一化 SLSA v1、SPDX 2.3，并按
+`docs/ga-production-authorization.zh-CN.md` 生成 builder 签名的原始报告与
+`duckdock-ga-release-provenance-evidence-v1`，最终授权器会重新验证全部文件。
 
 ## 3. 后端 CI 环境
 
@@ -45,7 +61,7 @@ COMPONENT_MANAGER_ENABLED=false
 
 ## 4. 前端 CI 环境
 
-前端 job 使用 Node.js 20，并基于 `frontend/package-lock.json` 执行确定性安装。
+前端 job 使用 Node.js 22，并基于 `frontend/package-lock.json` 执行确定性安装。
 
 本地等价命令：
 

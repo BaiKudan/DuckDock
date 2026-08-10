@@ -17,7 +17,7 @@ import {
   ShieldX,
   Trash2,
 } from "lucide-react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams } from "../router";
 import {
   scansApi,
   skillsApi,
@@ -435,19 +435,7 @@ export default function SkillDetailPage() {
   const [manageMode, setManageMode] = useState<"edit" | "delete" | null>(null);
   const [skillDescription, setSkillDescription] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!ns || !skill) return;
-    skillsApi.listVersions(ns, skill).then(({ data }) => {
-      setVersions(data);
-      setLoadingVersions(false);
-      if (data.length > 0) loadVersion(data[0].tag);
-    });
-    skillsApi.get(ns, skill).then(({ data }) => {
-      setSkillDescription(data.description);
-    });
-  }, [ns, skill]);
-
-  async function loadVersion(tag: string) {
+  const loadVersion = useCallback(async (tag: string) => {
     if (!ns || !skill) return;
     setLoadingDetail(true);
     setLoadingSharing(true);
@@ -464,7 +452,19 @@ export default function SkillDetailPage() {
       setLoadingDetail(false);
       setLoadingSharing(false);
     }
-  }
+  }, [ns, skill]);
+
+  useEffect(() => {
+    if (!ns || !skill) return;
+    skillsApi.listVersions(ns, skill).then(({ data }) => {
+      setVersions(data);
+      setLoadingVersions(false);
+      if (data.length > 0) void loadVersion(data[0].tag);
+    });
+    skillsApi.get(ns, skill).then(({ data }) => {
+      setSkillDescription(data.description);
+    });
+  }, [loadVersion, ns, skill]);
 
   function applySharingState(next: SkillVersionSharingState) {
     setSharing(next);

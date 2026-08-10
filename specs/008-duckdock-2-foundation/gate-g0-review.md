@@ -28,8 +28,8 @@ Product/Architecture Owner 于 2026-07-17 明确回复“批准 G0”。G0 自�
 | Telemetry Envelope v1 | PASS | [schema](contracts/telemetry-envelope-v1.schema.json), [example](contracts/examples/telemetry-envelope-v1.example.json) | metadata-only example；attribute key/size/item bounds；raw content 不进入 MySQL |
 | Evaluation Result v1 | PASS | [schema](contracts/evaluation-result-v1.schema.json), [example](contracts/examples/evaluation-result-v1.example.json) | 只表达 immutable completed evidence；queued/running 生命周期留给 EvalRun |
 | Release Manifest v1 | PASS | [schema](contracts/release-manifest-v1.schema.json), [example](contracts/examples/release-manifest-v1.example.json) | waiver 必须有原因和到期时间；人工批准与 rollback evidence 必需 |
-| Reporter/OpenAPI v2 | PASS | [OpenAPI](contracts/openapi-v2.yaml), [Quickstart](quickstart.md) | 6 paths；ReporterCredential 派生 Namespace/Runtime；写 schema 不接受客户端治理身份 |
-| Adapter compatibility | PASS | [conformance v0.2](adapter-conformance.md) | OpenClaw、Generic OTLP、Pack/ATIF 共用 identity/run/replay/error contract；AgentLoop/WorkBuddy 完成可行性映射 |
+| Reporter/OpenAPI v2 | PASS | [OpenAPI](contracts/openapi-v2.yaml), [Quickstart](quickstart.md) | 12 paths；ReporterCredential 派生 Namespace/Runtime；Artifact/TelemetrySink 走 Namespace RBAC；Outbox health/retry 走 system admin；写 schema 不接受客户端治理身份或 plaintext secret |
+| Adapter compatibility | PASS | [conformance v0.3](adapter-conformance.md) | OpenClaw、Hermes Reporter、Generic OTLP、Pack/ATIF 共用 identity/run/replay/error contract；AgentLoop/WorkBuddy 完成可行性映射 |
 | 隐私与信任边界 | PASS | [ADR-0207](../../docs/adr/0207-collector-trust-boundary.md), [ADR-0209](../../docs/adr/0209-metadata-first-content-policy.md) | `trust_level` 与 `trust_source` 分离；checksum 不等于 attestation；Secret Canary 跨 sink 门禁已定义 |
 | 测试、迁移与回滚计划 | PASS | [tasks](tasks.md), [plan](plan.md), [quickstart](quickstart.md) | S1-S2 test-first；真实 MySQL；应用先回滚、schema forward-fix；不删除已写 evidence |
 
@@ -219,3 +219,18 @@ migration.
 - FND-019 still requires a fresh full-database zero-blocker audit and its own
   explicit authorization; these release checks do not authorize contract or
   non-null DDL.
+
+## 13. Foundation Implementation Handoff
+
+EF-01～EF-10 are now implemented and verified locally through revision
+`20260728_0034`. This does not rewrite the historical G0/S1-B/S1-C evidence
+above. The current Foundation acceptance, rollout/backout drill and remaining
+formal G1 approval boundary are recorded in
+[`evidence/g1-evidence-alpha-20260728.md`](evidence/g1-evidence-alpha-20260728.md).
+
+Current verification: backend `829 passed, 16 skipped`; real MySQL marker lane
+`16 passed`; Foundation `184 passed, 12 skipped`; gated-module coverage
+`80.58%`; three consecutive G1 load runs and v1/v2 reconciliation lanes pass;
+Ruff/compile/import clean; mypy `82≤82`; default Compose contains no
+observability-only service. Product/Architecture Owner approved M1/G1 on
+2026-07-30.

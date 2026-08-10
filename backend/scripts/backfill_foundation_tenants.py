@@ -34,7 +34,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import make_url
 
 from app.core.config import settings
-from app.core.database import AsyncSessionLocal
+from app.core.database import AsyncSessionLocal, engine
 from app.services.tenant_backfill_service import (
     BackfillCheckpoint,
     run_tenant_backfill,
@@ -258,7 +258,7 @@ async def async_main(
 
 def main() -> int:
     try:
-        return asyncio.run(async_main())
+        return asyncio.run(_run_and_dispose())
     except KeyboardInterrupt:
         return 130
     except ValueError as exc:
@@ -267,6 +267,13 @@ def main() -> int:
     except Exception as exc:
         print(f"tenant-backfill failed: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 4
+
+
+async def _run_and_dispose() -> int:
+    try:
+        return await async_main()
+    finally:
+        await engine.dispose()
 
 
 if __name__ == "__main__":

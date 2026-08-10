@@ -1,0 +1,14 @@
+{
+  "schema_version": "duckdock-ga-recovery-trust-policy-v1",
+  "policy_id": "__CHANGE_ME_RECOVERY_POLICY_ID__",
+  "organization": "__CHANGE_ME_ORGANIZATION__",
+  "allowed_signers_path": "__CHANGE_ME_RECOVERY_ALLOWED_SIGNERS_PATH__",
+  "allowed_signers_sha256": "__CHANGE_ME_64_HEX__",
+  "approved_storage_providers": ["AWS S3"],
+  "storage_identities": ["__CHANGE_ME_STORAGE_SERVICE_IDENTITY__"],
+  "restore_executor_identities": ["__CHANGE_ME_RESTORE_EXECUTOR_IDENTITY__"],
+  "verification_identities": ["__CHANGE_ME_RECOVERY_VERIFIER_IDENTITY__"],
+  "required_artifacts": ["minio.tar.gz.age", "mysql.sql.gz.age", "repos.tar.gz.age"],
+  "required_restore_stages": ["mysql", "repositories", "object-store"],
+  "minimum_retention_days": 30
+}

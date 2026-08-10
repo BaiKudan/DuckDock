@@ -8,11 +8,41 @@ register_failure split (successes never consume the budget) and the X-Forwarded-
 """
 from __future__ import annotations
 
+import time
+
 import pytest
 from fastapi import HTTPException
 
 from app.core.config import Settings
-from app.core.ratelimit import InMemoryRateLimitBackend, RateLimiter
+from app.core.ratelimit import RateLimiter
+
+
+class InMemoryRateLimitBackend:
+    def __init__(self) -> None:
+        self._counters: dict[str, tuple[int, float]] = {}
+        self._lockouts: dict[str, float] = {}
+
+    async def incr_with_ttl(self, key: str, window_seconds: int) -> int:
+        now = time.monotonic()
+        count, expires_at = self._counters.get(key, (0, 0.0))
+        if expires_at <= now:
+            count = 0
+            expires_at = now + window_seconds
+        count += 1
+        self._counters[key] = (count, expires_at)
+        return count
+
+    async def set_lockout(self, key: str, lockout_seconds: int) -> None:
+        self._lockouts[key] = time.monotonic() + lockout_seconds
+
+    async def is_locked(self, key: str) -> bool:
+        expires_at = self._lockouts.get(key)
+        if expires_at is None:
+            return False
+        if expires_at <= time.monotonic():
+            del self._lockouts[key]
+            return False
+        return True
 
 
 def _limiter(

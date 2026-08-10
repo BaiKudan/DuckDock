@@ -1,9 +1,24 @@
 from __future__ import annotations
 
 import enum
+import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Enum, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, text
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    DateTime,
+    Enum,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -11,6 +26,14 @@ from app.core.database import Base
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def runtime_public_id() -> str:
+    return f"rt_{uuid.uuid4().hex}"
+
+
+def workload_identity_public_id() -> str:
+    return f"wid_{uuid.uuid4().hex}"
 
 
 class RuntimeProvider(str, enum.Enum):
@@ -32,6 +55,11 @@ class RuntimeStatus(str, enum.Enum):
     ACTIVE = "active"
     DEGRADED = "degraded"
     DISABLED = "disabled"
+
+
+class WorkloadIdentityKind(str, enum.Enum):
+    DEVICE = "DEVICE"
+    SERVICE = "SERVICE"
 
 
 class CollectionTriggerType(str, enum.Enum):
@@ -270,7 +298,7 @@ class ApprovalStatus(str, enum.Enum):
 
 
 class ExecutionMode(str, enum.Enum):
-    """FR-019(2026-06-12):执行双模式——manual 默认(人工回执=自我二次审查),auto=探针 lease。"""
+    """执行来源。公开请求仅接受 manual；auto 仅为历史数据兼容保留。"""
 
     MANUAL = "manual"
     AUTO = "auto"
@@ -285,7 +313,7 @@ class ExecutionStatus(str, enum.Enum):
 
 
 class CredentialRecord(Base):
-    """运行时凭证密文记录(specs/001 FR-016 · T011)。
+    """运行时凭证密文记录。
 
     只存 Fernet 密文;明文绝不落库、绝不出接口。`RuntimeInstance.credential_ref`
     以 `db:<id>` 指向本表,轮换时就地更新密文并记 `rotated_at`。
@@ -304,11 +332,28 @@ class CredentialRecord(Base):
 
 class RuntimeInstance(Base):
     __tablename__ = "runtime_instances"
+    __table_args__ = (
+        UniqueConstraint(
+            "public_id",
+            name="uq_runtime_instances_public_id",
+        ),
+        Index(
+            "ix_runtime_instances_namespace_status_updated_at",
+            "namespace_id",
+            "status",
+            "updated_at",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    namespace_id: Mapped[int | None] = mapped_column(
+    public_id: Mapped[str] = mapped_column(
+        String(35),
+        default=runtime_public_id,
+        nullable=False,
+    )
+    namespace_id: Mapped[int] = mapped_column(
         ForeignKey("namespaces.id", ondelete="RESTRICT"),
-        nullable=True,
+        nullable=False,
         index=True,
     )
     provider: Mapped[RuntimeProvider] = mapped_column(Enum(RuntimeProvider), nullable=False, index=True)
@@ -360,6 +405,9 @@ class ReporterCredential(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    public_id: Mapped[str] = mapped_column(
+        String(40), default=workload_identity_public_id, nullable=False, unique=True
+    )
     runtime_id: Mapped[int] = mapped_column(ForeignKey("runtime_instances.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)
     device_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
@@ -367,6 +415,16 @@ class ReporterCredential(Base):
     token_prefix: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
     token_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     scopes: Mapped[list | None] = mapped_column(JSON)
+    principal_kind: Mapped[WorkloadIdentityKind] = mapped_column(
+        Enum(WorkloadIdentityKind, name="workload_identity_kind"),
+        default=WorkloadIdentityKind.DEVICE,
+        nullable=False,
+        index=True,
+        server_default=WorkloadIdentityKind.DEVICE.value,
+    )
+    generation: Mapped[int] = mapped_column(
+        Integer, default=1, nullable=False, server_default="1"
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
@@ -595,12 +653,18 @@ class AIAsset(Base):
             "external_id",
             name="uq_ai_assets_source_external",
         ),
+        Index(
+            "ix_ai_assets_namespace_status_last_seen_at",
+            "namespace_id",
+            "status",
+            "last_seen_at",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    namespace_id: Mapped[int | None] = mapped_column(
+    namespace_id: Mapped[int] = mapped_column(
         ForeignKey("namespaces.id", ondelete="RESTRICT"),
-        nullable=True,
+        nullable=False,
         index=True,
     )
     asset_type: Mapped[AssetType] = mapped_column(Enum(AssetType), nullable=False, index=True)
@@ -749,11 +813,20 @@ class AssetOwnership(Base):
 
 class RuntimeBinding(Base):
     __tablename__ = "runtime_bindings"
+    __table_args__ = (
+        UniqueConstraint(
+            "namespace_id",
+            "runtime_id",
+            "asset_id",
+            "environment",
+            name="uq_runtime_bindings_namespace_runtime_asset_environment",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    namespace_id: Mapped[int | None] = mapped_column(
+    namespace_id: Mapped[int] = mapped_column(
         ForeignKey("namespaces.id", ondelete="RESTRICT"),
-        nullable=True,
+        nullable=False,
         index=True,
     )
     asset_id: Mapped[int] = mapped_column(ForeignKey("ai_assets.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -768,11 +841,18 @@ class RuntimeBinding(Base):
 
 class WorkTrace(Base):
     __tablename__ = "work_traces"
+    __table_args__ = (
+        Index(
+            "ix_work_traces_namespace_started_at",
+            "namespace_id",
+            "started_at",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    namespace_id: Mapped[int | None] = mapped_column(
+    namespace_id: Mapped[int] = mapped_column(
         ForeignKey("namespaces.id", ondelete="RESTRICT"),
-        nullable=True,
+        nullable=False,
         index=True,
     )
     runtime_id: Mapped[int | None] = mapped_column(ForeignKey("runtime_instances.id", ondelete="SET NULL"), index=True)
@@ -806,11 +886,18 @@ class WorkArtifact(Base):
 
 class EvidenceItem(Base):
     __tablename__ = "evidence_items"
+    __table_args__ = (
+        Index(
+            "ix_evidence_items_namespace_created_at",
+            "namespace_id",
+            "created_at",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    namespace_id: Mapped[int | None] = mapped_column(
+    namespace_id: Mapped[int] = mapped_column(
         ForeignKey("namespaces.id", ondelete="RESTRICT"),
-        nullable=True,
+        nullable=False,
         index=True,
     )
     work_trace_id: Mapped[int | None] = mapped_column(
@@ -839,6 +926,9 @@ class HandoverCase(Base):
     subject_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)
     namespace_id: Mapped[int | None] = mapped_column(ForeignKey("namespaces.id", ondelete="SET NULL"), index=True)
     receiver_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)
+    fallback_owner_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
     status: Mapped[HandoverStatus] = mapped_column(Enum(HandoverStatus), default=HandoverStatus.DRAFT, nullable=False, index=True)
     risk_level: Mapped[Criticality] = mapped_column(Enum(Criticality), default=Criticality.MEDIUM, nullable=False, index=True)
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
@@ -857,7 +947,7 @@ class HandoverItem(Base):
     recommended_action: Mapped[HandoverAction] = mapped_column(Enum(HandoverAction), nullable=False, index=True)
     receiver_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)
     risk_reason: Mapped[str | None] = mapped_column(Text)
-    # 顾问对 recommended_action 的置信度 0~1(规则版固定 0;LLM 版填模型把握)。T042 · 原则 V:仍是建议。
+    # 顾问对 recommended_action 的置信度为 0~1；无论来源如何都只是建议。
     confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False, server_default=text("'0'"))
     evidence_id: Mapped[int | None] = mapped_column(ForeignKey("evidence_items.id", ondelete="SET NULL"), index=True)
     status: Mapped[HandoverItemStatus] = mapped_column(Enum(HandoverItemStatus), default=HandoverItemStatus.PROPOSED, nullable=False, index=True)

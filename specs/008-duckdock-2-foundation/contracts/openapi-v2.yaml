@@ -18,8 +18,22 @@ tags:
     description: Reporter-authenticated Agent session lifecycle ingestion.
   - name: Reporter Runs
     description: Reporter-authenticated Agent run lifecycle ingestion.
+  - name: Generic OTLP
+    description: Collector-authenticated OTLP JSON to governed Run/reference projection.
+  - name: Pack ATIF
+    description: Reporter-authenticated immutable Pack upload and ATIF preflight.
+  - name: Adapter Fleet
+    description: Dynamic adapter negotiation, heartbeat drift and Fleet visibility.
   - name: Agent Runs
     description: User-authenticated governed AgentRun queries.
+  - name: Agent Run Artifacts
+    description: User-authenticated immutable artifact metadata registration.
+  - name: Telemetry Sinks
+    description: RBAC-scoped provider-neutral telemetry configuration.
+  - name: Outbox Operations
+    description: System-administrator health and failed-event recovery operations.
+  - name: Compatibility Reconciliation
+    description: System-administrator v1 Structured Report to v2 execution reconciliation.
 paths:
   /api/v2/reporter/sessions:
     post:
@@ -29,7 +43,9 @@ paths:
       description: |
         Creates or replays a metadata-only session start. Reusing an
         Idempotency-Key with the same canonical request returns the original
-        result; reusing it with a different request returns 409.
+        result; reusing it with a different request returns 409. New starts
+        may be rollout-controlled globally or by Runtime allowlist. Completion
+        remains available when starts are disabled.
       operationId: startReporterSession
       security:
         - ReporterBearerAuth: []
@@ -56,12 +72,18 @@ paths:
                 $ref: '#/components/schemas/ReporterSession'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
         '422':
           $ref: '#/components/responses/ValidationError'
+        '503':
+          $ref: '#/components/responses/IngestionDisabled'
 
   /api/v2/reporter/sessions/{session_public_id}/complete:
     post:
@@ -89,10 +111,14 @@ paths:
                 $ref: '#/components/schemas/ReporterSession'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
         '422':
           $ref: '#/components/responses/ValidationError'
 
@@ -105,6 +131,7 @@ paths:
         Starts one trace-correlated run inside an existing Reporter session.
         The Reporter token determines the Runtime and Namespace. Any optional
         Session or Deployment reference must resolve inside that same scope.
+        New starts may be rollout-controlled globally or by Runtime allowlist.
       operationId: startReporterRun
       security:
         - ReporterBearerAuth: []
@@ -131,12 +158,18 @@ paths:
                 $ref: '#/components/schemas/RunStartResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
         '422':
           $ref: '#/components/responses/ValidationError'
+        '503':
+          $ref: '#/components/responses/IngestionDisabled'
 
   /api/v2/reporter/runs/{run_public_id}/complete:
     post:
@@ -164,10 +197,461 @@ paths:
                 $ref: '#/components/schemas/AgentRun'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /api/v2/reporter/telemetry-sinks/{sink_public_id}/v1/traces:
+    post:
+      tags:
+        - Generic OTLP
+      summary: Reconcile sanitized Generic OTLP traces
+      description: |
+        Accepts uncompressed standard OTLP/HTTP JSON from the registered
+        per-Runtime Collector. Namespace, Runtime and trust are derived from
+        the execution.write ReporterCredential. DuckDock persists only
+        metadata projections; raw spans and attributes remain in the configured
+        trace backend. Ambiguous or conflicting mappings return OTLP partial
+        success and enter quarantine.
+      operationId: ingestGenericOtlpTraces
+      security:
+        - ReporterBearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TelemetrySinkProjectionPublicId'
+        - $ref: '#/components/parameters/AdapterHandshakeHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OtlpTraceExportRequest'
+      responses:
+        '200':
+          description: Export accepted, optionally with per-batch partial success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OtlpTraceExportResponse'
+        '400':
+          description: Malformed or unsupported OTLP JSON.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          description: OTLP projection request exceeds 1 MiB.
+        '415':
+          description: Only uncompressed application/json is accepted.
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /api/v2/reporter/pack-imports:
+    post:
+      tags:
+        - Pack ATIF
+      summary: Initialize an authenticated immutable Pack import
+      description: |
+        Validates a strict metadata-only duckdock-pack manifest and initializes
+        either a bounded single PUT or resumable multipart upload. Namespace,
+        Runtime and channel trust are derived exclusively from the Reporter
+        credential. Pack ID, validated canonical manifest hash, transfer mode
+        and declared Pack checksum form the durable replay identity.
+      operationId: createPackImport
+      security:
+        - ReporterBearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PackImportCreate'
+      responses:
+        '201':
+          description: Import initialized or same-content replay returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PackImportCreated'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '503':
+          description: Artifact storage is unavailable.
+
+  /api/v2/reporter/pack-imports/{public_id}:
+    get:
+      tags:
+        - Pack ATIF
+      summary: Read one Pack import in the authenticated Runtime scope
+      operationId: getPackImport
+      security:
+        - ReporterBearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PackImportPublicId'
+      responses:
+        '200':
+          description: Metadata-only import state and imported artifact index.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PackImport'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v2/reporter/pack-imports/{public_id}/finalize:
+    post:
+      tags:
+        - Pack ATIF
+      summary: Verify and materialize an uploaded Pack
+      description: |
+        Verifies Pack size/checksum, archive paths, duplicate entries,
+        compression bounds, the embedded canonical manifest and every declared
+        ATIF payload before writing a final object or artifact event. Unknown
+        ATIF versions and unauthorized content are never normalized.
+      operationId: finalizePackImport
+      security:
+        - ReporterBearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PackImportPublicId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PackImportFinalize'
+      responses:
+        '200':
+          description: Pack imported or idempotently replayed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PackImport'
+        '202':
+          description: Upload or retryable storage dependency is pending.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PackImport'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Import mapping or identity conflict was quarantined.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PackImport'
+        '422':
+          description: Pack failed permanent schema, checksum, or safety validation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PackImport'
+
+  /api/v2/reporter/pack-imports/{public_id}/multipart:
+    get:
+      tags:
+        - Pack ATIF
+      summary: Resume a multipart Pack upload from server-observed parts
+      operationId: getPackMultipartState
+      security:
+        - ReporterBearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PackImportPublicId'
+      responses:
+        '200':
+          description: Multipart part receipts currently retained by object storage.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PackMultipartState'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/v2/reporter/pack-imports/{public_id}/multipart/parts/{part_number}:
+    post:
+      tags:
+        - Pack ATIF
+      summary: Sign one bounded multipart upload part
+      operationId: createPackMultipartPartUrl
+      security:
+        - ReporterBearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PackImportPublicId'
+        - name: part_number
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 10000
+      responses:
+        '200':
+          description: Short-lived part upload URL.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PackMultipartPartUrl'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '503':
+          description: Artifact storage is unavailable.
+
+  /api/v2/reporter/pack-imports/{public_id}/multipart/complete:
+    post:
+      tags:
+        - Pack ATIF
+      summary: Complete multipart transfer and verify the immutable Pack
+      operationId: completePackMultipartUpload
+      security:
+        - ReporterBearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PackImportPublicId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PackMultipartComplete'
+      responses:
+        '200':
+          description: Multipart Pack verified and imported.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PackImport'
+        '202':
+          description: Verification dependency remains retryable.
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '503':
+          description: Artifact storage is unavailable.
+
+  /api/v2/reporter/pack-import-batches:
+    post:
+      tags:
+        - Pack ATIF
+      summary: Persist per-item Pack acknowledgements for an adapter queue
+      description: |
+        Each item is committed independently. Duplicate and out-of-order items
+        return stable receipts, while ack_cursor advances only across a
+        contiguous range of durable accepted or permanently rejected receipts.
+      operationId: createPackImportBatch
+      security:
+        - ReporterBearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PackBatchCreate'
+      responses:
+        '200':
+          description: Per-item accepted/replayed/retryable/rejected acknowledgements.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PackBatchAck'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /api/v2/reporter/pack-import-batches/{stream_id}/cursor:
+    get:
+      tags:
+        - Pack ATIF
+      summary: Read the latest durable contiguous Pack acknowledgement cursor
+      operationId: getPackImportBatchCursor
+      security:
+        - ReporterBearerAuth: []
+      parameters:
+        - name: stream_id
+          in: path
+          required: true
+          schema:
+            type: string
+            maxLength: 128
+      responses:
+        '200':
+          description: Durable cursor and advertised idempotency window.
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v2/reporter/pack-exports:
+    post:
+      tags:
+        - Pack ATIF
+      summary: Export verified Run trajectories as an immutable ATIF Pack
+      operationId: createPackExport
+      security:
+        - ReporterBearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PackExportCreate'
+      responses:
+        '200':
+          description: New or idempotently replayed Pack export.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PackExport'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '503':
+          description: Artifact storage is unavailable.
+
+  /api/v2/reporter/evaluation-replays:
+    post:
+      tags:
+        - Pack ATIF
+      summary: Replay one immutable Run evaluation result through Outbox
+      operationId: replayEvaluationResult
+      security:
+        - ReporterBearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EvaluationReplayCreate'
+      responses:
+        '200':
+          description: Durable evaluation replay event.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvaluationReplay'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /api/v2/reporter/handshakes:
+    post:
+      tags:
+        - Adapter Fleet
+      summary: Negotiate one credential-bound adapter descriptor
+      operationId: negotiateAdapterHandshake
+      security:
+        - ReporterBearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdapterDescriptor'
+      responses:
+        '201':
+          description: Dynamic capabilities accepted and rejected by current dependencies.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdapterHandshake'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /api/v2/reporter/heartbeats:
+    post:
+      tags:
+        - Adapter Fleet
+      summary: Record adapter health, Collector version and configuration drift
+      operationId: recordAdapterHeartbeat
+      security:
+        - ReporterBearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdapterHeartbeat'
+      responses:
+        '200':
+          description: Heartbeat accepted and compared with the negotiated descriptor.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdapterHeartbeatAck'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /api/v2/fleet/runtimes:
+    get:
+      tags:
+        - Adapter Fleet
+      summary: Read dynamic Runtime capability and heartbeat Fleet state
+      operationId: getFleetRuntimeSummary
+      security:
+        - UserBearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/NamespaceId'
+      responses:
+        '200':
+          description: Runtime Fleet state visible to one Namespace member.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FleetSummary'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '422':
           $ref: '#/components/responses/ValidationError'
 
@@ -184,6 +668,8 @@ paths:
         - $ref: '#/components/parameters/RuntimeInstanceFilter'
         - $ref: '#/components/parameters/DeploymentPublicIdFilter'
         - $ref: '#/components/parameters/RunStatusFilter'
+        - $ref: '#/components/parameters/StartedAfter'
+        - $ref: '#/components/parameters/StartedBefore'
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Cursor'
       responses:
@@ -222,6 +708,333 @@ paths:
         '422':
           $ref: '#/components/responses/ValidationError'
 
+  /api/v2/agent-runs/{run_public_id}/artifacts:
+    get:
+      tags:
+        - Agent Run Artifacts
+      summary: List immutable artifact metadata for an Agent run
+      operationId: listAgentRunArtifacts
+      security:
+        - UserBearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RunPublicId'
+        - $ref: '#/components/parameters/NamespaceId'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Artifact metadata visible in the requested Namespace.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AgentRunArtifact'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+    post:
+      tags:
+        - Agent Run Artifacts
+      summary: Register immutable artifact metadata for an Agent run
+      description: |
+        Registers checksum, size, schema and an internal object key/URI only.
+        DuckDock does not download or parse artifact content in this operation.
+      operationId: registerAgentRunArtifact
+      security:
+        - UserBearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RunPublicId'
+        - $ref: '#/components/parameters/NamespaceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentRunArtifactCreate'
+      responses:
+        '201':
+          description: Artifact metadata registered or idempotently replayed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentRunArtifact'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /api/v2/telemetry-sinks:
+    get:
+      tags:
+        - Telemetry Sinks
+      summary: List provider-neutral telemetry sinks
+      operationId: listTelemetrySinks
+      security:
+        - UserBearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/NamespaceId'
+        - name: include_disabled
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: true
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Telemetry sinks visible in the requested Namespace.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TelemetrySink'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+    post:
+      tags:
+        - Telemetry Sinks
+      summary: Create a provider-neutral telemetry sink
+      operationId: createTelemetrySink
+      security:
+        - UserBearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TelemetrySinkCreate'
+      responses:
+        '201':
+          description: Telemetry sink created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TelemetrySink'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /api/v2/telemetry-sinks/{public_id}:
+    get:
+      tags:
+        - Telemetry Sinks
+      summary: Get one telemetry sink
+      operationId: getTelemetrySink
+      security:
+        - UserBearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TelemetrySinkPublicId'
+      responses:
+        '200':
+          description: Telemetry sink detail.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TelemetrySink'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags:
+        - Telemetry Sinks
+      summary: Update mutable telemetry sink configuration
+      operationId: updateTelemetrySink
+      security:
+        - UserBearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TelemetrySinkPublicId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TelemetrySinkUpdate'
+      responses:
+        '200':
+          description: Telemetry sink updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TelemetrySink'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /api/v2/telemetry-sinks/{public_id}/disable:
+    post:
+      tags:
+        - Telemetry Sinks
+      summary: Disable a telemetry sink
+      operationId: disableTelemetrySink
+      security:
+        - UserBearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TelemetrySinkPublicId'
+      responses:
+        '200':
+          description: Telemetry sink disabled or already disabled.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TelemetrySink'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v2/outbox/health:
+    get:
+      tags:
+        - Outbox Operations
+      summary: Get transactional Outbox backlog health
+      operationId: getOutboxHealth
+      description: Requires a system administrator JWT.
+      security:
+        - UserBearerAuth: []
+      responses:
+        '200':
+          description: Pending age and status counts without event payload content.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OutboxHealth'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/v2/outbox/{event_id}/retry:
+    post:
+      tags:
+        - Outbox Operations
+      summary: Retry one exhausted Outbox event
+      operationId: retryOutboxEvent
+      description: Requires a system administrator JWT and accepts FAILED events only.
+      security:
+        - UserBearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/EventId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OutboxRetryRequest'
+      responses:
+        '200':
+          description: Event reset to PENDING without changing its immutable event ID.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OutboxEvent'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /api/v2/reconciliation/health:
+    get:
+      tags:
+        - Compatibility Reconciliation
+      summary: Get v1 to v2 reconciliation health
+      operationId: getV1V2ReconciliationHealth
+      description: |
+        Requires a system administrator JWT. EXPECTED_LEGACY_ONLY is an
+        explained compatibility state, while MISMATCH is an unexplained
+        difference that must be investigated.
+      security:
+        - UserBearerAuth: []
+      responses:
+        '200':
+          description: Aggregate reconciliation counts without report or event content.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconciliationHealth'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/v2/reconciliation/work-traces/{work_trace_id}:
+    get:
+      tags:
+        - Compatibility Reconciliation
+      summary: Get one WorkTrace reconciliation
+      operationId: getV1V2WorkTraceReconciliation
+      description: Requires a system administrator JWT.
+      security:
+        - UserBearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/WorkTraceId'
+      responses:
+        '200':
+          description: Safe reconciliation status and typed-link counts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V1V2Reconciliation'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+    post:
+      tags:
+        - Compatibility Reconciliation
+      summary: Recompute one WorkTrace reconciliation
+      operationId: reconcileV1V2WorkTrace
+      description: |
+        Requires a system administrator JWT. Recomputes only from the stored,
+        allowlisted compatibility event and typed AgentRun links.
+      security:
+        - UserBearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/WorkTraceId'
+      responses:
+        '200':
+          description: Recomputed safe reconciliation status and typed-link counts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V1V2Reconciliation'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
 components:
   securitySchemes:
     ReporterBearerAuth:
@@ -230,7 +1043,8 @@ components:
       bearerFormat: DuckDock Reporter Token
       description: |
         Scoped, rotatable Reporter credential bound to a Namespace and Runtime.
-        It cannot be used as a user JWT or to read arbitrary AgentRuns.
+        The execution API requires the `execution.write` scope. The credential
+        cannot be used as a user JWT or to read arbitrary AgentRuns.
     UserBearerAuth:
       type: http
       scheme: bearer
@@ -247,7 +1061,7 @@ components:
       schema:
         type: string
         minLength: 8
-        maxLength: 200
+        maxLength: 128
         pattern: '^[A-Za-z0-9._:-]+$'
     SessionPublicId:
       name: session_public_id
@@ -265,13 +1079,56 @@ components:
         type: string
         minLength: 1
         maxLength: 200
+    TelemetrySinkPublicId:
+      name: public_id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^tsk_[0-9a-f]{32}$'
+    TelemetrySinkProjectionPublicId:
+      name: sink_public_id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^tsk_[0-9a-f]{32}$'
+    AdapterHandshakeHeader:
+      name: DuckDock-Handshake-Id
+      in: header
+      required: false
+      description: Optional G2 binding to an active Generic OTLP adapter handshake.
+      schema:
+        type: string
+        pattern: '^hs_[0-9a-f]{32}$'
+    PackImportPublicId:
+      name: public_id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^pki_[0-9a-f]{32}$'
+    EventId:
+      name: event_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    WorkTraceId:
+      name: work_trace_id
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
     NamespaceId:
       name: namespace_id
       in: query
       required: true
       schema:
-        type: string
-        minLength: 1
+        type: integer
+        minimum: 1
     RuntimeInstanceFilter:
       name: runtime_instance_id
       in: query
@@ -292,6 +1149,22 @@ components:
       required: false
       schema:
         $ref: '#/components/schemas/RunStatus'
+    StartedAfter:
+      name: started_after
+      in: query
+      required: true
+      description: Inclusive UTC lower bound for a query window of at most 31 days.
+      schema:
+        type: string
+        format: date-time
+    StartedBefore:
+      name: started_before
+      in: query
+      required: true
+      description: Exclusive UTC upper bound for a query window of at most 31 days.
+      schema:
+        type: string
+        format: date-time
     Limit:
       name: limit
       in: query
@@ -317,6 +1190,12 @@ components:
         application/problem+json:
           schema:
             $ref: '#/components/schemas/Problem'
+    Forbidden:
+      description: The authenticated credential lacks the required execution scope.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
     NotFound:
       description: Resource does not exist or is not visible in the caller scope.
       content:
@@ -329,8 +1208,26 @@ components:
         application/problem+json:
           schema:
             $ref: '#/components/schemas/Problem'
+    PayloadTooLarge:
+      description: The execution envelope exceeds the 64 KiB request limit.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
     ValidationError:
       description: Request violates the v2 lifecycle, correlation, or metadata-only contract.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    IngestionDisabled:
+      description: New execution starts are disabled during rollout or backout.
+      headers:
+        Retry-After:
+          description: Minimum number of seconds before retrying a start request.
+          schema:
+            type: integer
+            minimum: 1
       content:
         application/problem+json:
           schema:
@@ -345,6 +1242,1162 @@ components:
       $ref: ./evaluation-result-v1.schema.json
     ReleaseManifestV1:
       $ref: ./release-manifest-v1.schema.json
+
+    OtlpTraceExportRequest:
+      type: object
+      description: |
+        Standard OTLP JSON ExportTraceServiceRequest after Collector
+        authentication, governance replacement and metadata-only filtering.
+        DuckDock validates correlation metadata but never stores this document.
+      required:
+        - resourceSpans
+      properties:
+        resourceSpans:
+          type: array
+          items:
+            type: object
+      additionalProperties: true
+
+    OtlpTraceExportResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        partialSuccess:
+          type: object
+          additionalProperties: false
+          required:
+            - rejectedSpans
+            - errorMessage
+          properties:
+            rejectedSpans:
+              type: string
+              pattern: '^[0-9]+$'
+            errorMessage:
+              type: string
+              maxLength: 100
+
+    PackProducer:
+      type: object
+      additionalProperties: false
+      required:
+        - adapter_id
+        - adapter_version
+        - instance_id
+      properties:
+        adapter_id:
+          type: string
+          minLength: 1
+          maxLength: 100
+        adapter_version:
+          type: string
+          minLength: 1
+          maxLength: 50
+        profile:
+          type: string
+          const: pack-atif-import
+          default: pack-atif-import
+        protocol:
+          type: string
+          const: duckdock-adapter
+          default: duckdock-adapter
+        protocol_version:
+          type: string
+          const: '1.0'
+          default: '1.0'
+        instance_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        handshake_id:
+          type:
+            - string
+            - 'null'
+          pattern: '^hs_[0-9a-f]{32}$'
+
+    AdapterProfile:
+      type: string
+      enum:
+        - openclaw-reporter
+        - hermes-reporter
+        - generic-otlp-bridge
+        - pack-atif-import
+
+    AdapterConfigDrift:
+      type: string
+      enum:
+        - NONE
+        - CONFIG_CHANGED
+        - BOOT_CHANGED
+        - CAPABILITY_CHANGED
+
+    AdapterDescriptor:
+      type: object
+      additionalProperties: false
+      required:
+        - adapter_id
+        - adapter_version
+        - profile
+        - source_schema
+        - source_schema_version
+        - capabilities
+        - content_capture_modes
+        - instance_id
+        - boot_id
+        - client_nonce
+        - client_time
+      properties:
+        adapter_id:
+          type: string
+          minLength: 1
+          maxLength: 100
+        adapter_version:
+          type: string
+          minLength: 1
+          maxLength: 50
+        profile:
+          $ref: '#/components/schemas/AdapterProfile'
+        protocol:
+          type: string
+          const: duckdock-adapter
+          default: duckdock-adapter
+        protocol_version:
+          type: string
+          const: '1.0'
+          default: '1.0'
+        source_schema:
+          type: string
+          minLength: 1
+          maxLength: 100
+        source_schema_version:
+          type: string
+          minLength: 1
+          maxLength: 50
+        capabilities:
+          type: array
+          minItems: 1
+          maxItems: 16
+          uniqueItems: true
+          items:
+            type: string
+            pattern: '^[a-z][a-z0-9._-]*$'
+        content_capture_modes:
+          type: array
+          minItems: 1
+          maxItems: 1
+          items:
+            $ref: '#/components/schemas/MetadataOnlyCaptureMode'
+        instance_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        boot_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        client_nonce:
+          type: string
+          minLength: 22
+          maxLength: 171
+          pattern: '^[A-Za-z0-9_-]+$'
+        client_time:
+          type: string
+          format: date-time
+        claimed_capability_level:
+          type: string
+          enum:
+            - DD-C0
+            - DD-C1
+            - DD-C2
+            - DD-C3
+          default: DD-C0
+        config_fingerprint:
+          type:
+            - string
+            - 'null'
+          pattern: '^[0-9a-f]{64}$'
+
+    AdapterHandshake:
+      type: object
+      additionalProperties: false
+      required:
+        - handshake_id
+        - protocol_version
+        - runtime_public_id
+        - profile
+        - accepted_capabilities
+        - rejected_capabilities
+        - claimed_capability_level
+        - certified_capability_level
+        - content_capture_mode
+        - clock_skew_degraded
+        - limits
+        - idempotency
+        - server_time
+        - expires_at
+      properties:
+        handshake_id:
+          type: string
+          pattern: '^hs_[0-9a-f]{32}$'
+        protocol_version:
+          type: string
+          const: '1.0'
+        runtime_public_id:
+          type: string
+          pattern: '^rt_[0-9a-f]{32}$'
+        profile:
+          $ref: '#/components/schemas/AdapterProfile'
+        accepted_capabilities:
+          type: array
+          maxItems: 16
+          items:
+            type: string
+        rejected_capabilities:
+          type: array
+          maxItems: 16
+          items:
+            type: string
+        claimed_capability_level:
+          type: string
+        certified_capability_level:
+          type: string
+        content_capture_mode:
+          $ref: '#/components/schemas/MetadataOnlyCaptureMode'
+        clock_skew_degraded:
+          type: boolean
+        limits:
+          type: object
+          additionalProperties:
+            type: integer
+        idempotency:
+          type: object
+          additionalProperties:
+            oneOf:
+              - type: integer
+              - type: string
+        server_time:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+
+    AdapterHeartbeat:
+      type: object
+      additionalProperties: false
+      required:
+        - handshake_id
+        - boot_id
+        - accepted_capabilities
+      properties:
+        handshake_id:
+          type: string
+          pattern: '^hs_[0-9a-f]{32}$'
+        boot_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        status:
+          type: string
+          enum: [ok, degraded, error]
+          default: ok
+        accepted_capabilities:
+          type: array
+          minItems: 0
+          maxItems: 16
+          uniqueItems: true
+          items:
+            type: string
+        config_fingerprint:
+          type:
+            - string
+            - 'null'
+          pattern: '^[0-9a-f]{64}$'
+        collector_status:
+          type:
+            - string
+            - 'null'
+          enum:
+            - healthy
+            - degraded
+            - unavailable
+            - not_applicable
+            - null
+        collector_version:
+          type:
+            - string
+            - 'null'
+          maxLength: 64
+
+    AdapterHeartbeatAck:
+      type: object
+      additionalProperties: false
+      required:
+        - handshake_id
+        - status
+        - config_drift
+        - rehandshake_required
+        - last_heartbeat_at
+        - expires_at
+      properties:
+        handshake_id:
+          type: string
+          pattern: '^hs_[0-9a-f]{32}$'
+        status:
+          type: string
+          enum: [ACTIVE, DEGRADED, EXPIRED]
+        config_drift:
+          $ref: '#/components/schemas/AdapterConfigDrift'
+        rehandshake_required:
+          type: boolean
+        last_heartbeat_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+
+    FleetHeartbeat:
+      type: object
+      additionalProperties: false
+      required:
+        - status
+        - config_drift
+        - collector_status
+        - collector_version
+        - observed_at
+      properties:
+        status:
+          type: string
+        config_drift:
+          $ref: '#/components/schemas/AdapterConfigDrift'
+        collector_status:
+          type:
+            - string
+            - 'null'
+        collector_version:
+          type:
+            - string
+            - 'null'
+        observed_at:
+          type: string
+          format: date-time
+
+    FleetRuntime:
+      type: object
+      additionalProperties: false
+      required:
+        - runtime_public_id
+        - provider
+        - name
+        - runtime_status
+        - accepted_capabilities
+        - rejected_capabilities
+        - handshake_status
+        - heartbeat_state
+        - heartbeat_history
+        - namespace_telemetry_sink_count
+        - namespace_active_telemetry_sink_count
+        - pending_pack_import_count
+        - quarantined_item_count
+      properties:
+        runtime_public_id:
+          type: string
+          pattern: '^rt_[0-9a-f]{32}$'
+        provider:
+          type: string
+        name:
+          type: string
+        runtime_status:
+          type: string
+          enum: [active, degraded, disabled]
+        profile:
+          oneOf:
+            - $ref: '#/components/schemas/AdapterProfile'
+            - type: 'null'
+        adapter_id:
+          type: [string, 'null']
+        adapter_version:
+          type: [string, 'null']
+        certified_capability_level:
+          type: [string, 'null']
+        accepted_capabilities:
+          type: array
+          maxItems: 16
+          items:
+            type: string
+        rejected_capabilities:
+          type: array
+          maxItems: 16
+          items:
+            type: string
+        handshake_status:
+          type: string
+          enum: [ACTIVE, DEGRADED, EXPIRED, SUPERSEDED, NONE]
+        heartbeat_state:
+          type: string
+          enum: [HEALTHY, STALE, NEVER, ERROR]
+        last_heartbeat_at:
+          type: [string, 'null']
+          format: date-time
+        handshake_expires_at:
+          type: [string, 'null']
+          format: date-time
+        config_drift:
+          oneOf:
+            - $ref: '#/components/schemas/AdapterConfigDrift'
+            - type: 'null'
+        collector_status:
+          type: [string, 'null']
+        collector_version:
+          type: [string, 'null']
+        heartbeat_history:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/FleetHeartbeat'
+        namespace_telemetry_sink_count:
+          type: integer
+          minimum: 0
+        namespace_active_telemetry_sink_count:
+          type: integer
+          minimum: 0
+        latest_run_at:
+          type: [string, 'null']
+          format: date-time
+        pending_pack_import_count:
+          type: integer
+          minimum: 0
+        quarantined_item_count:
+          type: integer
+          minimum: 0
+
+    FleetSummary:
+      type: object
+      additionalProperties: false
+      required:
+        - namespace_id
+        - runtime_count
+        - healthy_count
+        - stale_count
+        - degraded_count
+        - drifted_count
+        - runtimes
+      properties:
+        namespace_id:
+          type: integer
+          minimum: 1
+        runtime_count:
+          type: integer
+          minimum: 0
+        healthy_count:
+          type: integer
+          minimum: 0
+        stale_count:
+          type: integer
+          minimum: 0
+        degraded_count:
+          type: integer
+          minimum: 0
+        drifted_count:
+          type: integer
+          minimum: 0
+        runtimes:
+          type: array
+          maxItems: 200
+          items:
+            $ref: '#/components/schemas/FleetRuntime'
+
+    PackDeploymentReference:
+      type: object
+      additionalProperties: false
+      required:
+        - external_deployment_id
+        - revision
+      properties:
+        external_deployment_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+        revision:
+          type: string
+          minLength: 1
+          maxLength: 128
+
+    PackPayloadManifest:
+      type: object
+      additionalProperties: false
+      required:
+        - path
+        - media_type
+        - size_bytes
+        - sha256
+        - schema_version
+        - completeness
+      properties:
+        path:
+          type: string
+          minLength: 1
+          maxLength: 512
+          description: Normalized relative POSIX path; traversal and manifest.json are forbidden.
+        media_type:
+          type: string
+          enum:
+            - application/json
+            - application/atif+json
+            - application/vnd.atif+json
+        size_bytes:
+          type: integer
+          minimum: 1
+        sha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        schema_name:
+          type: string
+          const: ATIF
+          default: ATIF
+        schema_version:
+          type: string
+          minLength: 1
+          maxLength: 50
+        sensitivity:
+          type: string
+          enum:
+            - public
+            - internal
+            - confidential
+            - restricted
+          default: restricted
+        completeness:
+          $ref: '#/components/schemas/AgentRunArtifactCompleteness'
+        loss_reason:
+          type:
+            - string
+            - 'null'
+          maxLength: 100
+        content_capture_mode:
+          $ref: '#/components/schemas/MetadataOnlyCaptureMode'
+        content_policy_version:
+          type:
+            - string
+            - 'null'
+          maxLength: 64
+        redaction_policy_version:
+          type:
+            - string
+            - 'null'
+          maxLength: 64
+        redaction_receipt_sha256:
+          type:
+            - string
+            - 'null'
+          pattern: '^[0-9a-f]{64}$'
+
+    PackManifest:
+      type: object
+      additionalProperties: false
+      required:
+        - pack_id
+        - producer
+        - created_at
+        - payloads
+      properties:
+        manifest_schema:
+          type: string
+          const: duckdock-pack
+          default: duckdock-pack
+        manifest_version:
+          type: string
+          const: '1.0'
+          default: '1.0'
+        pack_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        producer:
+          $ref: '#/components/schemas/PackProducer'
+        created_at:
+          type: string
+          format: date-time
+        run_public_id:
+          type:
+            - string
+            - 'null'
+          maxLength: 36
+        external_session_id:
+          type:
+            - string
+            - 'null'
+          maxLength: 256
+        external_run_id:
+          type:
+            - string
+            - 'null'
+          maxLength: 256
+        deployment:
+          oneOf:
+            - $ref: '#/components/schemas/PackDeploymentReference'
+            - type: 'null'
+        otel_trace_id:
+          type:
+            - string
+            - 'null'
+          pattern: '^[0-9a-f]{32}$'
+        content_capture_mode:
+          $ref: '#/components/schemas/MetadataOnlyCaptureMode'
+        payloads:
+          type: array
+          minItems: 1
+          maxItems: 64
+          items:
+            $ref: '#/components/schemas/PackPayloadManifest'
+
+    PackImportCreate:
+      type: object
+      additionalProperties: false
+      required:
+        - expected_pack_sha256
+        - expected_size_bytes
+        - manifest
+      properties:
+        expected_pack_sha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        expected_size_bytes:
+          type: integer
+          minimum: 1
+          maximum: 67108864
+        upload_mode:
+          $ref: '#/components/schemas/PackUploadMode'
+        multipart_part_size_bytes:
+          type:
+            - integer
+            - 'null'
+          minimum: 5242880
+          maximum: 67108864
+        manifest:
+          $ref: '#/components/schemas/PackManifest'
+
+    PackUploadMode:
+      type: string
+      enum:
+        - SINGLE_PUT
+        - MULTIPART
+
+    PackImportFinalize:
+      type: object
+      additionalProperties: false
+      properties:
+        observed_pack_sha256:
+          type:
+            - string
+            - 'null'
+          pattern: '^[0-9a-f]{64}$'
+        observed_size_bytes:
+          type:
+            - integer
+            - 'null'
+          minimum: 1
+
+    PackImportStatus:
+      type: string
+      enum:
+        - PENDING_VALIDATION
+        - VALIDATING
+        - IMPORTED
+        - IMPORTED_PARTIAL
+        - QUARANTINED
+        - REJECTED
+
+    PackImportedArtifact:
+      type: object
+      additionalProperties: false
+      required:
+        - public_id
+        - payload_path
+        - object_uri
+        - sha256
+        - size_bytes
+        - schema_name
+        - schema_version
+        - sensitivity
+        - completeness
+      properties:
+        public_id:
+          type: string
+          pattern: '^art_[0-9a-f]{32}$'
+        payload_path:
+          type: string
+          maxLength: 512
+        object_uri:
+          type: string
+          maxLength: 512
+        sha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        size_bytes:
+          type: integer
+          minimum: 1
+        schema_name:
+          type: string
+          maxLength: 100
+        schema_version:
+          type: string
+          maxLength: 50
+        sensitivity:
+          type: string
+          enum:
+            - public
+            - internal
+            - confidential
+            - restricted
+        completeness:
+          $ref: '#/components/schemas/AgentRunArtifactCompleteness'
+
+    PackImport:
+      type: object
+      additionalProperties: false
+      required:
+        - public_id
+        - pack_id
+        - namespace_id
+        - runtime_id
+        - status
+        - manifest_schema
+        - manifest_version
+        - expected_pack_sha256
+        - expected_size_bytes
+        - upload_mode
+        - payload_count
+        - verified_payload_count
+        - trust_level
+        - trust_source
+        - content_capture_mode
+        - expires_at
+        - created_at
+        - updated_at
+        - artifacts
+      properties:
+        public_id:
+          type: string
+          pattern: '^pki_[0-9a-f]{32}$'
+        pack_id:
+          type: string
+          maxLength: 128
+        namespace_id:
+          type: integer
+          minimum: 1
+        runtime_id:
+          type: integer
+          minimum: 1
+        run_public_id:
+          type:
+            - string
+            - 'null'
+          maxLength: 36
+        status:
+          $ref: '#/components/schemas/PackImportStatus'
+        manifest_schema:
+          type: string
+          const: duckdock-pack
+        manifest_version:
+          type: string
+          const: '1.0'
+        expected_pack_sha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        actual_pack_sha256:
+          type:
+            - string
+            - 'null'
+          pattern: '^[0-9a-f]{64}$'
+        expected_size_bytes:
+          type: integer
+          minimum: 1
+        actual_size_bytes:
+          type:
+            - integer
+            - 'null'
+          minimum: 1
+        upload_mode:
+          $ref: '#/components/schemas/PackUploadMode'
+        multipart_part_size_bytes:
+          type:
+            - integer
+            - 'null'
+          minimum: 5242880
+        multipart_completed_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        payload_count:
+          type: integer
+          minimum: 1
+        verified_payload_count:
+          type: integer
+          minimum: 0
+        loss_reason:
+          type:
+            - string
+            - 'null'
+          maxLength: 100
+        trust_level:
+          type: string
+          const: CHANNEL_AUTHENTICATED
+        trust_source:
+          type: string
+          const: IMPORT
+        content_capture_mode:
+          $ref: '#/components/schemas/MetadataOnlyCaptureMode'
+        last_error_code:
+          type:
+            - string
+            - 'null'
+          maxLength: 100
+        expires_at:
+          type: string
+          format: date-time
+        validated_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        imported_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        artifacts:
+          type: array
+          maxItems: 64
+          items:
+            $ref: '#/components/schemas/PackImportedArtifact'
+
+    PackImportCreated:
+      allOf:
+        - $ref: '#/components/schemas/PackImport'
+        - type: object
+          properties:
+            upload_url:
+              type:
+                - string
+                - 'null'
+              format: uri
+            upload_expires_at:
+              type:
+                - string
+                - 'null'
+              format: date-time
+
+    PackMultipartPart:
+      type: object
+      additionalProperties: false
+      required:
+        - part_number
+        - etag
+        - size_bytes
+      properties:
+        part_number:
+          type: integer
+          minimum: 1
+          maximum: 10000
+        etag:
+          type: string
+          maxLength: 1024
+        size_bytes:
+          type: integer
+          minimum: 1
+
+    PackMultipartState:
+      type: object
+      additionalProperties: false
+      required:
+        - pack_import_public_id
+        - part_size_bytes
+        - expected_size_bytes
+        - completed
+        - uploaded_parts
+      properties:
+        pack_import_public_id:
+          type: string
+          pattern: '^pki_[0-9a-f]{32}$'
+        part_size_bytes:
+          type: integer
+          minimum: 5242880
+        expected_size_bytes:
+          type: integer
+          minimum: 1
+        completed:
+          type: boolean
+        uploaded_parts:
+          type: array
+          maxItems: 10000
+          items:
+            $ref: '#/components/schemas/PackMultipartPart'
+
+    PackMultipartPartUrl:
+      type: object
+      additionalProperties: false
+      required:
+        - pack_import_public_id
+        - part_number
+        - upload_url
+        - upload_expires_at
+      properties:
+        pack_import_public_id:
+          type: string
+          pattern: '^pki_[0-9a-f]{32}$'
+        part_number:
+          type: integer
+          minimum: 1
+        upload_url:
+          type: string
+          format: uri
+        upload_expires_at:
+          type: string
+          format: date-time
+
+    PackMultipartCompletedPart:
+      type: object
+      additionalProperties: false
+      required:
+        - part_number
+        - etag
+      properties:
+        part_number:
+          type: integer
+          minimum: 1
+          maximum: 10000
+        etag:
+          type: string
+          minLength: 1
+          maxLength: 1024
+
+    PackMultipartComplete:
+      type: object
+      additionalProperties: false
+      required:
+        - parts
+      properties:
+        parts:
+          type: array
+          minItems: 1
+          maxItems: 10000
+          items:
+            $ref: '#/components/schemas/PackMultipartCompletedPart'
+        observed_pack_sha256:
+          type:
+            - string
+            - 'null'
+          pattern: '^[0-9a-f]{64}$'
+        observed_size_bytes:
+          type:
+            - integer
+            - 'null'
+          minimum: 1
+
+    PackBatchItem:
+      type: object
+      additionalProperties: false
+      required:
+        - sequence
+        - idempotency_key
+        - pack_import
+      properties:
+        sequence:
+          type: integer
+          minimum: 1
+        idempotency_key:
+          type: string
+          maxLength: 128
+        pack_import:
+          $ref: '#/components/schemas/PackImportCreate'
+
+    PackBatchCreate:
+      type: object
+      additionalProperties: false
+      required:
+        - stream_id
+        - items
+      properties:
+        stream_id:
+          type: string
+          maxLength: 128
+        items:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/PackBatchItem'
+
+    PackBatchAckItem:
+      type: object
+      additionalProperties: false
+      required:
+        - sequence
+        - idempotency_key
+        - disposition
+        - code
+      properties:
+        sequence:
+          type: integer
+          minimum: 1
+        idempotency_key:
+          type: string
+        disposition:
+          type: string
+          enum:
+            - accepted
+            - replayed
+            - retryable
+            - rejected
+        code:
+          type: string
+        pack_import_public_id:
+          type:
+            - string
+            - 'null'
+        pack_import_status:
+          oneOf:
+            - $ref: '#/components/schemas/PackImportStatus'
+            - type: 'null'
+        upload_mode:
+          oneOf:
+            - $ref: '#/components/schemas/PackUploadMode'
+            - type: 'null'
+
+    PackBatchAck:
+      type: object
+      additionalProperties: false
+      required:
+        - stream_id
+        - ack_cursor
+        - idempotency_retention_seconds
+        - items
+      properties:
+        stream_id:
+          type: string
+        ack_cursor:
+          type: integer
+          minimum: 0
+        idempotency_retention_seconds:
+          type: integer
+          minimum: 1
+        items:
+          type: array
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/PackBatchAckItem'
+
+    PackExportCreate:
+      type: object
+      additionalProperties: false
+      required:
+        - run_public_id
+        - idempotency_key
+      properties:
+        run_public_id:
+          type: string
+          maxLength: 36
+        idempotency_key:
+          type: string
+          maxLength: 128
+
+    PackExport:
+      type: object
+      additionalProperties: false
+      required:
+        - public_id
+        - pack_id
+        - run_public_id
+        - sha256
+        - size_bytes
+        - payload_count
+        - download_url
+        - download_expires_at
+        - replayed
+        - created_at
+      properties:
+        public_id:
+          type: string
+          pattern: '^pke_[0-9a-f]{32}$'
+        pack_id:
+          type: string
+          maxLength: 128
+        run_public_id:
+          type: string
+          maxLength: 36
+        sha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        size_bytes:
+          type: integer
+          minimum: 1
+        payload_count:
+          type: integer
+          minimum: 1
+        download_url:
+          type: string
+          format: uri
+        download_expires_at:
+          type: string
+          format: date-time
+        replayed:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    EvaluationReplayCreate:
+      type: object
+      additionalProperties: false
+      required:
+        - run_public_id
+        - artifact_public_id
+        - idempotency_key
+      properties:
+        run_public_id:
+          type: string
+          maxLength: 36
+        artifact_public_id:
+          type: string
+          maxLength: 36
+        idempotency_key:
+          type: string
+          maxLength: 128
+
+    EvaluationReplay:
+      type: object
+      additionalProperties: false
+      required:
+        - event_id
+        - run_public_id
+        - artifact_public_id
+        - status
+        - replayed
+      properties:
+        event_id:
+          type: string
+          format: uuid
+        run_public_id:
+          type: string
+        artifact_public_id:
+          type: string
+        status:
+          type: string
+          enum:
+            - PENDING
+            - LEASED
+            - PUBLISHED
+            - FAILED
+        replayed:
+          type: boolean
 
     MetadataOnlyContentPolicy:
       type: string
@@ -385,6 +2438,471 @@ components:
         - FAILED
         - CANCELLED
         - TIMED_OUT
+
+    Sensitivity:
+      type: string
+      enum:
+        - PUBLIC
+        - INTERNAL
+        - CONFIDENTIAL
+        - RESTRICTED
+
+    AgentRunArtifactKind:
+      type: string
+      enum:
+        - TRAJECTORY
+        - EVALUATION
+        - LOG_BUNDLE
+        - OTHER
+
+    AgentRunArtifactCompleteness:
+      type: string
+      enum:
+        - COMPLETE
+        - PARTIAL
+        - UNKNOWN
+
+    AgentRunArtifactCreate:
+      type: object
+      additionalProperties: false
+      required:
+        - kind
+        - schema_name
+        - schema_version
+        - object_uri
+        - sha256
+        - size_bytes
+      properties:
+        kind:
+          $ref: '#/components/schemas/AgentRunArtifactKind'
+        schema_name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$'
+        schema_version:
+          type: string
+          minLength: 1
+          maxLength: 50
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$'
+        object_uri:
+          type: string
+          minLength: 1
+          maxLength: 512
+          description: Relative internal object key or URI in the configured s3 bucket.
+        sha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        size_bytes:
+          type: integer
+          minimum: 0
+        sensitivity:
+          $ref: '#/components/schemas/Sensitivity'
+        redaction_policy_version:
+          type: string
+          minLength: 1
+          maxLength: 64
+        completeness:
+          $ref: '#/components/schemas/AgentRunArtifactCompleteness'
+
+    AgentRunArtifact:
+      type: object
+      additionalProperties: false
+      required:
+        - public_id
+        - namespace_id
+        - run_public_id
+        - kind
+        - schema_name
+        - schema_version
+        - object_uri
+        - sha256
+        - size_bytes
+        - sensitivity
+        - completeness
+        - created_at
+      properties:
+        public_id:
+          type: string
+          pattern: '^art_[0-9a-f]{32}$'
+        namespace_id:
+          type: integer
+          minimum: 1
+        run_public_id:
+          type: string
+          minLength: 1
+        kind:
+          $ref: '#/components/schemas/AgentRunArtifactKind'
+        schema_name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        schema_version:
+          type: string
+          minLength: 1
+          maxLength: 50
+        object_uri:
+          type: string
+          minLength: 1
+          maxLength: 512
+        sha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        size_bytes:
+          type: integer
+          minimum: 0
+        sensitivity:
+          $ref: '#/components/schemas/Sensitivity'
+        redaction_policy_version:
+          type:
+            - string
+            - 'null'
+          maxLength: 64
+        completeness:
+          $ref: '#/components/schemas/AgentRunArtifactCompleteness'
+        created_at:
+          type: string
+          format: date-time
+
+    TelemetrySinkStatus:
+      type: string
+      enum:
+        - ACTIVE
+        - DISABLED
+        - ERROR
+
+    TelemetrySinkConfig:
+      type: object
+      additionalProperties: false
+      properties:
+        protocol:
+          type: string
+          enum:
+            - native
+            - otlp_http
+            - otlp_grpc
+            - custom
+          default: custom
+        environment:
+          type: string
+          minLength: 1
+          maxLength: 64
+        region:
+          type: string
+          minLength: 1
+          maxLength: 64
+        timeout_ms:
+          type: integer
+          minimum: 100
+          maximum: 60000
+          default: 15000
+        verify_tls:
+          type: boolean
+          default: true
+
+    TelemetrySinkCreate:
+      type: object
+      additionalProperties: false
+      required:
+        - namespace_id
+        - provider
+        - name
+        - endpoint
+        - credential_ref
+      properties:
+        namespace_id:
+          type: integer
+          minimum: 1
+        provider:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$'
+        name:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$'
+        endpoint:
+          type: string
+          format: uri
+          maxLength: 512
+          description: SSRF-validated http/https endpoint without credentials or query values.
+        project_ref:
+          type: string
+          minLength: 1
+          maxLength: 255
+        credential_ref:
+          type: string
+          maxLength: 255
+          pattern: '^(db:[1-9][0-9]*|(?:secret|vault)://[A-Za-z0-9][A-Za-z0-9._/-]*)$'
+        config:
+          $ref: '#/components/schemas/TelemetrySinkConfig'
+
+    TelemetrySinkUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        endpoint:
+          type: string
+          format: uri
+          maxLength: 512
+        project_ref:
+          type: string
+          minLength: 1
+          maxLength: 255
+        credential_ref:
+          type: string
+          maxLength: 255
+          pattern: '^(db:[1-9][0-9]*|(?:secret|vault)://[A-Za-z0-9][A-Za-z0-9._/-]*)$'
+        config:
+          $ref: '#/components/schemas/TelemetrySinkConfig'
+
+    TelemetrySink:
+      type: object
+      additionalProperties: false
+      required:
+        - public_id
+        - namespace_id
+        - provider
+        - name
+        - endpoint
+        - credential_ref
+        - status
+        - config_json
+        - created_at
+        - updated_at
+      properties:
+        public_id:
+          type: string
+          pattern: '^tsk_[0-9a-f]{32}$'
+        namespace_id:
+          type: integer
+          minimum: 1
+        provider:
+          type: string
+          minLength: 1
+          maxLength: 64
+        name:
+          type: string
+          minLength: 1
+          maxLength: 128
+        endpoint:
+          type: string
+          format: uri
+          maxLength: 512
+        project_ref:
+          type:
+            - string
+            - 'null'
+          maxLength: 255
+        credential_ref:
+          type: string
+          maxLength: 255
+        status:
+          $ref: '#/components/schemas/TelemetrySinkStatus'
+        config_json:
+          $ref: '#/components/schemas/TelemetrySinkConfig'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    OutboxEventStatus:
+      type: string
+      enum:
+        - PENDING
+        - LEASED
+        - PUBLISHED
+        - FAILED
+
+    OutboxRetryRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - reason
+      properties:
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 200
+
+    OutboxEvent:
+      type: object
+      additionalProperties: false
+      required:
+        - event_id
+        - namespace_id
+        - aggregate_type
+        - aggregate_public_id
+        - event_type
+        - schema_version
+        - status
+        - occurred_at
+        - available_at
+        - attempt_count
+        - created_at
+        - updated_at
+      properties:
+        event_id:
+          type: string
+          format: uuid
+        namespace_id:
+          type: integer
+          minimum: 1
+        aggregate_type:
+          type: string
+          maxLength: 64
+        aggregate_public_id:
+          type: string
+          maxLength: 200
+        event_type:
+          type: string
+          maxLength: 100
+        schema_version:
+          type: string
+          maxLength: 32
+        status:
+          $ref: '#/components/schemas/OutboxEventStatus'
+        occurred_at:
+          type: string
+          format: date-time
+        available_at:
+          type: string
+          format: date-time
+        published_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        attempt_count:
+          type: integer
+          minimum: 0
+        last_error_code:
+          type:
+            - string
+            - 'null'
+          maxLength: 100
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    OutboxHealth:
+      type: object
+      additionalProperties: false
+      required:
+        - pending_count
+        - leased_count
+        - expired_lease_count
+        - failed_count
+        - published_count
+        - oldest_pending_age_seconds
+      properties:
+        pending_count:
+          type: integer
+          minimum: 0
+        leased_count:
+          type: integer
+          minimum: 0
+        expired_lease_count:
+          type: integer
+          minimum: 0
+        failed_count:
+          type: integer
+          minimum: 0
+        published_count:
+          type: integer
+          minimum: 0
+        oldest_pending_age_seconds:
+          type:
+            - integer
+            - 'null'
+          minimum: 0
+
+    ReconciliationStatus:
+      type: string
+      enum:
+        - MATCHED
+        - EXPECTED_LEGACY_ONLY
+        - MISMATCH
+
+    ReconciliationHealth:
+      type: object
+      additionalProperties: false
+      required:
+        - matched_count
+        - expected_legacy_only_count
+        - mismatch_count
+        - unexplained_difference_count
+      properties:
+        matched_count:
+          type: integer
+          minimum: 0
+        expected_legacy_only_count:
+          type: integer
+          minimum: 0
+        mismatch_count:
+          type: integer
+          minimum: 0
+        unexplained_difference_count:
+          type: integer
+          minimum: 0
+
+    V1V2Reconciliation:
+      type: object
+      additionalProperties: false
+      required:
+        - namespace_id
+        - runtime_id
+        - work_trace_id
+        - source_report_id
+        - status
+        - reason_code
+        - linked_run_count
+        - linked_artifact_count
+        - checked_at
+        - created_at
+        - updated_at
+      properties:
+        namespace_id:
+          type: integer
+          minimum: 1
+        runtime_id:
+          type: integer
+          minimum: 1
+        work_trace_id:
+          type: integer
+          minimum: 1
+        source_report_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        status:
+          $ref: '#/components/schemas/ReconciliationStatus'
+        reason_code:
+          type: string
+          minLength: 1
+          maxLength: 100
+        linked_run_count:
+          type: integer
+          minimum: 0
+        linked_artifact_count:
+          type: integer
+          minimum: 0
+        checked_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
 
     TrustLevel:
       type: string
@@ -455,8 +2973,8 @@ components:
           type: string
           minLength: 1
         work_trace_id:
-          type: string
-          minLength: 1
+          type: integer
+          minimum: 1
         started_at:
           type: string
           format: date-time
@@ -502,7 +3020,10 @@ components:
         - namespace_id
         - runtime_instance_id
         - status
+        - sensitivity
         - started_at
+        - run_count
+        - error_count
         - content_capture_mode
       properties:
         session_public_id:
@@ -523,8 +3044,17 @@ components:
         deployment_public_id:
           type: string
           minLength: 1
+        work_trace_id:
+          type: string
+          minLength: 1
         status:
           $ref: '#/components/schemas/SessionStatus'
+        sensitivity:
+          type: string
+          enum:
+            - RESTRICTED
+            - CONFIDENTIAL
+            - INTERNAL
         started_at:
           type: string
           format: date-time
@@ -533,8 +3063,16 @@ components:
             - string
             - 'null'
           format: date-time
+        run_count:
+          type: integer
+          minimum: 0
+        error_count:
+          type: integer
+          minimum: 0
         content_capture_mode:
           $ref: '#/components/schemas/MetadataOnlyCaptureMode'
+        metadata:
+          $ref: '#/components/schemas/MetadataAttributes'
 
     RunStartRequest:
       type: object
@@ -556,6 +3094,9 @@ components:
         deployment_public_id:
           type: string
           minLength: 1
+        work_trace_id:
+          type: integer
+          minimum: 1
         otel_trace_id:
           $ref: '#/components/schemas/TraceId'
         root_span_id:
@@ -593,6 +3134,8 @@ components:
         - trust_source
         - source_schema
         - source_schema_version
+        - normalizer_version
+        - attempt
         - started_at
         - content_capture_mode
       properties:
@@ -614,6 +3157,9 @@ components:
         deployment_public_id:
           type: string
           minLength: 1
+        work_trace_id:
+          type: string
+          minLength: 1
         status:
           type: string
           const: STARTED
@@ -627,13 +3173,23 @@ components:
         source_schema_version:
           type: string
           minLength: 1
+        normalizer_version:
+          type: string
+          minLength: 1
         otel_trace_id:
           $ref: '#/components/schemas/TraceId'
+        root_span_id:
+          $ref: '#/components/schemas/SpanId'
+        attempt:
+          type: integer
+          minimum: 1
         started_at:
           type: string
           format: date-time
         content_capture_mode:
           $ref: '#/components/schemas/MetadataOnlyCaptureMode'
+        metadata:
+          $ref: '#/components/schemas/MetadataAttributes'
 
     RunCompleteRequest:
       type: object
@@ -694,6 +3250,8 @@ components:
         - trust_source
         - source_schema
         - source_schema_version
+        - normalizer_version
+        - attempt
         - started_at
         - content_capture_mode
       properties:
@@ -737,6 +3295,9 @@ components:
           $ref: '#/components/schemas/TraceId'
         root_span_id:
           $ref: '#/components/schemas/SpanId'
+        attempt:
+          type: integer
+          minimum: 1
         started_at:
           type: string
           format: date-time
@@ -772,6 +3333,8 @@ components:
           maxLength: 100
         content_capture_mode:
           $ref: '#/components/schemas/MetadataOnlyCaptureMode'
+        metadata:
+          $ref: '#/components/schemas/MetadataAttributes'
 
     AgentRun:
       type: object
@@ -786,6 +3349,8 @@ components:
         - trust_source
         - source_schema
         - source_schema_version
+        - normalizer_version
+        - attempt
         - started_at
         - content_capture_mode
       properties:
@@ -829,6 +3394,9 @@ components:
           $ref: '#/components/schemas/TraceId'
         root_span_id:
           $ref: '#/components/schemas/SpanId'
+        attempt:
+          type: integer
+          minimum: 1
         started_at:
           type: string
           format: date-time
@@ -861,6 +3429,8 @@ components:
           maxLength: 100
         content_capture_mode:
           $ref: '#/components/schemas/MetadataOnlyCaptureMode'
+        metadata:
+          $ref: '#/components/schemas/MetadataAttributes'
         telemetry_summary:
           $ref: '#/components/schemas/MetadataOnlyTelemetryEnvelope'
 

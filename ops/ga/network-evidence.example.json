@@ -1,0 +1,189 @@
+{
+  "schema_version": "duckdock-ga-network-probe-v3",
+  "scope": "target-production",
+  "status": "PASS",
+  "passed": true,
+  "observed_at": "2026-08-06T00:00:00Z",
+  "target_environment": "__CHANGE_ME_TARGET_ID__",
+  "source_commit": "__CHANGE_ME_40_HEX_GIT_COMMIT__",
+  "images": {
+    "backend": {"name": "registry.example.invalid/duckdock/backend@sha256:__CHANGE_ME_64_HEX__"},
+    "frontend": {"name": "registry.example.invalid/duckdock/frontend@sha256:__CHANGE_ME_64_HEX__"}
+  },
+  "exercise_id": "__CHANGE_ME_NETWORK_EXERCISE_ID__",
+  "probe": {
+    "probe_id": "__CHANGE_ME_EXTERNAL_SCANNER_ID__",
+    "vantage_id": "__CHANGE_ME_EXTERNAL_VANTAGE_ID__",
+    "vantage_class": "external-internet",
+    "source_ip": "__CHANGE_ME_GLOBAL_IP__"
+  },
+  "public_tcp_ports": [443],
+  "database_public": false,
+  "redis_public": false,
+  "object_store_direct_public": false,
+  "default_deny_ingress": true,
+  "egress_allowlist_enforced": true,
+  "enforced_by": "kube-system/__CHANGE_ME_CNI__ registry.example.invalid/cni@sha256:__CHANGE_ME_64_HEX__",
+  "external_scan": {
+    "transport": "nmap TCP scan from acknowledged external vantage",
+    "scanner_id": "__CHANGE_ME_EXTERNAL_SCANNER_ID__",
+    "scanner_source_ip": "__CHANGE_ME_GLOBAL_IP__",
+    "public_ingress": {
+      "host": "duckdock.example.invalid",
+      "requested_ports": "1-65535",
+      "host_state": "up",
+      "addresses": ["203.0.113.20"],
+      "port_states": {"443": "open"},
+      "open_tcp_ports": [443],
+      "nmap_version": "__CHANGE_ME_NMAP_VERSION__",
+      "elapsed_seconds": 0,
+      "raw_nmap_xml": "__CHANGE_ME_RAW_NMAP_XML__",
+      "xml_sha256": "__CHANGE_ME_64_HEX__"
+    },
+    "private_data_services": {
+      "database": {
+        "host": "10.0.0.10",
+        "requested_ports": "3306",
+        "host_state": "up",
+        "addresses": ["10.0.0.10"],
+        "port_states": {"3306": "filtered"},
+        "open_tcp_ports": [],
+        "nmap_version": "__CHANGE_ME_NMAP_VERSION__",
+        "elapsed_seconds": 0,
+        "raw_nmap_xml": "__CHANGE_ME_RAW_NMAP_XML__",
+        "xml_sha256": "__CHANGE_ME_64_HEX__"
+      },
+      "redis": {
+        "host": "10.0.0.11",
+        "requested_ports": "6379",
+        "host_state": "up",
+        "addresses": ["10.0.0.11"],
+        "port_states": {"6379": "filtered"},
+        "open_tcp_ports": [],
+        "nmap_version": "__CHANGE_ME_NMAP_VERSION__",
+        "elapsed_seconds": 0,
+        "raw_nmap_xml": "__CHANGE_ME_RAW_NMAP_XML__",
+        "xml_sha256": "__CHANGE_ME_64_HEX__"
+      },
+      "object_store_direct": {
+        "host": "10.0.0.12",
+        "requested_ports": "9000",
+        "host_state": "up",
+        "addresses": ["10.0.0.12"],
+        "port_states": {"9000": "filtered"},
+        "open_tcp_ports": [],
+        "nmap_version": "__CHANGE_ME_NMAP_VERSION__",
+        "elapsed_seconds": 0,
+        "raw_nmap_xml": "__CHANGE_ME_RAW_NMAP_XML__",
+        "xml_sha256": "__CHANGE_ME_64_HEX__"
+      }
+    },
+    "discovered_tcp_ports": [443],
+    "private_data_services_unreachable": true,
+    "passed": true
+  },
+  "policy_tests": {
+    "cluster_context": "__CHANGE_ME_KUBE_CONTEXT__",
+    "namespace": "duckdock",
+    "cni": {
+      "namespace": "kube-system",
+      "name": "__CHANGE_ME_CNI_DAEMONSET__",
+      "uid": "__CHANGE_ME_CNI_UID__",
+      "resource_version": "__CHANGE_ME_RESOURCE_VERSION__",
+      "generation": 1,
+      "desired": 3,
+      "ready": 3,
+      "images": ["registry.example.invalid/cni@sha256:__CHANGE_ME_64_HEX__"]
+    },
+    "probe_identities": {
+      "ingress": {
+        "namespace": "__CHANGE_ME_INGRESS_PROBE_NAMESPACE__",
+        "namespace_uid": "__CHANGE_ME_UID__",
+        "namespace_resource_version": "__CHANGE_ME_RESOURCE_VERSION__",
+        "namespace_labels": {"duckdock.io/ingress": "true"},
+        "pod": "__CHANGE_ME_PROBE_POD__",
+        "pod_uid": "__CHANGE_ME_UID__",
+        "pod_resource_version": "__CHANGE_ME_RESOURCE_VERSION__"
+      },
+      "monitoring": {
+        "namespace": "__CHANGE_ME_MONITORING_PROBE_NAMESPACE__",
+        "namespace_uid": "__CHANGE_ME_UID__",
+        "namespace_resource_version": "__CHANGE_ME_RESOURCE_VERSION__",
+        "namespace_labels": {"duckdock.io/monitoring": "true"},
+        "pod": "__CHANGE_ME_PROBE_POD__",
+        "pod_uid": "__CHANGE_ME_UID__",
+        "pod_resource_version": "__CHANGE_ME_RESOURCE_VERSION__"
+      },
+      "untrusted": {
+        "namespace": "__CHANGE_ME_UNTRUSTED_PROBE_NAMESPACE__",
+        "namespace_uid": "__CHANGE_ME_UID__",
+        "namespace_resource_version": "__CHANGE_ME_RESOURCE_VERSION__",
+        "namespace_labels": {},
+        "pod": "__CHANGE_ME_PROBE_POD__",
+        "pod_uid": "__CHANGE_ME_UID__",
+        "pod_resource_version": "__CHANGE_ME_RESOURCE_VERSION__"
+      }
+    },
+    "network_policies": [
+      {
+        "name": "default-deny",
+        "uid": "__CHANGE_ME_UID__",
+        "resource_version": "__CHANGE_ME_RESOURCE_VERSION__",
+        "generation": 1,
+        "spec": {"podSelector": {}, "policyTypes": ["Ingress", "Egress"]},
+        "spec_sha256": "__CHANGE_ME_CANONICAL_SPEC_SHA256__"
+      },
+      {
+        "name": "allow-dns",
+        "uid": "__CHANGE_ME_UID__",
+        "resource_version": "__CHANGE_ME_RESOURCE_VERSION__",
+        "generation": 1,
+        "spec": {"podSelector": {}, "policyTypes": ["Egress"]},
+        "spec_sha256": "__CHANGE_ME_CANONICAL_SPEC_SHA256__"
+      },
+      {
+        "name": "frontend-ingress-and-backend",
+        "uid": "__CHANGE_ME_UID__",
+        "resource_version": "__CHANGE_ME_RESOURCE_VERSION__",
+        "generation": 1,
+        "spec": {"podSelector": {}, "policyTypes": ["Ingress", "Egress"]},
+        "spec_sha256": "__CHANGE_ME_CANONICAL_SPEC_SHA256__"
+      },
+      {
+        "name": "backend-from-frontend",
+        "uid": "__CHANGE_ME_UID__",
+        "resource_version": "__CHANGE_ME_RESOURCE_VERSION__",
+        "generation": 1,
+        "spec": {"podSelector": {}, "policyTypes": ["Ingress"]},
+        "spec_sha256": "__CHANGE_ME_CANONICAL_SPEC_SHA256__"
+      },
+      {
+        "name": "controlled-external-egress",
+        "uid": "__CHANGE_ME_UID__",
+        "resource_version": "__CHANGE_ME_RESOURCE_VERSION__",
+        "generation": 1,
+        "spec": {"podSelector": {}, "policyTypes": ["Egress"]},
+        "spec_sha256": "__CHANGE_ME_CANONICAL_SPEC_SHA256__"
+      }
+    ],
+    "required_policies_present": true,
+    "policy_snapshots_valid": true,
+    "broad_world_egress_absent": true,
+    "ingress_tests": {
+      "trusted_frontend_allowed": {"source_namespace": "__CHANGE_ME_INGRESS_PROBE_NAMESPACE__", "source": "pod/__CHANGE_ME_PROBE_POD__", "destination_host": "frontend.duckdock.svc.cluster.local", "destination_port": 8080, "connected": true, "kubectl_exit_code": 0},
+      "trusted_backend_allowed": {"source_namespace": "__CHANGE_ME_MONITORING_PROBE_NAMESPACE__", "source": "pod/__CHANGE_ME_PROBE_POD__", "destination_host": "backend.duckdock.svc.cluster.local", "destination_port": 8801, "connected": true, "kubectl_exit_code": 0},
+      "untrusted_frontend_denied": {"source_namespace": "__CHANGE_ME_UNTRUSTED_PROBE_NAMESPACE__", "source": "pod/__CHANGE_ME_PROBE_POD__", "destination_host": "frontend.duckdock.svc.cluster.local", "destination_port": 8080, "connected": false, "kubectl_exit_code": 1},
+      "untrusted_backend_denied": {"source_namespace": "__CHANGE_ME_UNTRUSTED_PROBE_NAMESPACE__", "source": "pod/__CHANGE_ME_PROBE_POD__", "destination_host": "backend.duckdock.svc.cluster.local", "destination_port": 8801, "connected": false, "kubectl_exit_code": 1}
+    },
+    "egress_tests": {
+      "untrusted_control_destination_reachable": {"source_namespace": "__CHANGE_ME_UNTRUSTED_PROBE_NAMESPACE__", "source": "pod/__CHANGE_ME_PROBE_POD__", "destination_host": "__CHANGE_ME_UNAPPROVED_EGRESS_HOST__", "destination_port": 443, "connected": true, "kubectl_exit_code": 0},
+      "approved_destination_allowed": {"source_namespace": "duckdock", "source": "deployment/backend", "destination_host": "__CHANGE_ME_APPROVED_EGRESS_HOST__", "destination_port": 3306, "connected": true, "kubectl_exit_code": 0},
+      "unapproved_destination_denied": {"source_namespace": "duckdock", "source": "deployment/backend", "destination_host": "__CHANGE_ME_UNAPPROVED_EGRESS_HOST__", "destination_port": 443, "connected": false, "kubectl_exit_code": 1}
+    },
+    "default_deny_ingress_exercised": true,
+    "unapproved_egress_denied": true,
+    "approved_egress_allowed": true,
+    "private_data_services_unreachable_externally": true,
+    "passed": true
+  }
+}

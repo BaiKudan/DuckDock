@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ArrowLeft, ExternalLink, RotateCcw } from "lucide-react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams } from "../router";
 import {
   PolarAngleAxis,
   PolarGrid,

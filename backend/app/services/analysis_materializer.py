@@ -53,7 +53,7 @@ class ArtifactReadError(Exception):
 
     This deliberately distinguishes a genuine read/parse failure (the bytes
     were missing, unreadable, or malformed) from an artifact that was read
-    successfully but simply carried no usable data. FR-005 (PARTIAL_FAILED)
+    successfully but simply carried no usable data. PARTIAL_FAILED handling
     relies on the difference: a read/parse failure on one artifact must mark
     the job partially failed, whereas an empty-but-valid artifact must not.
     """

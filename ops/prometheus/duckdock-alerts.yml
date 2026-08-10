@@ -1,0 +1,81 @@
+groups:
+  - name: duckdock-control-plane
+    rules:
+      - alert: DuckDockApiUnavailable
+        expr: up{job="duckdock-api"} != 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: DuckDock API metrics target is unavailable
+
+      - alert: DuckDockAlertmanagerUnavailable
+        expr: prometheus_notifications_alertmanagers_discovered < 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: DuckDock has no reachable Alertmanager notification target
+
+      - alert: DuckDockAlertDeliveryFailing
+        expr: rate(prometheus_notifications_errors_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Prometheus cannot deliver DuckDock alerts to Alertmanager
+
+      - alert: DuckDockHttpErrorBudgetBurn
+        expr: |
+          (
+            sum(rate(duckdock_http_requests_total{job="duckdock-api",status_class="5xx"}[5m]))
+            /
+            clamp_min(sum(rate(duckdock_http_requests_total{job="duckdock-api"}[5m])), 0.001)
+          ) > 0.01
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: DuckDock 5xx ratio is above the 1% release SLO
+
+      - alert: DuckDockEvidenceIngestLatencyHigh
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (
+              rate(duckdock_http_request_duration_seconds_bucket{job="duckdock-api",route=~".*reporter.*"}[5m])
+            )
+          ) > 0.2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: DuckDock evidence ingest p95 is above 200 ms
+
+      - alert: DuckDockRunTimelineLatencyHigh
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (
+              rate(duckdock_http_request_duration_seconds_bucket{job="duckdock-api",route=~".*/agent-runs"}[5m])
+            )
+          ) > 0.25
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: DuckDock AgentRun timeline p95 is above 250 ms
+
+      - alert: DuckDockPolicyDecisionLatencyHigh
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (
+              rate(duckdock_http_request_duration_seconds_bucket{job="duckdock-api",route=~".*policy-evaluations.*"}[5m])
+            )
+          ) > 0.1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: DuckDock release policy decision p95 is above 100 ms

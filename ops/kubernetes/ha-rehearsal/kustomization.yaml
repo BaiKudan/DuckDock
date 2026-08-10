@@ -1,0 +1,78 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../ha
+configMapGenerator:
+  - name: frontend-kubernetes-config
+    namespace: duckdock
+    files:
+      - duckdock.conf=frontend-kubernetes.conf
+generatorOptions:
+  disableNameSuffixHash: true
+images:
+  - name: registry.example.invalid/duckdock/backend
+    newName: duckdock-backend
+    newTag: 2.0.0-rc.1
+  - name: registry.example.invalid/duckdock/frontend
+    newName: duckdock-frontend
+    newTag: 2.0.0-rc.1
+patches:
+  - target: {group: apps, version: v1, kind: Deployment, name: backend}
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/volumes/0
+        value: {name: repos, emptyDir: {sizeLimit: 256Mi}}
+      - op: replace
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests: {cpu: 100m, memory: 256Mi}
+          limits: {cpu: 500m, memory: 1Gi}
+      - op: replace
+        path: /spec/template/spec/containers/0/args
+        value: [uvicorn, app.main:app, --host, 0.0.0.0, --port, "8801", --workers, "1", --timeout-graceful-shutdown, "90"]
+  - target: {group: apps, version: v1, kind: Deployment, name: worker}
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/volumes/0
+        value: {name: repos, emptyDir: {sizeLimit: 256Mi}}
+      - op: replace
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests: {cpu: 100m, memory: 256Mi}
+          limits: {cpu: 500m, memory: 1Gi}
+      - op: replace
+        path: /spec/template/spec/containers/0/command
+        value: [celery, -A, app.workers.celery_app, worker, --loglevel=info, --concurrency=1]
+  - target: {group: apps, version: v1, kind: Deployment, name: frontend}
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/volumeMounts/-
+        value:
+          name: kubernetes-nginx-config
+          mountPath: /etc/nginx/conf.d/duckdock.conf
+          subPath: duckdock.conf
+          readOnly: true
+      - op: add
+        path: /spec/template/spec/volumes/-
+        value:
+          name: kubernetes-nginx-config
+          configMap: {name: frontend-kubernetes-config, defaultMode: 292}
+      - op: replace
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests: {cpu: 50m, memory: 64Mi}
+          limits: {cpu: 300m, memory: 256Mi}
+  - target: {group: apps, version: v1, kind: Deployment, name: beat}
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests: {cpu: 50m, memory: 128Mi}
+          limits: {cpu: 300m, memory: 1Gi}
+  - target: {group: batch, version: v1, kind: Job, name: duckdock-migrate}
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests: {cpu: 50m, memory: 128Mi}
+          limits: {cpu: 300m, memory: 384Mi}

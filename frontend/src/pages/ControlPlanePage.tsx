@@ -12,11 +12,9 @@ import {
   RefreshCw,
   Route,
   ShieldAlert,
-  Trash2,
-  Wand2,
   X,
 } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "../router";
 import {
   controlPlaneApi,
   namespacesApi,
@@ -140,7 +138,7 @@ function runtimeOverviewUserId(runtime: RuntimeInstance, fallbackUserId?: number
 }
 
 export default function ControlPlanePage() {
-  const { message, modal } = AntApp.useApp();
+  const { message } = AntApp.useApp();
   const navigate = useNavigate();
   const currentUser = useAuthStore((state) => state.user);
   const [runtimeOpen, setRuntimeOpen] = useState(false);
@@ -173,10 +171,10 @@ export default function ControlPlanePage() {
     queryFn: async () => (await controlPlaneApi.listCollectionJobs()).data,
   });
 
-  const runtimeRows = runtimes.data ?? [];
+  const runtimeRows = useMemo(() => runtimes.data ?? [], [runtimes.data]);
   const namespaceRows = namespaces.data ?? [];
-  const assetRows = assets.data ?? [];
-  const handoverRows = handovers.data ?? [];
+  const assetRows = useMemo(() => assets.data ?? [], [assets.data]);
+  const handoverRows = useMemo(() => handovers.data ?? [], [handovers.data]);
   const jobRows = collectionJobs.data ?? [];
 
   const metrics = useMemo(
@@ -324,95 +322,6 @@ export default function ControlPlanePage() {
     }
   }
 
-  async function seedDemoData() {
-    if (!currentUser?.id) {
-      message.warning("请先重新登录，确保当前用户信息已加载");
-      return;
-    }
-    const namespace = namespaceRows[0];
-    if (!namespace) {
-      message.warning("请先创建一个可写 Namespace，再生成演示数据");
-      return;
-    }
-    setSubmitting(true);
-    try {
-      const suffix = new Date().toLocaleTimeString("zh-CN", { hour12: false });
-      const runtime = await controlPlaneApi.createRuntime({
-        namespace_id: namespace.id,
-        provider: "openclaw",
-        name: `演示 OpenClaw 私有运行时 ${suffix}`,
-        base_url: "https://openclaw.example.internal",
-        deploy_type: "private",
-        credential_ref: "vault://duckdock/demo-openclaw",
-        metadata_json: { demo: true },
-      });
-      const asset = await controlPlaneApi.createAsset({
-        namespace_id: namespace.id,
-        asset_type: "skill",
-        name: `客户工单总结 Skill ${suffix}`,
-        description: "演示资产：员工创建并被运行时调用的私有化 Skill。",
-        source_provider: runtime.data.provider,
-        source_runtime_id: runtime.data.id,
-        external_id: `demo-skill-${Date.now()}`,
-        status: "risky",
-        criticality: "high",
-        metadata_json: { demo: true, used_by: "after-sales-agent" },
-      });
-      await controlPlaneApi.createAssetOwnership(asset.data.id, {
-        owner_type: "creator",
-        user_id: currentUser.id,
-        namespace_id: namespace.id,
-        confidence: 0.95,
-        is_primary: true,
-      });
-      const handover = await controlPlaneApi.createHandover({
-        namespace_id: namespace.id,
-        case_type: "employee_offboarding",
-        title: `演示：${currentUser.username} 的 AI Agent 资产交接 ${suffix}`,
-        subject_user_id: currentUser.id,
-        receiver_user_id: currentUser.id,
-        runtime_ids: [runtime.data.id],
-        collection_scope: {
-          users: [currentUser.id],
-          include_work_traces: true,
-          include_artifacts: true,
-          lookback_days: 180,
-        },
-        metadata_json: { demo: true, generated_by: "control-plane-demo" },
-      });
-      await controlPlaneApi.analyzeHandover(handover.data.id);
-      await refreshAll();
-      message.success("演示数据已生成，下面三个表会串起来显示一条业务闭环");
-    } catch (err: any) {
-      message.error(err.response?.data?.detail ?? "生成演示数据失败");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  function cleanupDemoData() {
-    modal.confirm({
-      title: "清理演示数据",
-      content: "只会删除明确带 demo 标记的运行时、资产、采集任务、原始记录和交接单；不会按名称模糊删除业务数据。",
-      okText: "确认清理",
-      okButtonProps: { danger: true },
-      cancelText: "取消",
-      async onOk() {
-        setSubmitting(true);
-        try {
-          const { data } = await controlPlaneApi.cleanupDemoData();
-          await refreshAll();
-          const deletedTotal = Object.values(data.deleted).reduce((sum, value) => sum + value, 0);
-          message.success(`已清理 ${deletedTotal} 条演示相关记录`);
-        } catch (err: any) {
-          message.error(err.response?.data?.detail ?? "清理演示数据失败");
-        } finally {
-          setSubmitting(false);
-        }
-      },
-    });
-  }
-
   const runtimeColumns: Column<RuntimeInstance>[] = [
     { key: "name", header: "名称", render: (row) => <span className="font-medium text-slate-900">{row.name}</span> },
     { key: "provider", header: "平台", render: (row) => <Badge tone={providerTone[row.provider]}>{row.provider}</Badge> },
@@ -543,12 +452,6 @@ export default function ControlPlanePage() {
         description="统一管理运行时、AI 资产、工作历程、证据和离职/项目交接流程。"
         actions={
           <>
-            <Button variant="secondary" disabled={submitting} onClick={seedDemoData} icon={<Wand2 className="h-4 w-4" />}>
-              生成演示数据
-            </Button>
-            <Button variant="secondary" danger disabled={submitting} onClick={cleanupDemoData} icon={<Trash2 className="h-4 w-4" />}>
-              清理演示数据
-            </Button>
             <Button variant="secondary" onClick={() => setRuntimeOpen(true)} icon={<Database className="h-4 w-4" />}>
               新建运行时
             </Button>

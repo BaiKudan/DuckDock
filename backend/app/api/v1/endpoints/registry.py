@@ -61,7 +61,7 @@ Reporter upload API:
 Notes:
 - Install `duckdock/duckdock-reporter` from this registry.
 - Use a DuckDock runtime report token for uploads.
-- Run one dry-run upload check after installation.
+- Run one validation upload (`--dry-run`) after installation.
 - Do not upload raw private conversation content unless your company policy explicitly allows it.
 """
 

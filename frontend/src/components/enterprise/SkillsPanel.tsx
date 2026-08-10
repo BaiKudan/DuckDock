@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowUpRight, Pencil, Plus, RotateCcw, Search, Sparkles, Trash2 } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "../../router";
 import { skillsApi, type Skill, type SkillGenerateDraftResponse, type SkillPackageTemplate } from "../../api/client";
 import { useI18n } from "../../i18n";
 import type { Locale } from "../../store/i18n";

@@ -1,0 +1,245 @@
+{
+  "resourceSpans": [
+    {
+      "schemaUrl": "SHADOW_SECRET_CANARY_DO_NOT_EXPORT",
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {"stringValue": "untrusted-client-name"}
+          },
+          {
+            "key": "openclaw.runtime.version",
+            "value": {"stringValue": "2026.7.1"}
+          },
+          {
+            "key": "duckdock.namespace.public_id",
+            "value": {"stringValue": "forged-namespace"}
+          },
+          {
+            "key": "duckdock.runtime.public_id",
+            "value": {"stringValue": "forged-runtime"}
+          },
+          {
+            "key": "secret.token",
+            "value": {"stringValue": "SHADOW_SECRET_CANARY_DO_NOT_EXPORT"}
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "schemaUrl": "SHADOW_SECRET_CANARY_DO_NOT_EXPORT",
+          "scope": {
+            "name": "SHADOW_SECRET_CANARY_DO_NOT_EXPORT",
+            "attributes": [
+              {
+                "key": "prompt",
+                "value": {"stringValue": "SHADOW_SECRET_CANARY_DO_NOT_EXPORT"}
+              }
+            ]
+          },
+          "spans": [
+            {
+              "traceId": "00112233445566778899aabbccddeeff",
+              "spanId": "0011223344556677",
+              "name": "private user request SHADOW_SECRET_CANARY_DO_NOT_EXPORT",
+              "kind": 2,
+              "startTimeUnixNano": "1785400000000000000",
+              "endTimeUnixNano": "1785400000100000000",
+              "attributes": [
+                {
+                  "key": "openclaw.run.id",
+                  "value": {"stringValue": "run-shadow-001"}
+                },
+                {
+                  "key": "openclaw.session.id",
+                  "value": {"stringValue": "session-shadow-001"}
+                },
+                {
+                  "key": "openclaw.operation.name",
+                  "value": {"stringValue": "invoke_agent"}
+                },
+                {
+                  "key": "openclaw.model",
+                  "value": {"stringValue": "qwen-shadow"}
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {"stringValue": "forged-client-model"}
+                },
+                {
+                  "key": "prompt",
+                  "value": {"stringValue": "SHADOW_SECRET_CANARY_DO_NOT_EXPORT"}
+                },
+                {
+                  "key": "tool.arguments",
+                  "value": {"stringValue": "SHADOW_SECRET_CANARY_DO_NOT_EXPORT"}
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1785400000050000000",
+                  "name": "SHADOW_SECRET_CANARY_DO_NOT_EXPORT",
+                  "attributes": [
+                    {
+                      "key": "message",
+                      "value": {"stringValue": "SHADOW_SECRET_CANARY_DO_NOT_EXPORT"}
+                    }
+                  ]
+                }
+              ],
+              "status": {
+                "message": "SHADOW_SECRET_CANARY_DO_NOT_EXPORT",
+                "code": 1
+              }
+            },
+            {
+              "traceId": "10112233445566778899aabbccddeeff",
+              "spanId": "1011223344556677",
+              "name": "openinference private prompt SHADOW_SECRET_CANARY_DO_NOT_EXPORT",
+              "kind": 2,
+              "startTimeUnixNano": "1785400000200000000",
+              "endTimeUnixNano": "1785400000300000000",
+              "attributes": [
+                {
+                  "key": "llm.model_name",
+                  "value": {"stringValue": "qwen-openinference-shadow"}
+                },
+                {
+                  "key": "llm.provider",
+                  "value": {"stringValue": "openinference-shadow-provider"}
+                },
+                {
+                  "key": "llm.token_count.prompt",
+                  "value": {"intValue": "41"}
+                },
+                {
+                  "key": "llm.token_count.completion",
+                  "value": {"stringValue": "17"}
+                },
+                {
+                  "key": "llm.input_messages.0.message.role",
+                  "value": {"stringValue": "user"}
+                },
+                {
+                  "key": "llm.input_messages.0.message.content",
+                  "value": {"stringValue": "SHADOW_SECRET_CANARY_DO_NOT_EXPORT"}
+                },
+                {
+                  "key": "llm.output_messages.0.message.role",
+                  "value": {"stringValue": "assistant"}
+                },
+                {
+                  "key": "llm.output_messages.0.message.content",
+                  "value": {"stringValue": "SHADOW_SECRET_CANARY_DO_NOT_EXPORT"}
+                },
+                {
+                  "key": "tool_call.function.arguments",
+                  "value": {"stringValue": "{\"secret\":\"SHADOW_SECRET_CANARY_DO_NOT_EXPORT\"}"}
+                },
+                {
+                  "key": "openinference.span.kind",
+                  "value": {"stringValue": "AGENT"}
+                },
+                {
+                  "key": "session.id",
+                  "value": {"stringValue": "session-openinference-001"}
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {"stringValue": "forged-client-model"}
+                },
+                {
+                  "key": "duckdock.external_session_id",
+                  "value": {"stringValue": "forged-runtime"}
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1785400000250000000",
+                  "name": "SHADOW_SECRET_CANARY_DO_NOT_EXPORT",
+                  "attributes": [
+                    {
+                      "key": "tool.result",
+                      "value": {"stringValue": "SHADOW_SECRET_CANARY_DO_NOT_EXPORT"}
+                    }
+                  ]
+                }
+              ],
+              "status": {
+                "message": "SHADOW_SECRET_CANARY_DO_NOT_EXPORT",
+                "code": 1
+              }
+            },
+            {
+              "traceId": "20112233445566778899aabbccddeeff",
+              "spanId": "2011223344556677",
+              "name": "otel genai private prompt SHADOW_SECRET_CANARY_DO_NOT_EXPORT",
+              "kind": 2,
+              "startTimeUnixNano": "1785400000400000000",
+              "endTimeUnixNano": "1785400000500000000",
+              "attributes": [
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {"stringValue": "qwen-openinference-shadow"}
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {"stringValue": "openinference-shadow-provider"}
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {"intValue": "41"}
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {"intValue": "17"}
+                },
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {"stringValue": "invoke_agent"}
+                },
+                {
+                  "key": "gen_ai.conversation.id",
+                  "value": {"stringValue": "session-openinference-001"}
+                },
+                {
+                  "key": "gen_ai.input.messages",
+                  "value": {"stringValue": "SHADOW_SECRET_CANARY_DO_NOT_EXPORT"}
+                },
+                {
+                  "key": "gen_ai.output.messages",
+                  "value": {"stringValue": "SHADOW_SECRET_CANARY_DO_NOT_EXPORT"}
+                },
+                {
+                  "key": "gen_ai.tool.definitions",
+                  "value": {"stringValue": "SHADOW_SECRET_CANARY_DO_NOT_EXPORT"}
+                },
+                {
+                  "key": "duckdock.external_session_id",
+                  "value": {"stringValue": "forged-runtime"}
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1785400000450000000",
+                  "name": "SHADOW_SECRET_CANARY_DO_NOT_EXPORT",
+                  "attributes": [
+                    {
+                      "key": "message",
+                      "value": {"stringValue": "SHADOW_SECRET_CANARY_DO_NOT_EXPORT"}
+                    }
+                  ]
+                }
+              ],
+              "status": {
+                "message": "SHADOW_SECRET_CANARY_DO_NOT_EXPORT",
+                "code": 1
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

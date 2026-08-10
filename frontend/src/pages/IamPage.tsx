@@ -16,6 +16,8 @@ import {
 import {
   iamApi,
   namespacesApi,
+  type DirectoryCredential,
+  type DirectoryLifecycleEvent,
   type IdentityLink,
   type Namespace,
   type OrgUnit,
@@ -128,6 +130,7 @@ export default function IamPage() {
   const [editing, setEditing] = useState<SSORoleMapping | null>(null);
   const [draft, setDraft] = useState<MappingDraft>(emptyDraft);
   const [saving, setSaving] = useState(false);
+  const [issuingDirectoryCredential, setIssuingDirectoryCredential] = useState(false);
 
   const providers = useQuery({
     queryKey: ["iam", "sso-providers"],
@@ -159,6 +162,16 @@ export default function IamPage() {
     queryFn: async () =>
       (await iamApi.listIdentityLinks(providerFilter ? { provider_id: Number(providerFilter) } : undefined)).data,
   });
+  const directoryCredentials = useQuery({
+    queryKey: ["iam", "directory-credentials", providerFilter],
+    queryFn: async () =>
+      (await iamApi.listDirectoryCredentials(providerFilter ? { provider_id: Number(providerFilter) } : undefined)).data,
+  });
+  const directoryEvents = useQuery({
+    queryKey: ["iam", "directory-events", providerFilter],
+    queryFn: async () =>
+      (await iamApi.listDirectoryEvents(providerFilter ? { provider_id: Number(providerFilter) } : undefined)).data,
+  });
 
   const providerRows = useMemo(() => providers.data ?? [], [providers.data]);
   const roleRows = useMemo(() => roles.data ?? [], [roles.data]);
@@ -167,6 +180,8 @@ export default function IamPage() {
   const namespaceRows = useMemo(() => namespaces.data ?? [], [namespaces.data]);
   const mappingRows = useMemo(() => mappings.data ?? [], [mappings.data]);
   const linkRows = useMemo(() => identityLinks.data ?? [], [identityLinks.data]);
+  const directoryCredentialRows = useMemo(() => directoryCredentials.data ?? [], [directoryCredentials.data]);
+  const directoryEventRows = useMemo(() => directoryEvents.data ?? [], [directoryEvents.data]);
   const loading =
     providers.isLoading ||
     roles.isLoading ||
@@ -174,7 +189,9 @@ export default function IamPage() {
     orgUnits.isLoading ||
     namespaces.isLoading ||
     mappings.isLoading ||
-    identityLinks.isLoading;
+    identityLinks.isLoading ||
+    directoryCredentials.isLoading ||
+    directoryEvents.isLoading;
 
   const metrics = useMemo(() => {
     const linkedUsers = new Set(linkRows.map((item) => item.user_id)).size;
@@ -297,12 +314,57 @@ export default function IamPage() {
     refetchAll();
   }
 
+  async function issueDirectoryCredential() {
+    const providerId = providerFilter ? Number(providerFilter) : providerRows[0]?.id;
+    if (!providerId) {
+      message.error("请先创建并选择一个 SSO provider");
+      return;
+    }
+    setIssuingDirectoryCredential(true);
+    try {
+      const { data } = await iamApi.createDirectoryCredential({
+        provider_id: providerId,
+        name: `SCIM lifecycle · ${providerName(providerRows, providerId)}`,
+      });
+      modal.info({
+        title: "SCIM 凭证仅显示一次",
+        width: 680,
+        content: (
+          <div className="space-y-3 pt-2 text-sm text-slate-600">
+            <p>立即复制到目录连接器。DuckDock 只保存哈希，关闭后无法再次查看。</p>
+            <code className="block break-all rounded-md bg-slate-950 p-3 text-xs text-emerald-300">{data.token}</code>
+          </div>
+        ),
+      });
+      refetchAll();
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : "SCIM 凭证签发失败");
+    } finally {
+      setIssuingDirectoryCredential(false);
+    }
+  }
+
+  function revokeDirectoryCredential(credential: DirectoryCredential) {
+    modal.confirm({
+      title: "撤销 SCIM 凭证",
+      content: `${credential.name} · dkr_scim_${credential.token_prefix}_…`,
+      okText: "撤销",
+      okButtonProps: { danger: true },
+      cancelText: "取消",
+      async onOk() {
+        await iamApi.revokeDirectoryCredential(credential.public_id, "Revoked from IAM console");
+        message.success("SCIM 凭证已撤销");
+        refetchAll();
+      },
+    });
+  }
+
   return (
     <div className="app-page page-stack">
       <PageHeader
         eyebrow="ENTERPRISE IAM"
         title="身份与 SSO"
-        description="企业 UID、身份源链接和 IdP group 到 DuckDock RBAC 的 JIT 映射。"
+        description="企业 UID、身份源链接、SCIM 生命周期和 IdP group 到 DuckDock RBAC 的 JIT 映射。"
         actions={
           <>
             <select
@@ -580,6 +642,83 @@ export default function IamPage() {
         </div>
       </SectionCard>
 
+      <SectionCard
+        title="Identity Lifecycle 2.0"
+        description="Provider-bound SCIM 凭证、目录停用回执和自动交接结果；凭证明文仅签发时显示一次。"
+        action={
+          <Button
+            onClick={() => void issueDirectoryCredential()}
+            disabled={issuingDirectoryCredential || !providerRows.length}
+            icon={<KeyRound className="h-4 w-4" />}
+          >
+            签发 SCIM 凭证
+          </Button>
+        }
+      >
+        <div className="grid gap-0 xl:grid-cols-2 xl:divide-x xl:divide-slate-200">
+          <div className="min-w-0">
+            <div className="border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Directory credentials
+            </div>
+            <div className="divide-y divide-slate-200">
+              {directoryCredentialRows.length ? (
+                directoryCredentialRows.map((credential: DirectoryCredential) => (
+                  <div key={credential.public_id} className="data-row flex items-center justify-between gap-3 text-sm">
+                    <div className="min-w-0">
+                      <div className="truncate font-medium text-slate-900">{credential.name}</div>
+                      <div className="mt-1 text-xs text-slate-500">
+                        {providerName(providerRows, credential.provider_id)} · dkr_scim_{credential.token_prefix}_… · used {formatDate(credential.last_used_at)}
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <Badge tone={credential.is_active ? "emerald" : "neutral"}>
+                        {credential.is_active ? "ACTIVE" : "REVOKED"}
+                      </Badge>
+                      {credential.is_active ? (
+                        <Button size="sm" variant="secondary" danger onClick={() => revokeDirectoryCredential(credential)}>
+                          撤销
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <EmptyState text="暂无 SCIM credential" icon={KeyRound} />
+              )}
+            </div>
+          </div>
+          <div className="min-w-0">
+            <div className="border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Directory lifecycle receipts
+            </div>
+            <div className="divide-y divide-slate-200">
+              {directoryEventRows.length ? (
+                directoryEventRows.map((event: DirectoryLifecycleEvent) => (
+                  <div key={event.public_id} className="data-row text-sm">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="truncate font-mono text-xs font-medium text-slate-800">{event.public_id}</div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          user #{event.user_id} · {formatDate(event.occurred_at)} · {event.source}
+                        </div>
+                      </div>
+                      <Badge tone={event.action === "DISABLE" ? "rose" : "emerald"}>{event.action}</Badge>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-600">
+                      <MonoPill>{event.credentials_revoked} credentials revoked</MonoPill>
+                      <MonoPill>{event.memberships_removed} memberships removed</MonoPill>
+                      <MonoPill>{event.handover_case_ids_json.length} handovers</MonoPill>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <EmptyState text="暂无 directory lifecycle receipt" icon={ShieldCheck} />
+              )}
+            </div>
+          </div>
+        </div>
+      </SectionCard>
+
       <SectionCard title="Identity Links" description="OIDC / LDAP subject 与 DuckDock 企业 UID 的绑定记录。">
         <div className="overflow-x-auto">
           {linkRows.length ? (
@@ -590,6 +729,7 @@ export default function IamPage() {
                   <th className="px-4 py-3 font-semibold">Provider</th>
                   <th className="px-4 py-3 font-semibold">External UID</th>
                   <th className="px-4 py-3 font-semibold">Subject</th>
+                  <th className="px-4 py-3 font-semibold">Status</th>
                   <th className="px-4 py-3 font-semibold">Last Seen</th>
                 </tr>
               </thead>
@@ -609,6 +749,9 @@ export default function IamPage() {
                       <div className="truncate font-mono text-xs text-slate-600" title={link.external_subject}>
                         {link.external_subject}
                       </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <Badge tone={link.is_active ? "emerald" : "rose"}>{link.is_active ? "ACTIVE" : "DISABLED"}</Badge>
                     </td>
                     <td className="px-4 py-3 text-slate-700">{formatDate(link.last_seen_at)}</td>
                   </tr>

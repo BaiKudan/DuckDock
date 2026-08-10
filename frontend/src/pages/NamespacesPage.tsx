@@ -1,6 +1,6 @@
 import { Boxes, Plus, RotateCcw } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "../router";
 import { namespacesApi, type Namespace } from "../api/client";
 import { Badge, Button, Card, IconTile, Input, MonoPill, PageHeader } from "../components/ui";
 import { formatDate, useI18n } from "../i18n";

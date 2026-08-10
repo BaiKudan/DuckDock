@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -13,6 +15,12 @@ from app.models.namespace import Namespace
 from app.models.sandbox_validation import SandboxValidationRun, SandboxValidationStatus
 from app.models.scan import ScanResult, ScanStatus
 from app.models.skill import Skill, SkillVersion, SkillVersionReviewStatus, SkillVersionStatus
+from app.services.release_evidence_ports import (
+    CandidateEvidenceReference,
+    NullReleaseEvidenceLookupPort,
+    ReleaseEvidenceLookupPort,
+    ReleaseEvidenceSelector,
+)
 
 
 @dataclass
@@ -22,7 +30,112 @@ class ReleaseGateDecision:
     gate_result: dict
 
 
+@dataclass(frozen=True, slots=True)
+class CandidateReleaseGateDecision:
+    selector: ReleaseEvidenceSelector
+    outcome: str
+    reason_codes: tuple[str, ...]
+    evidence: tuple[CandidateEvidenceReference, ...]
+    decision_digest: str
+
+
 class ReleaseGateService:
+    def __init__(
+        self,
+        *,
+        evidence_lookup: ReleaseEvidenceLookupPort | None = None,
+    ) -> None:
+        # Candidate-pinned evidence stays separate from the legacy Skill/Clinic
+        # evaluation path so neither path can silently fall back to the other.
+        self._evidence_lookup = evidence_lookup or NullReleaseEvidenceLookupPort()
+
+    async def lookup_candidate_evidence(
+        self,
+        selector: ReleaseEvidenceSelector,
+    ) -> tuple[CandidateEvidenceReference, ...]:
+        return await self._evidence_lookup.lookup(selector)
+
+    async def evaluate_candidate(
+        self,
+        selector: ReleaseEvidenceSelector,
+    ) -> CandidateReleaseGateDecision:
+        """Enforce candidate-pinned runtime evaluation evidence.
+
+        This is deliberately separate from the legacy Skill/Clinic evaluate()
+        path. It has no Namespace-latest fallback: an exact selector with no
+        bound evidence is blocked.
+        """
+
+        evidence = await self.lookup_candidate_evidence(selector)
+        if not evidence:
+            outcome = "BLOCKED"
+            reason_codes = ("runtime_evaluation_missing",)
+        else:
+            reasons: list[str] = []
+            comparison_verdicts = {
+                item.verdict
+                for item in evidence
+                if item.evidence_kind == "evaluation_comparison"
+            }
+            manual_review_verdicts = {
+                item.verdict
+                for item in evidence
+                if item.evidence_kind == "manual_review"
+            }
+            if "fail" in comparison_verdicts:
+                reasons.append("runtime_evaluation_regression")
+            if "inconclusive" in comparison_verdicts:
+                reasons.append("runtime_evaluation_inconclusive")
+            if "fail" in manual_review_verdicts:
+                reasons.append("manual_review_rejected")
+            if reasons:
+                outcome = "BLOCKED"
+                reason_codes = tuple(reasons)
+            else:
+                outcome = "PASS"
+                reason_codes = ("runtime_evaluation_passed",)
+        canonical = {
+            "schema_name": "duckdock-candidate-release-gate",
+            "schema_version": "1.0",
+            "selector": {
+                "namespace_id": selector.namespace_id,
+                "release_candidate_ref": (
+                    selector.release_candidate_ref
+                ),
+                "deployment_public_id": selector.deployment_public_id,
+                "deployment_revision": selector.deployment_revision,
+            },
+            "outcome": outcome,
+            "reason_codes": list(reason_codes),
+            "evidence": [
+                {
+                    "evidence_id": item.evidence_id,
+                    "evidence_kind": item.evidence_kind,
+                    "verdict": item.verdict,
+                    "artifact_sha256": item.artifact_sha256,
+                    "observed_at": ensure_utc(item.observed_at)
+                    .isoformat()
+                    .replace("+00:00", "Z"),
+                }
+                for item in evidence
+            ],
+        }
+        decision_digest = hashlib.sha256(
+            json.dumps(
+                canonical,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
+        return CandidateReleaseGateDecision(
+            selector=selector,
+            outcome=outcome,
+            reason_codes=reason_codes,
+            evidence=evidence,
+            decision_digest=decision_digest,
+        )
+
     async def evaluate(
         self,
         db: AsyncSession,

@@ -305,7 +305,7 @@ def workspace_handover_flow() -> str:
     body += lane(884, 96, 230, 600, "LIGHT HANDOVER", "#fff7ed", "#fed7aa")
     body += node(54, 140, 202, 78, "我的 AI 资产", ["Skills / Agents / Prompts", "待确认、已确认、排除"], icon="ME")
     body += node(54, 266, 202, 78, "最近工作历程", ["会话摘要、项目上下文", "不展示原始私聊"], icon="TRC", icon_fill="#f0fdfa", icon_stroke="#99f6e4", icon_text="#0f766e")
-    body += node(54, 392, 202, 78, "Reporter 状态", ["健康度、最近上报", "dry-run 引导"], icon="REP")
+    body += node(54, 392, 202, 78, "Reporter 状态", ["健康度、最近上报", "校验上报引导"], icon="REP")
     body += node(332, 158, 224, 78, "资产归属", ["AssetOwnership", "owner_hint -> 用户"], icon="OWN")
     body += node(332, 284, 224, 78, "长期记忆候选", ["project_context", "handover/risk signal"], icon="MEM", icon_fill="#ede9fe", icon_stroke="#c4b5fd", icon_text="#7c3aed")
     body += node(332, 410, 224, 78, "员工反馈", ["确认、补充、排除", "记录到 metadata"], icon="FB")

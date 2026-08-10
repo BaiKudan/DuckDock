@@ -6,7 +6,7 @@ settings/env 取 ``base_url``,再 POST 到 ``f"{base_url}/chat/completions"``。
 ``base_url`` 是运维配置而非用户输入,风险偏低;此处做**纵深防御**,确保一个被误填
 或被篡改的 env 值不会把服务端 LLM 调用静默地指向 loopback / 云元数据 / 内网地址。
 
-经 T042(交接 LLM 顾问)对抗式复核提出,统一应用到三处而非只修一处。
+该校验统一应用到所有 LLM 调用点。
 
 校验:
   1. 必须显式 http/https scheme,且解析得到 host;

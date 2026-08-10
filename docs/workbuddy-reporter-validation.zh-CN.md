@@ -163,11 +163,20 @@ duckdock.reporter.status
 
 Hermes 可使用 `scripts/hermes_reporter_pilot.py` 作为参考实现。推荐默认提交结构化日报/周报，只有 handover/audit 场景显式启用 pack 模式。
 
+从 `hermes-pilot-0.2.0` 起，每次真实 cron 会先以原生
+`hermes-reporter` profile 完成 v2 handshake/heartbeat，再创建一个
+metadata-only Session/Run；报告提交成功后关闭为 `SUCCEEDED/ENDED`，异常时关闭为
+`FAILED/ABANDONED`。Run duration 由 DuckDock 服务端按持久化时间计算，pilot 不上传
+客户端推导的 `duration_ms`。
+
 验收时确认：
 
 - runtime external ID 和 device ID 不包含用户名、主机名原文或硬编码设备型号。
 - cron/调度器只引用受限权限配置文件。
 - Reporter 日志不打印 credential、签名 URL query 或原始私密内容。
+- Fleet 显示 `hermes-reporter`、`hermes-reporter-pilot`、DD-C1 与 healthy heartbeat。
+- 每次真实触发都能关联一个终态 Session 和 Run，且 trust 为
+  `CHANNEL_AUTHENTICATED/REPORTER`、capture mode 为 `metadata_only`。
 - rotate/revoke 后调度任务能明确报错并停止重试风暴。
 
 ## 9. 失败与越权场景

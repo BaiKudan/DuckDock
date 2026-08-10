@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import platform
+import secrets
 import socket
 import stat
 import subprocess
@@ -30,8 +31,10 @@ from typing import Any
 DEFAULT_API_BASE = "http://localhost:8801/api/v1"
 DEFAULT_HERMES_BASE = "http://127.0.0.1:50866"
 DEFAULT_CONFIG = Path.home() / ".duckdock" / "reporter" / "hermes-pilot.json"
-REPORTER_VERSION = "hermes-pilot-0.1.0"
+REPORTER_VERSION = "hermes-pilot-0.2.0"
 DEFAULT_SCHEDULE = "0 16 * * 5"
+AGENT_LOOP_PROFILE = "hermes-reporter"
+AGENT_LOOP_CAPABILITIES = ["session_control", "run_control"]
 
 
 class PilotError(RuntimeError):
@@ -44,6 +47,31 @@ def utc_now() -> datetime:
 
 def iso_now() -> str:
     return utc_now().isoformat()
+
+
+def iso_after(*timestamps: Any) -> str:
+    """Return a UTC timestamp strictly after any server-canonicalized starts.
+
+    The Reporter and DuckDock can cross a second boundary while a Run is being
+    created.  DuckDock returns its canonical ``started_at`` value, so use that
+    as the lower bound instead of assuming the Reporter clock is always later.
+    """
+
+    candidate = utc_now()
+    for value in timestamps:
+        if not isinstance(value, str) or not value.strip():
+            continue
+        try:
+            parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        else:
+            parsed = parsed.astimezone(timezone.utc)
+        if candidate <= parsed:
+            candidate = parsed + timedelta(microseconds=1)
+    return candidate.isoformat()
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -65,6 +93,7 @@ def request_json(
     *,
     token: str | None = None,
     payload: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
     timeout: int = 30,
 ) -> dict[str, Any]:
     body = json.dumps(payload).encode("utf-8") if payload is not None else None
@@ -74,6 +103,8 @@ def request_json(
         request.add_header("Content-Type", "application/json")
     if token:
         request.add_header("Authorization", f"Bearer {token}")
+    for name, value in (headers or {}).items():
+        request.add_header(name, value)
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             raw = response.read().decode("utf-8")
@@ -123,6 +154,261 @@ def sha256_file(path: Path) -> str:
 
 def stable_hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+
+
+def api_v2_base(api_base: str) -> str:
+    clean = api_base.rstrip("/")
+    if not clean.endswith("/api/v1"):
+        raise PilotError("DuckDock API base must end with /api/v1")
+    return clean[:-1] + "2"
+
+
+def hermes_runtime_external_id(config: dict[str, Any]) -> str:
+    configured = str(config.get("runtime_external_id") or "").strip()
+    if configured:
+        return configured
+    return f"hermes-{stable_hash(socket.gethostname())}"
+
+
+def hermes_boot_id() -> str:
+    pid_path = Path.home() / ".hermes" / "gateway.pid"
+    try:
+        raw = pid_path.read_text(encoding="utf-8").strip()
+        mtime = int(pid_path.stat().st_mtime)
+    except OSError:
+        raw = "unknown"
+        mtime = 0
+    try:
+        process = json.loads(raw)
+    except json.JSONDecodeError:
+        process = {}
+    if not isinstance(process, dict):
+        process = {}
+    pid = str(process.get("pid") or raw)
+    started = str(
+        process.get("start_time")
+        or process.get("started_at")
+        or mtime
+    )
+    safe_pid = "".join(char for char in pid if char.isalnum())[:32]
+    safe_pid = safe_pid or "unknown"
+    generation = stable_hash(f"{raw}:{started}:{mtime}")
+    return f"hermes-gateway-{safe_pid}-{generation}"
+
+
+def agent_loop_config_fingerprint() -> str:
+    canonical = json.dumps(
+        {
+            "adapter_version": REPORTER_VERSION,
+            "capabilities": AGENT_LOOP_CAPABILITIES,
+            "content_capture_mode": "metadata_only",
+            "profile": AGENT_LOOP_PROFILE,
+            "protocol_version": "1.0",
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _execution_metadata(operation: str) -> dict[str, str]:
+    return {
+        "harness.name": "hermes-cron",
+        "harness.version": REPORTER_VERSION,
+        "service.name": "hermes-gateway",
+        "operation.name": operation,
+        "agent.mode": "no-agent",
+    }
+
+
+def start_agent_loop(
+    *,
+    config: dict[str, Any],
+    api_base: str,
+    token: str,
+    operation: str,
+    source_schema: str,
+    trigger: str,
+) -> dict[str, Any]:
+    """Negotiate Hermes and open one metadata-only Session/Run."""
+
+    v2_base = api_v2_base(api_base)
+    now = utc_now()
+    runtime_external_id = hermes_runtime_external_id(config)
+    boot_id = hermes_boot_id()
+    fingerprint = agent_loop_config_fingerprint()
+    handshake = request_json(
+        "POST",
+        f"{v2_base}/reporter/handshakes",
+        token=token,
+        payload={
+            "adapter_id": "hermes-reporter-pilot",
+            "adapter_version": REPORTER_VERSION,
+            "profile": AGENT_LOOP_PROFILE,
+            "protocol": "duckdock-adapter",
+            "protocol_version": "1.0",
+            "source_schema": source_schema,
+            "source_schema_version": "1.0",
+            "capabilities": AGENT_LOOP_CAPABILITIES,
+            "content_capture_modes": ["metadata_only"],
+            "instance_id": runtime_external_id,
+            "boot_id": boot_id,
+            "client_nonce": secrets.token_urlsafe(24),
+            "client_time": now.isoformat(),
+            "claimed_capability_level": "DD-C1",
+            "config_fingerprint": fingerprint,
+        },
+    )
+    heartbeat = request_json(
+        "POST",
+        f"{v2_base}/reporter/heartbeats",
+        token=token,
+        payload={
+            "handshake_id": handshake["handshake_id"],
+            "boot_id": boot_id,
+            "status": "ok",
+            "accepted_capabilities": handshake["accepted_capabilities"],
+            "config_fingerprint": fingerprint,
+            "collector_status": "not_applicable",
+            "collector_version": REPORTER_VERSION,
+        },
+    )
+    identity = (
+        f"hermes-{int(config['runtime_id'])}-"
+        f"{now:%Y%m%dT%H%M%S%f}-{secrets.token_hex(4)}"
+    )
+    session = request_json(
+        "POST",
+        f"{v2_base}/reporter/sessions",
+        token=token,
+        headers={"Idempotency-Key": f"{identity}-session-start"},
+        payload={
+            "external_session_id": f"{identity}-session",
+            "started_at": now.isoformat(),
+            "sensitivity": "INTERNAL",
+            "content_capture_mode": "metadata_only",
+            "metadata": _execution_metadata(operation),
+        },
+    )
+    try:
+        run = request_json(
+            "POST",
+            f"{v2_base}/reporter/runs",
+            token=token,
+            headers={"Idempotency-Key": f"{identity}-run-start"},
+            payload={
+                "external_run_id": f"{identity}-run",
+                "session_public_id": session["session_public_id"],
+                "attempt": 1,
+                "source_schema": source_schema,
+                "source_schema_version": "1.0",
+                "started_at": now.isoformat(),
+                "content_capture_mode": "metadata_only",
+                "metadata": _execution_metadata(operation),
+            },
+        )
+    except Exception:
+        try:
+            request_json(
+                "POST",
+                (
+                    f"{v2_base}/reporter/sessions/"
+                    f"{session['session_public_id']}/complete"
+                ),
+                token=token,
+                headers={
+                    "Idempotency-Key": (
+                        f"{identity}-session-abandon-after-run-start"
+                    )
+                },
+                payload={
+                    "ended_at": iso_after(session.get("started_at")),
+                    "status": "ABANDONED",
+                    "run_count": 0,
+                    "error_count": 1,
+                },
+            )
+        except Exception:
+            pass
+        raise
+    return {
+        "api_v2_base": v2_base,
+        "identity": identity,
+        "operation": operation,
+        "handshake": handshake,
+        "heartbeat": heartbeat,
+        "session": session,
+        "run": run,
+        "trigger": trigger,
+    }
+
+
+def finish_agent_loop(
+    state: dict[str, Any],
+    *,
+    token: str,
+    succeeded: bool,
+) -> dict[str, Any]:
+    """Close the existing Run then Session without client-derived duration."""
+
+    ended_at = iso_after(
+        state["session"].get("started_at"),
+        state["run"].get("started_at"),
+    )
+    identity = state["identity"]
+    v2_base = state["api_v2_base"]
+    run_complete_payload: dict[str, Any] = {
+        "ended_at": ended_at,
+        "status": "SUCCEEDED" if succeeded else "FAILED",
+        "step_count": 1,
+        "model_call_count": 0,
+        "tool_call_count": 2,
+        "input_token_count": 0,
+        "output_token_count": 0,
+        "metadata": _execution_metadata(state["operation"]),
+    }
+    if not succeeded:
+        run_complete_payload["error_type"] = "reporter_failure"
+    run = request_json(
+        "POST",
+        (
+            f"{v2_base}/reporter/runs/"
+            f"{state['run']['run_public_id']}/complete"
+        ),
+        token=token,
+        headers={"Idempotency-Key": f"{identity}-run-complete"},
+        payload=run_complete_payload,
+    )
+    session = request_json(
+        "POST",
+        (
+            f"{v2_base}/reporter/sessions/"
+            f"{state['session']['session_public_id']}/complete"
+        ),
+        token=token,
+        headers={"Idempotency-Key": f"{identity}-session-complete"},
+        payload={
+            "ended_at": ended_at,
+            "status": "ENDED" if succeeded else "ABANDONED",
+            "run_count": 1,
+            "error_count": 0 if succeeded else 1,
+        },
+    )
+    return {
+        "profile": AGENT_LOOP_PROFILE,
+        "handshake_id": state["handshake"]["handshake_id"],
+        "certified_capability_level": state["handshake"][
+            "certified_capability_level"
+        ],
+        "heartbeat_status": state["heartbeat"]["status"],
+        "session_public_id": session["session_public_id"],
+        "session_status": session["status"],
+        "run_public_id": run["run_public_id"],
+        "run_status": run["status"],
+        "trust_level": run["trust_level"],
+        "trust_source": run["trust_source"],
+        "content_capture_mode": run["content_capture_mode"],
+    }
 
 
 def run_command(args: list[str], *, timeout: int = 10) -> tuple[int, str]:
@@ -181,7 +467,7 @@ def build_pack(
     hostname_hash = stable_hash(socket.gethostname())
     username = config.get("owner_username") or os.environ.get("USER") or "unknown"
     user_hash = stable_hash(username)
-    runtime_external_id = f"hermes-{hostname_hash}"
+    runtime_external_id = hermes_runtime_external_id(config)
     runtime_id = int(config["runtime_id"])
     generated_at = iso_now()
 
@@ -451,6 +737,7 @@ def enroll(args: argparse.Namespace) -> dict[str, Any]:
         "device_id": args.device_id,
         "owner_username": username,
         "reporter_version": REPORTER_VERSION,
+        "runtime_external_id": f"hermes-{stable_hash(socket.gethostname())}",
         "schedule": args.schedule,
         "timezone": args.timezone,
     }
@@ -496,7 +783,7 @@ def heartbeat_reporter(
         token=token,
         payload={
             "device_id": config.get("device_id") or "hermes-reporter",
-            "reporter_version": config.get("reporter_version") or REPORTER_VERSION,
+            "reporter_version": REPORTER_VERSION,
             "agent_version": (hermes_public_metadata(hermes_base).get("openapi_version") or "unknown"),
             "status": "ok",
             "next_run_at": next_run_at,
@@ -507,7 +794,7 @@ def heartbeat_reporter(
     )
 
 
-def run_structured_report(args: argparse.Namespace) -> dict[str, Any]:
+def _run_structured_report_v1(args: argparse.Namespace) -> dict[str, Any]:
     config, api_base, token, runtime_id, hermes_base, period_start_dt, period_end_dt, report_type, trigger = load_run_context(args)
     period_start = period_start_dt.isoformat()
     period_end = period_end_dt.isoformat()
@@ -522,8 +809,7 @@ def run_structured_report(args: argparse.Namespace) -> dict[str, Any]:
     )
     public = hermes_public_metadata(hermes_base)
     cron = hermes_cron_summary(config.get("hermes_cli"))
-    hostname_hash = stable_hash(socket.gethostname())
-    runtime_external_id = f"hermes-{hostname_hash}"
+    runtime_external_id = hermes_runtime_external_id(config)
     model = sanitize_model_info(public.get("model_info")) or {}
     plugin_assets = []
     for plugin in public.get("dashboard_plugins") or []:
@@ -631,7 +917,7 @@ def run_structured_report(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
-def run_pack_report(args: argparse.Namespace) -> dict[str, Any]:
+def _run_pack_report_v1(args: argparse.Namespace) -> dict[str, Any]:
     config, api_base, token, runtime_id, hermes_base, period_start_dt, period_end_dt, report_type, trigger = load_run_context(args)
     period_start = period_start_dt.isoformat()
     period_end = period_end_dt.isoformat()
@@ -709,6 +995,66 @@ def run_pack_report(args: argparse.Namespace) -> dict[str, Any]:
         "token_prefix": config.get("token_prefix"),
         "credential_id": config.get("credential_id"),
     }
+
+
+def _run_with_agent_loop(
+    args: argparse.Namespace,
+    callback,
+    *,
+    operation: str,
+    source_schema: str,
+) -> dict[str, Any]:
+    (
+        config,
+        api_base,
+        token,
+        _runtime_id,
+        _hermes_base,
+        _period_start_dt,
+        _period_end_dt,
+        _report_type,
+        trigger,
+    ) = load_run_context(args)
+    state = start_agent_loop(
+        config=config,
+        api_base=api_base,
+        token=token,
+        operation=operation,
+        source_schema=source_schema,
+        trigger=trigger,
+    )
+    try:
+        result = callback(args)
+    except Exception:
+        try:
+            finish_agent_loop(state, token=token, succeeded=False)
+        except Exception:
+            pass
+        raise
+    result["agent_loop"] = finish_agent_loop(
+        state,
+        token=token,
+        succeeded=True,
+    )
+    return result
+
+
+def run_structured_report(args: argparse.Namespace) -> dict[str, Any]:
+    return _run_with_agent_loop(
+        args,
+        _run_structured_report_v1,
+        operation="hermes-structured-report",
+        source_schema="duckdock-structured-report-v1",
+    )
+
+
+def run_pack_report(args: argparse.Namespace) -> dict[str, Any]:
+    return _run_with_agent_loop(
+        args,
+        _run_pack_report_v1,
+        operation="hermes-pack-report",
+        source_schema="duckdock-pack-v1",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:

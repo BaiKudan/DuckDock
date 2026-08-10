@@ -14,7 +14,7 @@ import {
   UploadCloud,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "../router";
 import {
   controlPlaneApi,
   lifecycleApi,
@@ -280,7 +280,7 @@ export default function DashboardPage() {
                 "Reporter 登录 DuckDock 并自助 enroll",
                 "拿到一次性显示的 dkr_report_* credential",
                 "使用者通过对话安装 duckdock_reporter",
-                "dry-run 展示资产、会话和脱敏统计",
+                "校验上报仅包含资产、会话摘要和脱敏统计",
                 "确认后创建每周五 16:00 自报任务",
               ].map((text, index) => (
                 <div key={text} className="flex gap-3">

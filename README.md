@@ -8,7 +8,7 @@ DuckDock 把 **私有 Skills 注册表** · **Scanner + Sandbox 发布门禁** �
 
 适合需要**自托管** AI Skill / Agent 资产管理与交接治理平台的团队：单租户部署（一企业一实例），强调审计可追溯、凭证安全、最小暴露、LLM 仅建议。
 
-> **项目状态：Alpha。** 当前功能与 CI 已足以供开发、评估和受控试点使用，但尚未完成独立安全审计与真实生产 backup → restore 演练。生产部署前请完成第 12 节清单，并阅读 [`SECURITY.md`](SECURITY.md)。
+> **发布状态：`2.0.0-rc.1` 候选版。** 当前工程就绪结论见 [`docs/release-2.0-rc1-readiness.zh-CN.md`](docs/release-2.0-rc1-readiness.zh-CN.md)。仓库技术门禁不等于生产授权；正式上线仍需完成目标环境的安全审计、容量验证、备份恢复演练、监控接入和变更审批，并执行第 12 节清单与 [`SECURITY.md`](SECURITY.md)。
 
 ## 目录
 
@@ -57,6 +57,8 @@ DuckDock 为本地开发提供一组稳定的默认 host 端口，统一记录�
 | PostgreSQL 16 | 5432 | 5432 | `observability` | 仅自托管 Langfuse |
 | Langfuse Web | **3200** | 3000 | `observability` | 浏览器 |
 | ClickHouse | — | 8123 | `observability` | 仅内网 |
+| OTLP gRPC / HTTP | **4317 / 4318** | 4317 / 4318 | `telemetry` | 仅 127.0.0.1 |
+| OTel health | **13133** | 13133 | `telemetry` | 仅 127.0.0.1 |
 
 > 如遇端口冲突，只调整 host 侧映射；container 端口与服务内部 URL 保持不变。详见 [`docs/port-plan.zh-CN.md`](docs/port-plan.zh-CN.md)。`analysis-worker` 与 `observability` 是**可选 profile**，默认 `docker compose up` 不启用。
 
@@ -66,7 +68,7 @@ DuckDock 为本地开发提供一组稳定的默认 host 端口，统一记录�
 
 ### 3.1 前置依赖
 
-Python 3.12+ · Node.js 20.19+ · Docker / Docker Compose · Git。
+Python 3.12+ · Node.js 22.12–24.x · Docker / Docker Compose。
 
 ### 3.2 推荐：全栈 Compose（macOS / Linux / WSL）
 
@@ -141,7 +143,7 @@ curl -s http://127.0.0.1:3200/api/public/health   # Langfuse（observability pro
         Celery Worker（scan · clinic · webhook · lifecycle · replication · report-ingest · agent-insight）
 ```
 
-采集为 **Push-only**，但分两条入口：日常日报/周报由现场 Reporter 用长期可撤销 `dkr_report_*` credential 直接提交 `duckdock-structured-report-v1` JSON → `CollectionJob/WorkTrace/AIAsset/MemoryCandidate` 轻量入库；交接、审计或证据型材料再上传 `duckdock-pack-v1.zip` → MinIO → `report_upload` 状态机 → `analysis-worker` 标准化分析入库。后台运行时详情把两条链统一成员工/agent 时间线，并可用 `DUCKDOCK_LLM_*` 生成一键 AI 概览；模型不可用时显示 baseline 降级。服务端不外联厂商，`analysis-worker` 在开发 compose 中是可选 profile，可按积压队列水平扩容。
+采集为 **Push-only**，但分两条入口：日常日报/周报由现场 Reporter 用长期可撤销 `dkr_report_*` credential 直接提交 `duckdock-structured-report-v1` JSON → `CollectionJob/WorkTrace/AIAsset/MemoryCandidate` 轻量入库；交接、审计或证据型材料再上传 `duckdock-pack-v1.zip` → MinIO → `report_upload` 状态机 → `analysis-worker` 标准化分析入库。支持 v2 的在线 Reporter 还会先协商 Adapter profile/能力，并为每次执行写入 metadata-only Session/Run；Hermes 使用原生 `hermes-reporter` profile。后台运行时详情把两条链统一成员工/agent 时间线，并可用 `DUCKDOCK_LLM_*` 生成一键 AI 概览；模型不可用时显示 baseline 降级。服务端不外联厂商，`analysis-worker` 在开发 compose 中是可选 profile，可按积压队列水平扩容。
 
 ---
 
@@ -163,7 +165,7 @@ curl -s http://127.0.0.1:3200/api/public/health   # Langfuse（observability pro
 | 运行时连接 | provider（openclaw / jvs / arkclaw / workbuddy / custom）· 凭证 Fernet 加密落库（绝不回明文）· 上报链路自检 |
 | 资产盘点 | Push 上报采集 · `ai_asset` upsert + 归属推断 · `runtime_binding` |
 | 工作历程 / 证据 | 敏感级默认遮蔽 + reveal（权限 + 原因 + 审计）· 证据**限时签名下载 URL** · 越权尝试留痕 |
-| 交接闭环 | 建议（规则版 / 可选 LLM 顾问 + 置信度）→ 审批闸门 → 执行（manual 回执 / auto 探针）→ 验收归档,全程审计 |
+| 交接闭环 | 建议（规则版 / 可选 LLM 顾问 + 置信度）→ 审批闸门 → 人工执行回执 → 验收归档，全程审计；公开请求不提供尚未落地的自动执行模式 |
 | 敏感隔离 | 敏感工作历程 / 证据按 **ownership 过滤**（持提权键 / admin 不受限） |
 
 ### 企业特性
@@ -174,7 +176,7 @@ curl -s http://127.0.0.1:3200/api/public/health   # Langfuse（observability pro
 
 ## 6. API 入口
 
-所有 API 挂 `/api/v1` 前缀,共 **18 个路由组 · ~180 端点（含 95 个写端点）**：
+兼容 API 使用 `/api/v1`，新的运行证据、评测、发布和运维接口使用 `/api/v2`。实际端点与请求模型以运行实例的 `/docs` 和冻结的 v2 OpenAPI 契约为准，README 不维护容易失真的端点计数。
 
 ```
 auth  iam  namespaces  skills  clawhub  registry  scans  clinic  components
@@ -187,6 +189,15 @@ control_plane  analysis  people  audit  webhooks  robots  lifecycle  replication
 |---|---|
 | `/health` | 健康检查 |
 | `/docs` · `/redoc` | Swagger UI · ReDoc |
+| `/api/v2/reporter/sessions` · `/api/v2/reporter/runs` | `execution.write` ReporterCredential 驱动的 metadata-only Session/Run 生命周期 |
+| `/api/v2/reporter/telemetry-sinks/{sink_public_id}/v1/traces` | Generic OTLP Collector 的 credential-derived Run/Trace mapping 与 quarantine 投影 |
+| `/api/v2/reporter/pack-imports` | Pack/ATIF 严格 manifest 预检、签名上传、幂等导入初始化 |
+| `/api/v2/reporter/pack-imports/{public_id}` | Runtime-scoped 导入状态与 metadata-only Artifact 索引 |
+| `/api/v2/reporter/pack-imports/{public_id}/finalize` | 全包/逐 payload 摘要、归档安全、Run mapping 与 MinIO 物化 |
+| `/api/v2/reporter/handshakes` · `/api/v2/reporter/heartbeats` | credential-bound 动态能力协商、过期/重放与 heartbeat/config/Collector drift |
+| `/api/v2/fleet/runtimes` · 前端 `/fleet` | Namespace RBAC 的 Runtime 版本、能力、心跳历史、Collector 与漂移视图 |
+| `/api/v2/agent-runs` | Namespace RBAC、31 天有界时间窗与签名游标的 Run 管理查询 |
+| `/api/v2/reconciliation/*` | 系统管理员 v1/v2 对账健康、单 WorkTrace 查询与幂等重算 |
 | `/.well-known/clawhub.json` | ClawHub 私有注册表 discovery |
 
 ---
@@ -195,38 +206,17 @@ control_plane  analysis  people  audit  webhooks  robots  lifecycle  replication
 
 业务主库 **MySQL 8.x**（`mysql+aiomysql://…@mysql:3306/duckdock?charset=utf8mb4`，host 3307）。PostgreSQL 16 + ClickHouse 仅 `observability` profile 供自托管 Langfuse,**不承载业务数据**。
 
-Alembic 已有 **26 个正式迁移**（`backend/alembic/versions/`，当前 head **`20260709_0026`**）：
+迁移文件位于 `backend/alembic/versions/`。不要从文档中的固定数量或历史编号判断数据库状态；部署时必须以 Alembic 自身输出为准：
 
-| 迁移 | 内容 |
-|---|---|
-| `0001` baseline_schema | 基线 schema |
-| `0002` soft_delete_namespace_skill | namespace / skill 软删除 |
-| `0003` skill_version_package_metadata | skill 版本包元数据 |
-| `0004` enterprise_iam_foundation | 企业 IAM |
-| `0005` sandbox_validation_runs | sandbox 验证 |
-| `0006` governance_release_gate | 治理 / 发布门禁 |
-| `0007` namespace_sandbox_smoke_policy | namespace sandbox 策略 |
-| `0008` scanner_rule_suppressions | 扫描规则豁免 |
-| `0009` agent_control_plane | Agent 控制平面底座 |
-| `0010` adapter_runtime_foundation | 运行时适配底座 |
-| `0011` report_upload_sessions | 上报会话 |
-| `0012` user_handover_profiles | 人员交接画像 |
-| `0013` analysis_worker_pipeline | 分析 worker 管线 |
-| `0014` analysis_result_artifacts | 分析结果产物 |
-| `0015` credential_records | Fernet 凭证密文 |
-| `0016` execution_mode | 执行双模式（FR-019，manual 默认）|
-| `0017` handover_item_confidence | 交接建议置信度（T042）|
-| `0018` execution_action_idempotency | 执行动作幂等键 |
-| `0019` fk_ondelete_set_null | FK ON DELETE SET NULL（DM-03）|
-| `0020` clinic_ai_assist | clinic 评估 ai_assist 降级指示 |
-| `0021` execution_action_evidence_ids | 执行动作↔证据链（P3-03）|
-| `0022` execution_mode_default | execution_mode 默认值归一 |
-| `0023` clinic_trace_id | clinic 评估 Langfuse trace_id（L4-10）|
-| `0024` reporter_credentials | Reporter 自助长期凭证、轮换、心跳 |
-| `0025` agent_insight_jobs | 员工/agent 时间线 AI 概览任务 |
-| `0026` enterprise_identity_links | 企业 UID、SSO identity links、SSO claim/group 到 RBAC 映射 |
+```bash
+cd backend
+alembic heads
+alembic current
+alembic upgrade head
+alembic check
+```
 
-> 验收红线：**空 MySQL 必须能 `alembic upgrade head`**。注意迁移 `0009` 用活模型建表,因此给其 12 张控制平面表新增列的迁移必须幂等（inspector 守卫,见 `0021` / `0023`）。首启 / 升级后跑 `cd backend && alembic upgrade head`。
+空 MySQL 必须能够直接升级到唯一 head，已有数据库必须先备份再迁移。应用的 `/readyz` 和 Operations 页面会显示实际数据库 revision，但不能替代部署前检查。
 
 ---
 
@@ -238,13 +228,16 @@ CI（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）四个阻塞 job �
 
 **frontend**：`npm ci` → `eslint`（flat config,卡 unused / undefined / Hooks 误用）→ `vitest` → `npm run build`（含 `tsc`）。
 
-**e2e**：启动完整 DuckDock dev 栈，Playwright 运行 auth smoke + seeded handover closed-loop（`DEBUG=true E2E_AUTO_SEED=1`）。
+**e2e**：在隔离的开发/CI 数据库启动完整栈，Playwright 运行认证与交接闭环；造数工具在 `DEBUG=false` 时无条件拒绝执行。
 
-**compose**：校验默认 profile 只含 mysql/redis/minio/backend/worker/beat/frontend；`analysis-worker` / `observability` 不得默认开启。
+**compose**：校验默认 profile 只含 mysql/redis/minio/backend/worker/beat/frontend；`analysis-worker` / `observability` / `telemetry*` 不得默认开启。
 
-当前规模：后端约 **495 个测试函数 / 55 测试文件**（鉴权 · RBAC · 发布门禁 · 交接状态机 · 凭证加密 · worktrace reveal · 证据签名 · 敏感过滤 · 上报会话 FSM · Reporter Credential · 结构化报告 · worker 入库 · agent overview · LLM 顾问 · SSRF 校验 · 执行回执 + 证据上传 · 幂等 · 沙箱就绪 · 验收）；前端 **Vitest 5 文件 + Playwright 2 条 spec**。测试用内存 SQLite,外部依赖（MinIO / LLM）一律 mock；MySQL-lane 附加测试在 `TEST_MYSQL_URL` 未配置时跳过。
+OpenClaw Telemetry 使用可选 `telemetry` profile；
+Langfuse v4 导出使用独立 `telemetry-langfuse` profile，默认栈均不启动。
+参考配置、双格式 GenAI conformance、Secret Canary/exporter smoke 与生产边界见
+[`ops/otel-collector/README.md`](ops/otel-collector/README.md)。
 
-> 待补：WorkBuddy 重载后的周期自主执行复验 · 生产环境 backup→restore 演练 · 后端 service 长尾覆盖率抬升 · mypy 逐步收紧至 strict。Hermes 与 WorkBuddy 的 Reporter 接入路径已在隔离测试环境验证，详细验收步骤见集成验收指南。
+测试数量和通过数由 CI 产生，不在说明文档中硬编码。单元测试中的替身只能证明代码分支；涉及 MySQL、MinIO、Reporter、Langfuse、Prometheus 和恢复目标的生产判断必须使用对应环境的集成证据。
 
 ---
 
@@ -257,12 +250,15 @@ CI（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）四个阻塞 job �
 | App | `SECRET_KEY` · `DEBUG` · `BACKEND_BASE_URL` · `FRONTEND_BASE_URL` · `CORS_ORIGINS` |
 | MySQL（主库）| `MYSQL_DATABASE/USER/PASSWORD` · `DATABASE_URL`（`mysql+aiomysql://…`）|
 | Redis / MinIO | `REDIS_URL` · `MINIO_ROOT_*` · `MINIO_ACCESS/SECRET_KEY` · `MINIO_BUCKET` · `MINIO_ENDPOINT` · `MINIO_PUBLIC_ENDPOINT` |
+| Agent execution rollout | `AGENT_EXECUTION_INGESTION_ENABLED` · `AGENT_EXECUTION_RUNTIME_ALLOWLIST` |
 | 凭证加密 | `DUCKDOCK_CREDENTIAL_KEY`（Fernet,独立于 SECRET_KEY；`python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`）|
 | 签名 URL | `REGISTRY_SIGNED_URL_EXPIRE_SECONDS` · `REGISTRY_SIGNED_URL_MAX_SECONDS` · `REPORT_UPLOAD_URL_EXPIRE_SECONDS` |
+| Pack/ATIF | `PACK_IMPORT_MAX_COMPRESSED_BYTES` · `PACK_IMPORT_MAX_UNCOMPRESSED_BYTES` · `PACK_IMPORT_MAX_ENTRY_BYTES` · `PACK_IMPORT_MAX_PAYLOADS` · `PACK_IMPORT_MAX_COMPRESSION_RATIO` · `PACK_IMPORT_PENDING_TTL_SECONDS` |
+| Adapter/Fleet | `ADAPTER_HANDSHAKE_TTL_SECONDS` · `ADAPTER_HANDSHAKE_REPLAY_WINDOW_SECONDS` · `ADAPTER_MAX_CLOCK_SKEW_SECONDS` · `FLEET_HEARTBEAT_STALE_SECONDS` |
 | LLM（Clinic / Skill 生成 / 交接顾问 / analysis-worker / agent overview）| `CLINIC_LLM_*` · `SKILL_GEN_*` · `HANDOVER_LLM_ENABLED`（默认关）+ `HANDOVER_LLM_*` · `DUCKDOCK_LLM_*` · `ANTHROPIC_API_KEY` |
 | LLM 安全 | `LLM_ALLOW_PRIVATE_BASE_URL`（默认 false:拒私网/环回 base_url,SSRF 纵深防御）|
 | Sandbox | `SKILL_SANDBOX_*`（docker / ssh backend, 两级 gate）|
-| Langfuse（observability）| `LANGFUSE_SALT` · `LANGFUSE_ENCRYPTION_KEY`（必须 64 hex）· `LANGFUSE_NEXTAUTH_SECRET` · `LANGFUSE_INIT_*` · `CLINIC_LANGFUSE_ENABLED` |
+| Langfuse（observability）| `LANGFUSE_COMPATIBILITY_PROFILE` · `LANGFUSE_IMAGE_TAG` · `LANGFUSE_CLICKHOUSE_TAG` · `LANGFUSE_SALT` · `LANGFUSE_ENCRYPTION_KEY`（必须 64 hex）· `LANGFUSE_NEXTAUTH_SECRET` · `LANGFUSE_INIT_*` · `CLINIC_LANGFUSE_ENABLED` |
 
 > `MINIO_PUBLIC_ENDPOINT` 给签名 URL 用：本机开发与 `MINIO_ENDPOINT` 相同；生产里为对外可达域名。
 
@@ -272,7 +268,7 @@ CI（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）四个阻塞 job �
 
 - **后端镜像依赖变更后未生效**：执行 `bash scripts/dev.sh build backend`，然后重启 backend / worker / beat。
 - **`alembic upgrade head` 在空库 Duplicate column**：给 `0009` 控制平面表加列的迁移必须幂等（inspector 守卫）。
-- **Langfuse trace 静默丢失**：v3 不自动建 S3 bucket;确认 `langfuse-minio-init` 成功退出（`docker compose logs langfuse-minio-init` → `langfuse bucket ready`）。升级 SDK / 镜像前先跑 `backend/scripts/verify_langfuse.py`。
+- **Langfuse v4 读接口 404 / 升级验收**：不要再调用 legacy trace/session/observation API；使用 Observations API v2，并显式请求所需字段组。确认 `langfuse-minio-init` 成功、Collector 发送 `x-langfuse-ingestion-version: 4`；完整升级门禁执行 `bash scripts/verify-langfuse-upgrade.sh`，流程见 [`docs/langfuse-upgrade-runbook.zh-CN.md`](docs/langfuse-upgrade-runbook.zh-CN.md)。
 - **端口冲突 / 前端连不上后端**：后端端口是 **8801**（不是 8001）；`VITE_API_PROXY_TARGET` host 模式 `http://127.0.0.1:8801`、compose 模式 `http://backend:8801`。
 - **Worker 任务不跑**：`docker compose ps worker redis`,确认 Redis healthy + worker `celery@<host> ready`。
 
@@ -287,6 +283,7 @@ CI（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）四个阻塞 job �
 | [`control-plane-admin-guide.zh-CN.md`](docs/control-plane-admin-guide.zh-CN.md) | 控制平面管理员手册（权限收口 · 凭证 · Push 接入 · 交接生命周期 · reveal · 上线清单）|
 | [`duckdock-handbook.zh-CN.md`](docs/duckdock-handbook.zh-CN.md) | 使用手册：管理员 / 员工 / Reporter 接入 |
 | [`operations-runbook.zh-CN.md`](docs/operations-runbook.zh-CN.md) | 运维手册：单机 Compose · 组件 · 备份 · 排障 |
+| [`ga-production-authorization.zh-CN.md`](docs/ga-production-authorization.zh-CN.md) | 2.0 GA：目标环境证据、独立审计、四方签名与生产授权门禁 |
 | [`dev-operations.zh-CN.md`](docs/dev-operations.zh-CN.md) · [`ci.zh-CN.md`](docs/ci.zh-CN.md) | 本地开发运维 · CI 说明 |
 | [`port-plan.zh-CN.md`](docs/port-plan.zh-CN.md) · [`permission-matrix.zh-CN.md`](docs/permission-matrix.zh-CN.md) | 端口方案 · 权限矩阵 |
 | [`duckdock-runtime-mcp.zh-CN.md`](docs/duckdock-runtime-mcp.zh-CN.md) · [`workbuddy-reporter-validation.zh-CN.md`](docs/workbuddy-reporter-validation.zh-CN.md) | Runtime MCP 接入 · Reporter 集成验收指南 |
@@ -294,20 +291,34 @@ CI（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）四个阻塞 job �
 | `clinic-*.zh-CN.md` · `enterprise-iam-roadmap` · `next-development-roadmap` · `production-strengthening-plan` | Clinic / IAM / 路线 / 生产加固 |
 | `agent-control-plane-prd/` | 历史 PRD 与设计决策溯源（非当前操作规范）|
 
-> 需求走 `specs/<NNN>-<slug>/`（spec → plan → tasks）；代码从规格派生。当前主线规格:`005-completion-hardening`、`006-reporter-worker-pipeline`、`007-enterprise-identity-sso`；`001`–`003` 保留为已落地底座。
+> 需求走 `specs/<NNN>-<slug>/`（spec → plan → tasks）；代码从规格派生。当前主线规格包括 `008-duckdock-2-foundation` 与 `009-foundation-tenant-contract`；`001`–`007` 保留为既有底座与历史增强。
 
 ---
 
 ## 12. 生产部署清单
 
-`scripts/prod.sh` + [`docker-compose.prod.yml`](docker-compose.prod.yml)（nginx 单端口入口 + `migrate` one-shot + backend/worker 多副本；analysis-worker 为可选 profile）。上线前至少：
+单主机基线使用 `scripts/prod.sh`、[`docker-compose.prod.yml`](docker-compose.prod.yml)
+和强制 TLS overlay [`docker-compose.prod-tls.yml`](docker-compose.prod-tls.yml)；跨故障域
+基线在 [`ops/kubernetes/ha`](ops/kubernetes/ha)。上线前至少：
 
 - [ ] 替换 `.env.prod` 全部默认 secret（`SECRET_KEY` · `MYSQL_*` · `MINIO_ROOT_PASSWORD` · `DUCKDOCK_CREDENTIAL_KEY` · Langfuse 三件套）
-- [ ] MySQL / Redis / MinIO（+ observability 的 PG/ClickHouse）迁托管或加固实例 + 持久化卷 + 备份
-- [ ] 反向代理 + HTTPS;`MINIO_PUBLIC_ENDPOINT` 改对外域名;关 `DEBUG`
+- [ ] MySQL / Redis / S3 / RWX 仓库存储使用目标故障域内的 HA 服务，并收紧默认拒绝 NetworkPolicy 的 egress
+- [ ] 用 `scripts/prepare-kubernetes-ha-target.py` 生成并复验三阶段目标包；server dry-run 后等待 commit-bound migration 成功再滚应用
+- [ ] 用 `scripts/deploy-kubernetes-ha-target.py` 重验签名 campaign/provenance/集群访问，绑定目标 UID/principal、三 zone、Secret/TLS/RWX/RBAC，凭 `target_deployment` phase permit、变更单和精确确认串部署并保存成功/不完整回执
+- [ ] TLS 证书覆盖 application/object 两个域名；公网扫描确认只有 443，关 `DEBUG`
+- [ ] Alertmanager firing/resolved 均送达真实 on-call；异地 age 加密、签名、object-lock 备份完成破坏性恢复
+- [ ] 至少 900 秒、声明 RPS 以上且 50,000+ Run 的容量/数据增长门禁通过
+- [ ] 九份 GA trust policy/公钥通过全局职责分离预检；发布机构审阅绑定 release/target、独立恢复目标、新 evidence root 和 15-phase DAG 的不可覆盖执行 campaign
+- [ ] 九个风险 phase（含 `target_deployment`）均由原 Operations 授权 identity 在活动窗口、依赖完成后签署独立 start interlock；动作/回执时间不早于许可
 - [ ] 至少一个 Celery worker 常驻;`alembic upgrade head` 对齐 schema
 - [ ] 第一个注册账号用企业管理员邮箱（自动成 admin）
 - [ ] 核心栈启动后在 `/analysis` 创建 Worker token，填入 `.env.prod.enc`，再 `bash scripts/prod.sh worker`
+- [ ] 独立安全机构完成 exact commit/image 评估且 Critical/High 为零
+- [ ] Product、Architecture、Security、Operations 四个不同身份签署相同 release digest；最终门禁输出 `GA_AUTHORIZED`
+
+清单勾选不是机器授权。最终必须执行
+[`docs/ga-production-authorization.zh-CN.md`](docs/ga-production-authorization.zh-CN.md)
+中的内容寻址证据与 OpenSSH 四方签名流程。
 
 ---
 

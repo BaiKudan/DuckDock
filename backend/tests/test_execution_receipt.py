@@ -10,6 +10,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 from starlette.datastructures import UploadFile
 from sqlalchemy import select
 
@@ -579,7 +580,7 @@ async def test_invalid_receipt_result_rejected(async_session):
     assert action.status == ExecutionStatus.PENDING  # 未被污染
 
 
-async def test_execute_with_auto_mode_returns_501_without_creating_actions(async_session):
+async def test_execute_request_rejects_unavailable_auto_mode(async_session):
     admin = await _make_user(async_session, username="admin-er5", system_role=SystemRole.ADMIN)
     approver = await _make_user(async_session, username="approver-er5")
     namespace = await _make_namespace(async_session, admin)
@@ -616,15 +617,12 @@ async def test_execute_with_auto_mode_returns_501_without_creating_actions(async
         case.id, approvals[0].id, ApprovalDecision(decision=ApprovalStatus.APPROVED), async_session, approver
     )
 
-    with pytest.raises(HTTPException) as exc:
-        await execute_handover(
-            case.id, ExecuteHandoverRequest(execution_mode=ExecutionMode.AUTO), async_session, admin
-        )
+    with pytest.raises(ValidationError):
+        ExecuteHandoverRequest(execution_mode=ExecutionMode.AUTO)
     actions = (
         await async_session.execute(select(ExecutionAction).where(ExecutionAction.handover_case_id == case.id))
     ).scalars().all()
 
-    assert exc.value.status_code == 501
     assert actions == []
     assert case.status == HandoverStatus.APPROVED
 

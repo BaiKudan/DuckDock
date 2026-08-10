@@ -254,8 +254,8 @@ backend/app/clinic_assets/
   judge_prompts/
     dimension_judge.v1.md
     namespace_summary.v1.md
-  fixtures/
-    clinic_golden_set.v1.jsonl
+backend/tests/fixtures/
+  clinic_golden_set.v1.jsonl
 ```
 
 ## 8. 确定性事实提取器

@@ -1,0 +1,90 @@
+{
+  "schema_version": "duckdock-ga-build-provenance-report-v1",
+  "release_version": "2.0.0",
+  "git_ref": "refs/tags/v2.0.0",
+  "git_commit": "__CHANGE_ME_40_HEX_GIT_COMMIT__",
+  "tag_object": {
+    "path": "__CHANGE_ME_CAPTURED_V2_TAG_OBJECT_PATH__",
+    "sha256": "__CHANGE_ME_64_HEX__"
+  },
+  "tag_signature_verified": true,
+  "tag_verification_output": {
+    "path": "__CHANGE_ME_TAG_VERIFICATION_OUTPUT_PATH__",
+    "sha256": "__CHANGE_ME_64_HEX__"
+  },
+  "source_repository": "https://github.com/BaiKudan/DuckDock",
+  "source_tree_sha256": "__CHANGE_ME_64_HEX__",
+  "source_archive": {
+    "path": "__CHANGE_ME_DETERMINISTIC_SOURCE_ARCHIVE_PATH__",
+    "sha256": "__CHANGE_ME_64_HEX__",
+    "size_bytes": 1
+  },
+  "contract_digest": "aa260f301acc5c3a8004d14980952a03ce0197f9d70dcdd78cd62e986c3b1a83",
+  "build_started_at": "2026-08-06T00:00:00Z",
+  "build_finished_at": "2026-08-06T00:15:00Z",
+  "builder": {
+    "builder_id": "__CHANGE_ME_EXACT_BUILDKIT_SLSA_BUILDER_ID__",
+    "workflow_ref": "BaiKudan/DuckDock/.github/workflows/ci.yml@refs/tags/v2.0.0",
+    "workflow_run_id": "__CHANGE_ME_WORKFLOW_RUN_ID__",
+    "workflow_run_url": "https://github.com/BaiKudan/DuckDock/actions/runs/__CHANGE_ME_RUN_ID__",
+    "build_invocation_id": "__CHANGE_ME_BUILDKIT_INVOCATION_ID__"
+  },
+  "artifacts": {
+    "backend": {
+      "image": "registry.example.invalid/duckdock/backend@sha256:__CHANGE_ME_64_HEX__",
+      "attestation_image": "registry.example.invalid/duckdock/backend@sha256:__CHANGE_ME_INDEX_64_HEX__",
+      "registry_provenance": {
+        "path": "__CHANGE_ME_BACKEND_EXPORTED_BUILDKIT_SLSA_PREDICATE_PATH__",
+        "sha256": "__CHANGE_ME_64_HEX__"
+      },
+      "slsa": {
+        "path": "__CHANGE_ME_BACKEND_SLSA_V1_PATH__",
+        "sha256": "__CHANGE_ME_64_HEX__"
+      },
+      "registry_sbom": {
+        "path": "__CHANGE_ME_BACKEND_EXPORTED_BUILDKIT_SPDX_PREDICATE_PATH__",
+        "sha256": "__CHANGE_ME_64_HEX__"
+      },
+      "sbom": {
+        "path": "__CHANGE_ME_BACKEND_SPDX_2_3_STATEMENT_PATH__",
+        "sha256": "__CHANGE_ME_64_HEX__"
+      },
+      "scout_sarif": {
+        "path": "__CHANGE_ME_BACKEND_SCOUT_SARIF_PATH__",
+        "sha256": "__CHANGE_ME_64_HEX__"
+      },
+      "vulnerability_scan": {
+        "path": "__CHANGE_ME_BACKEND_SCAN_PATH__",
+        "sha256": "__CHANGE_ME_64_HEX__"
+      }
+    },
+    "frontend": {
+      "image": "registry.example.invalid/duckdock/frontend@sha256:__CHANGE_ME_64_HEX__",
+      "attestation_image": "registry.example.invalid/duckdock/frontend@sha256:__CHANGE_ME_INDEX_64_HEX__",
+      "registry_provenance": {
+        "path": "__CHANGE_ME_FRONTEND_EXPORTED_BUILDKIT_SLSA_PREDICATE_PATH__",
+        "sha256": "__CHANGE_ME_64_HEX__"
+      },
+      "slsa": {
+        "path": "__CHANGE_ME_FRONTEND_SLSA_V1_PATH__",
+        "sha256": "__CHANGE_ME_64_HEX__"
+      },
+      "registry_sbom": {
+        "path": "__CHANGE_ME_FRONTEND_EXPORTED_BUILDKIT_SPDX_PREDICATE_PATH__",
+        "sha256": "__CHANGE_ME_64_HEX__"
+      },
+      "sbom": {
+        "path": "__CHANGE_ME_FRONTEND_SPDX_2_3_STATEMENT_PATH__",
+        "sha256": "__CHANGE_ME_64_HEX__"
+      },
+      "scout_sarif": {
+        "path": "__CHANGE_ME_FRONTEND_SCOUT_SARIF_PATH__",
+        "sha256": "__CHANGE_ME_64_HEX__"
+      },
+      "vulnerability_scan": {
+        "path": "__CHANGE_ME_FRONTEND_SCAN_PATH__",
+        "sha256": "__CHANGE_ME_64_HEX__"
+      }
+    }
+  }
+}

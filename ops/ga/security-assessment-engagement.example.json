@@ -1,0 +1,63 @@
+{
+  "schema_version": "duckdock-ga-security-assessment-engagement-v1",
+  "engagement_id": "__CHANGE_ME_ENGAGEMENT_ID__",
+  "security_authorizer_identity": "__CHANGE_ME_SECURITY_ROLE_IDENTITY__",
+  "provider": "__CHANGE_ME_INDEPENDENT_ASSESSOR_PROVIDER__",
+  "assessor_identity": "__CHANGE_ME_INDEPENDENT_ASSESSOR_SIGNER_IDENTITY__",
+  "target_environment": "__CHANGE_ME_TARGET_ID__",
+  "source_commit": "__CHANGE_ME_40_HEX_GIT_COMMIT__",
+  "images": {
+    "backend": {"name": "registry.example.invalid/duckdock/backend@sha256:__CHANGE_ME_64_HEX__"},
+    "frontend": {"name": "registry.example.invalid/duckdock/frontend@sha256:__CHANGE_ME_64_HEX__"}
+  },
+  "contract_digest": "__CHANGE_ME_64_HEX__",
+  "scope": [
+    "application-and-api",
+    "identity-and-access",
+    "kubernetes-infrastructure",
+    "supply-chain",
+    "agent-security"
+  ],
+  "methodologies": ["penetration-test", "manual-code-review", "dependency-analysis"],
+  "authorization_window": {
+    "starts_at": "__CHANGE_ME_RFC3339_START__",
+    "expires_at": "__CHANGE_ME_RFC3339_EXPIRY_MAX_30_DAYS__"
+  },
+  "permitted_sources": {
+    "cidrs": ["__CHANGE_ME_CANONICAL_NON_WILDCARD_SOURCE_CIDR__"],
+    "system_ids": ["__CHANGE_ME_ASSESSOR_SYSTEM_ID__"]
+  },
+  "test_account_ids": ["__CHANGE_ME_NONSECRET_TEST_ACCOUNT_ID__"],
+  "safety": {
+    "prohibited_actions": [
+      "denial-of-service",
+      "destructive-data-modification",
+      "physical-security-testing",
+      "production-data-exfiltration",
+      "persistence-or-backdoors",
+      "social-engineering",
+      "third-party-systems-outside-target"
+    ],
+    "stop_authorities": ["Operations", "Security"],
+    "emergency_contacts": [
+      "__CHANGE_ME_SECURITY_EMERGENCY_CONTACT__",
+      "__CHANGE_ME_OPERATIONS_EMERGENCY_CONTACT__"
+    ],
+    "stop_acknowledgement_sla_minutes": 15
+  },
+  "data_handling": {
+    "artifacts_encrypted_at_rest": true,
+    "secret_material_recording_allowed": false,
+    "production_data_retention_allowed": false,
+    "deletion_attestation_required": true,
+    "delete_by": "__CHANGE_ME_RFC3339_DELETE_BY_MAX_90_DAYS_AFTER_WINDOW__"
+  },
+  "deliverables": {
+    "signed_machine_readable_report": true,
+    "final_pdf": true,
+    "finding_level_evidence": true,
+    "critical_high_retest_required": true,
+    "deletion_attestation": true
+  },
+  "authorized_at": "__CHANGE_ME_RFC3339_AUTHORIZED_AT__"
+}

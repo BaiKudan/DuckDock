@@ -71,6 +71,7 @@ class RuntimeInstanceOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    public_id: str
     namespace_id: int | None
     provider: RuntimeProvider
     name: str
@@ -763,7 +764,7 @@ class WorkArtifactOut(BaseModel):
 
 
 class WorkTraceRevealRequest(BaseModel):
-    """FR-008:查看完整内容必须填写原因(将进入审计日志)。"""
+    """请求查看完整工作轨迹；原因必填并写入审计日志。"""
 
     reason: str = Field(min_length=5, max_length=512)
 
@@ -793,7 +794,7 @@ class EvidenceItemOut(BaseModel):
 
 
 class EvidenceDownloadLinkRequest(BaseModel):
-    """FR-009:签发证据下载 URL 必须填写原因(进审计);可选自定义有效期(服务端 clamp 上下界)。"""
+    """请求限时证据下载链接；原因必填并接受服务端有效期约束。"""
 
     reason: str = Field(min_length=5, max_length=512)
     expires_in: int | None = Field(
@@ -802,7 +803,7 @@ class EvidenceDownloadLinkRequest(BaseModel):
 
 
 class EvidenceDownloadLinkOut(BaseModel):
-    """限时预签名下载链接(原则 V:必带过期)。
+    """带有效期的预签名证据下载链接。
 
     object_uri 指向报告包内部条目时,签名的是**所在归档对象**,`archive_path` 给出归档内路径、
     `is_archive_member=True` —— 客户端下载归档后按该路径自行提取。原始 object_uri / 桶名不外泄。
@@ -824,6 +825,7 @@ class HandoverCaseCreate(BaseModel):
     subject_user_id: int | None = None
     namespace_id: int
     receiver_user_id: int | None = None
+    fallback_owner_user_id: int | None = None
     due_at: datetime | None = None
     runtime_ids: list[int] = Field(default_factory=list)
     collection_scope: CollectionScope = Field(default_factory=CollectionScope)
@@ -834,6 +836,7 @@ class HandoverCaseUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=255)
     subject_user_id: int | None = None
     receiver_user_id: int | None = None
+    fallback_owner_user_id: int | None = None
     due_at: datetime | None = None
 
     @field_validator("title")
@@ -856,6 +859,7 @@ class HandoverCaseOut(BaseModel):
     subject_user_id: int | None
     namespace_id: int | None
     receiver_user_id: int | None
+    fallback_owner_user_id: int | None
     status: HandoverStatus
     risk_level: Criticality
     due_at: datetime | None
@@ -863,11 +867,6 @@ class HandoverCaseOut(BaseModel):
     created_by: int | None
     created_at: datetime
     updated_at: datetime
-
-
-class DemoDataCleanupOut(BaseModel):
-    deleted: dict[str, int]
-    protected: dict[str, int]
 
 
 class HandoverItemCreate(BaseModel):
@@ -944,11 +943,11 @@ class ExecutionActionOut(BaseModel):
 class ExecuteHandoverRequest(BaseModel):
     idempotency_key: str | None = Field(default=None, max_length=128)
     selected_item_ids: list[int] | None = None
-    execution_mode: ExecutionMode = ExecutionMode.MANUAL
+    execution_mode: Literal[ExecutionMode.MANUAL] = ExecutionMode.MANUAL
 
 
 class ExecutionReceipt(BaseModel):
-    """FR-019 manual 回执:结果 + 说明(说明进入审计与 USER_CONFIRM 证据)。"""
+    """Record the result and evidence of a manually executed handover action."""
 
     result: ExecutionStatus
     note: str = Field(min_length=2, max_length=1000)
@@ -957,12 +956,12 @@ class ExecutionReceipt(BaseModel):
 
 
 class HandoverVerifyRequest(BaseModel):
-    """US-006 验收归档:接收人/管理者确认交接完成(说明进入审计与证据)。"""
+    """Archive a handover after the receiver or manager verifies completion."""
 
     note: str | None = Field(default=None, max_length=1000)
     acknowledge_failures: bool = Field(
         default=False,
-        description="HANDOVER-05:存在 FAILED 执行动作/交接项时,必须显式置 True 才能将 case 标记 COMPLETED。",
+        description="Must be true to archive a handover that contains failed actions or items.",
     )
 
 

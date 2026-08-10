@@ -35,8 +35,8 @@ from app.services.tenant_write_service import (
     require_active_namespace,
 )
 
-# Push-only(specs/001 Phase 8 T081):外联采集 run_collection_job_now 已退役。
-# 仅保留 backup 上传导入 + 归一化落库(下方),后者由 Push 上报链路共用。
+# 主动外联采集已退役。这里只保留可信备份上传导入与归一化落库，
+# 并与 Reporter 推送链路共用相同的数据写入流程。
 
 
 async def ingest_openclaw_backup(db, *, runtime: RuntimeInstance, content: bytes, filename: str | None = None) -> CollectionJob:

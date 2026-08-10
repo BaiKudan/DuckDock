@@ -96,6 +96,8 @@ export function SelectField({
   );
 }
 
+// This component-kit module intentionally also exposes one pure display helper.
+// eslint-disable-next-line react-refresh/only-export-components
 export function formatBytes(bytes: number) {
   if (!bytes) {
     return "0 B";

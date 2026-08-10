@@ -1,0 +1,98 @@
+{
+  "schema_version": "duckdock-kubernetes-ha-failover-v2",
+  "scope": "target-production",
+  "status": "PASS",
+  "passed": true,
+  "observed_at": "2026-08-05T00:00:00Z",
+  "target_environment": "__CHANGE_ME_TARGET_ID__",
+  "cluster_context": "__CHANGE_ME_EXACT_KUBE_CONTEXT__",
+  "namespace": "duckdock",
+  "source_commit": "__CHANGE_ME_40_HEX_GIT_COMMIT__",
+  "images": {
+    "backend": {"name": "registry.example.invalid/duckdock/backend@sha256:__CHANGE_ME_64_HEX__"},
+    "frontend": {"name": "registry.example.invalid/duckdock/frontend@sha256:__CHANGE_ME_64_HEX__"}
+  },
+  "fault_domains": ["__CHANGE_ME_ZONE_A__", "__CHANGE_ME_ZONE_B__"],
+  "cluster_nodes": [
+    {"node": "node-a", "zone": "__CHANGE_ME_ZONE_A__", "ready": true, "schedulable": true, "control_plane": false},
+    {"node": "node-c", "zone": "__CHANGE_ME_ZONE_A__", "ready": true, "schedulable": true, "control_plane": false},
+    {"node": "node-b", "zone": "__CHANGE_ME_ZONE_B__", "ready": true, "schedulable": true, "control_plane": false},
+    {"node": "node-d", "zone": "__CHANGE_ME_ZONE_B__", "ready": true, "schedulable": true, "control_plane": false},
+    {"node": "node-e", "zone": "__CHANGE_ME_ZONE_B__", "ready": true, "schedulable": true, "control_plane": false}
+  ],
+  "fault_domains_exercised": 2,
+  "replica_counts": {"backend": 3, "frontend": 3, "worker": 3, "beat": 1},
+  "before": {
+    "backend": {"ready_replicas": 3, "pods": [{"pod": "backend-a", "node": "node-a", "zone": "__CHANGE_ME_ZONE_A__", "ready": true}, {"pod": "backend-b", "node": "node-b", "zone": "__CHANGE_ME_ZONE_B__", "ready": true}, {"pod": "backend-c", "node": "node-c", "zone": "__CHANGE_ME_ZONE_A__", "ready": true}]},
+    "frontend": {"ready_replicas": 3, "pods": [{"pod": "frontend-a", "node": "node-a", "zone": "__CHANGE_ME_ZONE_A__", "ready": true}, {"pod": "frontend-b", "node": "node-b", "zone": "__CHANGE_ME_ZONE_B__", "ready": true}, {"pod": "frontend-c", "node": "node-c", "zone": "__CHANGE_ME_ZONE_A__", "ready": true}]},
+    "worker": {"ready_replicas": 3, "pods": [{"pod": "worker-a", "node": "node-a", "zone": "__CHANGE_ME_ZONE_A__", "ready": true}, {"pod": "worker-b", "node": "node-b", "zone": "__CHANGE_ME_ZONE_B__", "ready": true}, {"pod": "worker-c", "node": "node-c", "zone": "__CHANGE_ME_ZONE_A__", "ready": true}]},
+    "beat": {"ready_replicas": 1, "pods": [{"pod": "beat-a", "node": "node-a", "zone": "__CHANGE_ME_ZONE_A__", "ready": true}]}
+  },
+  "after_zone_drain": {
+    "backend": {"ready_replicas": 3, "pods": [{"pod": "backend-d", "node": "node-b", "zone": "__CHANGE_ME_ZONE_B__", "ready": true}, {"pod": "backend-e", "node": "node-d", "zone": "__CHANGE_ME_ZONE_B__", "ready": true}, {"pod": "backend-f", "node": "node-e", "zone": "__CHANGE_ME_ZONE_B__", "ready": true}]},
+    "frontend": {"ready_replicas": 3, "pods": [{"pod": "frontend-d", "node": "node-b", "zone": "__CHANGE_ME_ZONE_B__", "ready": true}, {"pod": "frontend-e", "node": "node-d", "zone": "__CHANGE_ME_ZONE_B__", "ready": true}, {"pod": "frontend-f", "node": "node-e", "zone": "__CHANGE_ME_ZONE_B__", "ready": true}]},
+    "worker": {"ready_replicas": 3, "pods": [{"pod": "worker-d", "node": "node-b", "zone": "__CHANGE_ME_ZONE_B__", "ready": true}, {"pod": "worker-e", "node": "node-d", "zone": "__CHANGE_ME_ZONE_B__", "ready": true}, {"pod": "worker-f", "node": "node-e", "zone": "__CHANGE_ME_ZONE_B__", "ready": true}]},
+    "beat": {"ready_replicas": 1, "pods": [{"pod": "beat-b", "node": "node-b", "zone": "__CHANGE_ME_ZONE_B__", "ready": true}]}
+  },
+  "after_zone_return_and_rolling_rebalance": {
+    "backend": {"ready_replicas": 3, "pods": [{"pod": "backend-g", "node": "node-a", "zone": "__CHANGE_ME_ZONE_A__", "ready": true}, {"pod": "backend-h", "node": "node-b", "zone": "__CHANGE_ME_ZONE_B__", "ready": true}, {"pod": "backend-i", "node": "node-c", "zone": "__CHANGE_ME_ZONE_A__", "ready": true}]},
+    "frontend": {"ready_replicas": 3, "pods": [{"pod": "frontend-g", "node": "node-a", "zone": "__CHANGE_ME_ZONE_A__", "ready": true}, {"pod": "frontend-h", "node": "node-b", "zone": "__CHANGE_ME_ZONE_B__", "ready": true}, {"pod": "frontend-i", "node": "node-c", "zone": "__CHANGE_ME_ZONE_A__", "ready": true}]},
+    "worker": {"ready_replicas": 3, "pods": [{"pod": "worker-g", "node": "node-a", "zone": "__CHANGE_ME_ZONE_A__", "ready": true}, {"pod": "worker-h", "node": "node-b", "zone": "__CHANGE_ME_ZONE_B__", "ready": true}, {"pod": "worker-i", "node": "node-c", "zone": "__CHANGE_ME_ZONE_A__", "ready": true}]},
+    "beat": {"ready_replicas": 1, "pods": [{"pod": "beat-b", "node": "node-b", "zone": "__CHANGE_ME_ZONE_B__", "ready": true}]}
+  },
+  "fault_injection": {
+    "drained_nodes": ["node-a", "node-c"],
+    "drained_node": "__CHANGE_ME_DRAINED_NODE__",
+    "drained_zone": "__CHANGE_ME_ZONE_A__",
+    "recovery_seconds": 0,
+    "node_failover_passed": true,
+    "zone_failover_passed": true,
+    "beat_recovery_passed": true,
+    "beat_original_node": "__CHANGE_ME_DRAINED_NODE__",
+    "beat_recovery_node": "__CHANGE_ME_RECOVERY_NODE__"
+  },
+  "availability_probe": {
+    "transport": "network HTTPS against target",
+    "base_url": "https://duckdock.example.invalid",
+    "sample_count": 5,
+    "failure_count": 0,
+    "passed": true,
+    "samples": [
+      {"observed_at": "2026-08-05T00:00:00Z", "passed": true, "status_code": 200},
+      {"observed_at": "2026-08-05T00:00:01Z", "passed": true, "status_code": 200},
+      {"observed_at": "2026-08-05T00:00:02Z", "passed": true, "status_code": 200},
+      {"observed_at": "2026-08-05T00:00:03Z", "passed": true, "status_code": 200},
+      {"observed_at": "2026-08-05T00:00:04Z", "passed": true, "status_code": 200}
+    ]
+  },
+  "network_policy": {
+    "enforcement_exercised": true,
+    "passed": true,
+    "evidence": {
+      "path": "__CHANGE_ME_NETWORK_EVIDENCE_PATH__",
+      "sha256": "__CHANGE_ME_64_HEX__"
+    }
+  },
+  "state_services": {
+    "managed_mysql_ha": true,
+    "managed_redis_ha": true,
+    "object_store_ha": true,
+    "rwx_repository_storage_ha": true,
+    "failover_exercised": true,
+    "data_integrity_passed": true,
+    "evidence": {
+      "path": "__CHANGE_ME_STATE_SERVICES_EVIDENCE_PATH__",
+      "sha256": "__CHANGE_ME_64_HEX__",
+      "signer_identity": "__CHANGE_ME_OPERATIONS_SIGNER_IDENTITY__",
+      "signature_path": "__CHANGE_ME_STATE_SERVICES_SIGNATURE_PATH__",
+      "approval_policy_id": "__CHANGE_ME_RELEASE_AUTHORITY_POLICY_ID__",
+      "approval_policy_sha256": "__CHANGE_ME_64_HEX__"
+    }
+  },
+  "cleanup": {
+    "restored_nodes": ["node-a", "node-c"],
+    "errors": [],
+    "passed": true
+  },
+  "exercise_error": null
+}

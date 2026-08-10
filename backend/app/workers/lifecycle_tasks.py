@@ -135,7 +135,16 @@ async def _async_gc(namespace_id: int):
                         namespace.name, skill.name, v.tag
                     )
                 except Exception:
-                    pass
+                    # Database retention must continue even if the optional Git
+                    # tag cleanup fails, while operators still need a signal to
+                    # reconcile the orphaned tag.
+                    logger.exception(
+                        "Failed to delete Git tag during retention GC "
+                        "(namespace_id=%s, skill_id=%s, version_id=%s)",
+                        namespace.id,
+                        skill.id,
+                        v.id,
+                    )
                 await db.delete(v)
 
         db.add(

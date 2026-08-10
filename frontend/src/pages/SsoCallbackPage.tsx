@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { AlertTriangle, Hexagon, Loader2 } from "lucide-react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "../router";
 import { authApi, iamApi } from "../api/client";
 import { defaultRouteForUser, safeInternalRoute } from "../authRoutes";
 import { IconTile } from "../components/ui";

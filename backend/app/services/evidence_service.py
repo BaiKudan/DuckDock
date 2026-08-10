@@ -1,6 +1,6 @@
-"""证据对象签名下载(FR-009 / specs/001 T013)。
+"""证据对象的限时签名下载。
 
-对外签发**限时**预签名下载 URL(宪法原则 V:对外签名 URL 必须设过期)。
+所有对外预签名下载 URL 都必须设置过期时间。
 
 `EvidenceItem.object_uri` 形如 ``s3://{bucket}/{key}``;来自报告包内部的证据再带
 ``#<archive 内路径>`` 片段(见 report_pack_service)。S3/MinIO 只能对**整个对象**签名,

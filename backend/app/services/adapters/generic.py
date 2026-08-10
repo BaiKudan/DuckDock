@@ -14,9 +14,15 @@ class GenericRuntimeAdapter(BaseRuntimeAdapter):
 
     async def test_connection(self) -> AdapterConnectionResult:
         return AdapterConnectionResult(
-            status="ok",
-            message="Generic adapter is available. Configure a provider-specific adapter for live collection.",
-            details={"base_url": self.runtime.base_url, "provider": self.runtime.provider.value},
+            status="degraded",
+            message=(
+                "Generic adapter has no live provider connection. "
+                "Complete a profile handshake and health probe."
+            ),
+            details={
+                "provider": self.runtime.provider.value,
+                "reason_code": "dynamic_handshake_required",
+            },
         )
 
     async def list_capabilities(self) -> AdapterCapabilities:

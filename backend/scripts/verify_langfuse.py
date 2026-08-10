@@ -6,7 +6,7 @@ Mirrors exactly the call pattern in app/services/langfuse_service.py:
   2. open a parent span (start_as_current_observation as_type="span")
   3. open a nested generation (as_type="generation")
   4. flush
-  5. query back via client.api.trace.list with name + time window
+  5. query back via client.api.observations.get_many with name + time window
   6. resolve trace_url via client.get_trace_url
 
 Run from repo root:
@@ -114,48 +114,52 @@ def main() -> int:
     from_ts = started - timedelta(minutes=2)
     to_ts = started + timedelta(hours=1)
     try:
-        traces = client.api.trace.list(
+        observations = client.api.observations.get_many(
+            fields="core,basic,metadata",
             name="clinic-evaluation",
             limit=20,
-            order_by="timestamp.desc",
-            from_timestamp=from_ts,
-            to_timestamp=to_ts,
+            from_start_time=from_ts,
+            to_start_time=to_ts,
         )
     except Exception as exc:
-        print(f"[FAIL] trace.list: {type(exc).__name__}: {exc}")
+        print(f"[FAIL] observations.get_many: {type(exc).__name__}: {exc}")
         return 5
-    print(f"[ok]  trace.list returned {len(traces.data)} rows")
+    print(f"[ok]  observations.get_many returned {len(observations.data)} rows")
 
     match = None
-    for t in traces.data:
-        meta = t.metadata or {}
+    for observation in observations.data:
+        meta = observation.metadata or {}
         if meta.get("clinic_evaluation_id") == eval_id:
-            match = t
+            match = observation
             break
     if match is None:
-        print(f"[FAIL] no trace with clinic_evaluation_id={eval_id}")
+        print(f"[FAIL] no observation with clinic_evaluation_id={eval_id}")
         # Dump first few to help diagnose
-        for t in traces.data[:3]:
-            print(f"        candidate id={t.id} name={t.name} meta={t.metadata}")
+        for observation in observations.data[:3]:
+            print(
+                "        candidate "
+                f"id={observation.id} name={observation.name} "
+                f"meta={observation.metadata}"
+            )
         return 6
 
-    print(f"[ok]  trace matched · id={match.id}")
+    if not match.trace_id:
+        print(f"[FAIL] matched observation {match.id} has no trace_id")
+        return 6
+
+    print(f"[ok]  observation matched · id={match.id} trace_id={match.trace_id}")
     print(f"       name={match.name}")
     print(f"       metadata.clinic_evaluation_id={match.metadata.get('clinic_evaluation_id')}")
 
     # get_trace_url
     try:
-        url = client.get_trace_url(trace_id=match.id)
+        url = client.get_trace_url(trace_id=match.trace_id)
         print(f"[ok]  get_trace_url → {url}")
     except Exception as exc:
         print(f"[FAIL] get_trace_url: {type(exc).__name__}: {exc}")
         return 7
 
-    # trace.html_path is read by langfuse_service as a fallback
-    html_path = getattr(match, "html_path", "__MISSING__")
-    print(f"[info] trace.html_path attr = {html_path!r}")
-
-    print("\n[SUCCESS] SDK 4.x <-> server 3.166 round-trip OK for clinic pattern")
+    print("\n[SUCCESS] SDK 4.x <-> server v4 round-trip OK for clinic pattern")
     return 0
 
 

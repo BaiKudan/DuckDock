@@ -110,6 +110,62 @@ class ArtifactStorageService:
             f"{self._segment(report_id)}/{safe_filename}"
         )
 
+    def pack_import_staging_object_key(
+        self,
+        *,
+        namespace_id: int,
+        runtime_id: int,
+        pack_id: str,
+        sha256: str,
+    ) -> str:
+        return (
+            "trajectory-imports/packs/"
+            f"namespace-{namespace_id}/runtime-{runtime_id}/"
+            f"{self._segment(pack_id)}/{sha256}.zip"
+        )
+
+    def pack_import_artifact_object_key(
+        self,
+        *,
+        namespace_id: int,
+        run_public_id: str,
+        sha256: str,
+        filename: str,
+    ) -> str:
+        return (
+            "trajectory-imports/artifacts/"
+            f"namespace-{namespace_id}/{self._segment(run_public_id)}/"
+            f"{sha256}/{self._segment(filename)}"
+        )
+
+    def pack_export_object_key(
+        self,
+        *,
+        namespace_id: int,
+        runtime_id: int,
+        run_public_id: str,
+        pack_id: str,
+    ) -> str:
+        return (
+            "trajectory-exports/packs/"
+            f"namespace-{namespace_id}/runtime-{runtime_id}/"
+            f"{self._segment(run_public_id)}/{self._segment(pack_id)}.zip"
+        )
+
+    def package_sbom_object_key(
+        self,
+        *,
+        namespace_id: int,
+        package_public_id: str,
+        package_version: str,
+        sha256: str,
+    ) -> str:
+        return (
+            "package-registry/sboms/"
+            f"namespace-{namespace_id}/{self._segment(package_public_id)}/"
+            f"{self._segment(package_version)}/{sha256}.json"
+        )
+
     def report_analysis_result_object_key(self, *, report_id: str, job_id: int, filename: str = "analysis-result.json") -> str:
         safe_filename = self._segment(filename)
         created = datetime.now(timezone.utc)
@@ -145,6 +201,57 @@ class ArtifactStorageService:
             self.data_client.delete_object(Bucket=self.bucket, Key=object_key)
         except ClientError:
             pass
+
+    def delete_object(self, object_key: str) -> None:
+        """Best-effort deletion for a fully resolved internal object key."""
+
+        self._delete_object(object_key)
+
+    async def delete_object_async(self, object_key: str) -> None:
+        await asyncio.to_thread(self.delete_object, object_key)
+
+    def put_object_bytes(
+        self,
+        *,
+        object_key: str,
+        payload: bytes,
+        content_type: str,
+        metadata: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        self._ensure_bucket()
+        try:
+            self.data_client.put_object(
+                Bucket=self.bucket,
+                Key=object_key,
+                Body=payload,
+                ContentType=content_type,
+                Metadata=metadata or {},
+            )
+        except ClientError as exc:
+            raise ArtifactStorageError(
+                f"Failed to write object '{object_key}'"
+            ) from exc
+        return {
+            "bucket": self.bucket,
+            "object_key": object_key,
+            "size_bytes": len(payload),
+        }
+
+    async def put_object_bytes_async(
+        self,
+        *,
+        object_key: str,
+        payload: bytes,
+        content_type: str,
+        metadata: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        return await asyncio.to_thread(
+            self.put_object_bytes,
+            object_key=object_key,
+            payload=payload,
+            content_type=content_type,
+            metadata=metadata,
+        )
 
     def _bucket_exists(self) -> bool:
         try:
@@ -534,6 +641,134 @@ class ArtifactStorageService:
             "expires_in": ttl,
             "expires_at": expires_at,
         }
+
+    def initiate_multipart_upload(
+        self,
+        *,
+        object_key: str,
+        content_type: str = "application/zip",
+    ) -> str:
+        self._ensure_bucket()
+        try:
+            result = self.data_client.create_multipart_upload(
+                Bucket=self.bucket,
+                Key=object_key,
+                ContentType=content_type,
+            )
+        except ClientError as exc:
+            raise ArtifactStorageError(
+                f"Failed to initiate multipart upload for '{object_key}'"
+            ) from exc
+        upload_id = result.get("UploadId")
+        if not isinstance(upload_id, str) or not upload_id:
+            raise ArtifactStorageError("Artifact storage returned no upload ID")
+        return upload_id
+
+    def generate_presigned_upload_part_url(
+        self,
+        *,
+        object_key: str,
+        upload_id: str,
+        part_number: int,
+        expires_in: int | None = None,
+    ) -> dict[str, Any]:
+        self._ensure_bucket()
+        ttl = self._expires_in(
+            expires_in or settings.REPORT_UPLOAD_URL_EXPIRE_SECONDS
+        )
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl)
+        return {
+            "upload_url": self.presign_client.generate_presigned_url(
+                "upload_part",
+                Params={
+                    "Bucket": self.bucket,
+                    "Key": object_key,
+                    "UploadId": upload_id,
+                    "PartNumber": part_number,
+                },
+                ExpiresIn=ttl,
+                HttpMethod="PUT",
+            ),
+            "expires_in": ttl,
+            "expires_at": expires_at,
+        }
+
+    def list_multipart_parts(
+        self,
+        *,
+        object_key: str,
+        upload_id: str,
+    ) -> list[dict[str, Any]]:
+        self._ensure_bucket()
+        parts: list[dict[str, Any]] = []
+        marker = 0
+        try:
+            while True:
+                response = self.data_client.list_parts(
+                    Bucket=self.bucket,
+                    Key=object_key,
+                    UploadId=upload_id,
+                    PartNumberMarker=marker,
+                )
+                for part in response.get("Parts", []):
+                    parts.append(
+                        {
+                            "part_number": int(part["PartNumber"]),
+                            "etag": str(part["ETag"]),
+                            "size_bytes": int(part["Size"]),
+                        }
+                    )
+                if not response.get("IsTruncated"):
+                    break
+                marker = int(response.get("NextPartNumberMarker", 0))
+        except ClientError as exc:
+            raise ArtifactStorageError(
+                f"Failed to list multipart upload for '{object_key}'"
+            ) from exc
+        return parts
+
+    def complete_multipart_upload(
+        self,
+        *,
+        object_key: str,
+        upload_id: str,
+        parts: list[dict[str, Any]],
+    ) -> None:
+        self._ensure_bucket()
+        try:
+            self.data_client.complete_multipart_upload(
+                Bucket=self.bucket,
+                Key=object_key,
+                UploadId=upload_id,
+                MultipartUpload={
+                    "Parts": [
+                        {
+                            "PartNumber": int(part["part_number"]),
+                            "ETag": str(part["etag"]),
+                        }
+                        for part in parts
+                    ]
+                },
+            )
+        except ClientError as exc:
+            raise ArtifactStorageError(
+                f"Failed to complete multipart upload for '{object_key}'"
+            ) from exc
+
+    def abort_multipart_upload(
+        self,
+        *,
+        object_key: str,
+        upload_id: str,
+    ) -> None:
+        try:
+            self.data_client.abort_multipart_upload(
+                Bucket=self.bucket,
+                Key=object_key,
+                UploadId=upload_id,
+            )
+        except ClientError:
+            pass
 
     def generate_presigned_get_url(
         self,

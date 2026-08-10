@@ -1,0 +1,175 @@
+# DuckDock S3 / NEXT-001 reference pipeline.
+#
+# This is an edge-collector profile: one Collector instance is mapped to one
+# registered Runtime. The receiver credential proves possession only; trusted
+# Namespace/Runtime/credential/trust attributes are injected below and never
+# accepted from the client.
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+  basicauth/runtime:
+    htpasswd:
+      inline: ${env:DUCKDOCK_OTEL_HTPASSWD}
+
+receivers:
+  otlp/openclaw:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+        include_metadata: true
+        auth:
+          authenticator: basicauth/runtime
+      http:
+        endpoint: 0.0.0.0:4318
+        include_metadata: true
+        auth:
+          authenticator: basicauth/runtime
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 256
+    spike_limit_mib: 64
+
+  # Governance keys are never trusted from the client. OpenClaw,
+  # OpenInference, and direct OTel GenAI source attributes survive until the
+  # pinned normalizer/allowlist has consumed them. Any source-specific
+  # duplicate wins over a client-supplied gen_ai target below; direct OTel
+  # GenAI is accepted only through the same metadata-only allowlist.
+  transform/strip_untrusted_governance:
+    error_mode: propagate
+    trace_statements:
+      - context: resource
+        statements:
+          - delete_matching_keys(resource.attributes, "^duckdock\\.")
+          - set(resource.attributes["service.name"], "openclaw")
+          - set(resource.attributes["service.version"], resource.attributes["openclaw.runtime.version"]) where resource.attributes["openclaw.runtime.version"] != nil and IsMatch(resource.attributes["openclaw.runtime.version"], "^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$")
+      - context: span
+        statements:
+          - delete_matching_keys(span.attributes, "^duckdock\\.")
+
+  # Collector contrib 0.157.0 targets OTel GenAI schema 1.40.0. The custom
+  # OpenClaw source and OpenInference correlation source run before the
+  # built-in OpenInference mapping. Existing gen_ai.* keys have already been
+  # removed, so overwrite cannot bless client-forged normalized attributes.
+  gen_ai_normalizer/duckdock_v1:
+    overwrite_schema_url: true
+    sources:
+      - name: duckdock.openclaw
+        remove_originals: true
+        overwrite: true
+        mappings:
+          openclaw.run.id: duckdock.external_run_id
+          openclaw.session.id: duckdock.external_session_id
+          openclaw.operation.name: gen_ai.operation.name
+          openclaw.model: gen_ai.request.model
+        value_mappings:
+          gen_ai.operation.name:
+            invoke_agent: invoke_agent
+            execute_tool: execute_tool
+            chat: chat
+      - name: duckdock.openinference.correlation
+        remove_originals: false
+        overwrite: false
+        mappings:
+          session.id: duckdock.external_session_id
+      - name: openinference
+        remove_originals: true
+        overwrite: true
+
+  # Span event names/attributes and link attributes are free-form content
+  # surfaces. Events are removed; linked spans are rejected until a later
+  # explicit link-metadata policy exists.
+  filter/drop_content_surfaces:
+    error_mode: propagate
+    traces:
+      span:
+        - "Len(span.links) > 0"
+      spanevent:
+        - "true"
+
+  # Fail-closed metadata allowlist. Span name/status/tracestate/link fields are
+  # normalized too because an attribute-only filter cannot protect them.
+  transform/metadata_only:
+    error_mode: propagate
+    trace_statements:
+      - context: resource
+        statements:
+          - keep_keys(resource.attributes, ["service.name", "service.version", "telemetry.sdk.name", "telemetry.sdk.language", "telemetry.sdk.version"])
+          - set(resource.schema_url, "")
+      - context: scope
+        statements:
+          - keep_keys(scope.attributes, [])
+          - set(scope.name, "openclaw.instrumentation")
+          - set(scope.version, "")
+          - set(scope.schema_url, "https://opentelemetry.io/schemas/1.40.0")
+      - context: span
+        statements:
+          - delete_key(span.attributes, "duckdock.external_run_id") where span.attributes["duckdock.external_run_id"] != nil and not IsMatch(span.attributes["duckdock.external_run_id"], "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+          - delete_key(span.attributes, "duckdock.external_session_id") where span.attributes["duckdock.external_session_id"] != nil and not IsMatch(span.attributes["duckdock.external_session_id"], "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+          - delete_key(span.attributes, "gen_ai.conversation.id") where span.attributes["gen_ai.conversation.id"] != nil and not IsMatch(span.attributes["gen_ai.conversation.id"], "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+          - delete_key(span.attributes, "gen_ai.operation.name") where span.attributes["gen_ai.operation.name"] != nil and not IsMatch(span.attributes["gen_ai.operation.name"], "^(chat|text_completion|embeddings|invoke_agent|execute_tool|invoke_workflow|retrieval|generate_content)$")
+          - delete_key(span.attributes, "gen_ai.provider.name") where span.attributes["gen_ai.provider.name"] != nil and not IsMatch(span.attributes["gen_ai.provider.name"], "^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,127}$")
+          - delete_key(span.attributes, "gen_ai.request.model") where span.attributes["gen_ai.request.model"] != nil and not IsMatch(span.attributes["gen_ai.request.model"], "^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,127}$")
+          - delete_key(span.attributes, "gen_ai.response.model") where span.attributes["gen_ai.response.model"] != nil and not IsMatch(span.attributes["gen_ai.response.model"], "^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,127}$")
+          - delete_key(span.attributes, "error.type") where span.attributes["error.type"] != nil and not IsMatch(span.attributes["error.type"], "^[A-Za-z0-9][A-Za-z0-9._:/+$-]{0,127}$")
+          - keep_keys(span.attributes, ["duckdock.external_run_id", "duckdock.external_session_id", "gen_ai.conversation.id", "gen_ai.operation.name", "gen_ai.provider.name", "gen_ai.request.model", "gen_ai.response.model", "gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens", "error.type"])
+          - set(span.name, "openclaw.agent.operation")
+          - set(span.status.message, "")
+          - set(span.trace_state, "")
+
+  # These values are authoritative because they come from the deployment
+  # registration and the successful server authenticator context.
+  resource/trusted_identity:
+    attributes:
+      - key: duckdock.namespace.public_id
+        value: ${env:DUCKDOCK_OTEL_NAMESPACE_PUBLIC_ID}
+        action: upsert
+      - key: duckdock.runtime.public_id
+        value: ${env:DUCKDOCK_OTEL_RUNTIME_PUBLIC_ID}
+        action: upsert
+      - key: duckdock.credential.subject
+        from_context: auth.username
+        action: upsert
+      - key: duckdock.trust.level
+        value: CHANNEL_AUTHENTICATED
+        action: upsert
+      - key: duckdock.trust.source
+        value: COLLECTOR
+        action: upsert
+      - key: duckdock.content_capture_mode
+        value: metadata_only
+        action: upsert
+      - key: duckdock.normalizer.version
+        value: duckdock-genai-shadow-v1+otel-semconv-1.40.0
+        action: upsert
+
+  batch:
+    timeout: 1s
+    send_batch_size: 512
+
+exporters:
+  # Safe development exporter. The NEXT-002 Langfuse overlay replaces this
+  # exporter; DuckDock core and MySQL never receive raw spans.
+  debug:
+    verbosity: detailed
+
+service:
+  extensions:
+    - health_check
+    - basicauth/runtime
+  pipelines:
+    traces/openclaw-shadow:
+      receivers:
+        - otlp/openclaw
+      processors:
+        - memory_limiter
+        - transform/strip_untrusted_governance
+        - gen_ai_normalizer/duckdock_v1
+        - filter/drop_content_surfaces
+        - transform/metadata_only
+        - resource/trusted_identity
+        - batch
+      exporters:
+        - debug

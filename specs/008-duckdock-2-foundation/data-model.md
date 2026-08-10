@@ -118,6 +118,7 @@ Pins a component used by an AgentDeployment.
 |---|---|---:|---|
 | `id` | internal PK | yes | |
 | `deployment_id` | FK AgentDeployment | yes | Parent Namespace is authoritative |
+| `component_key` | bounded string | yes | Stable logical key, unique within Deployment |
 | `component_role` | enum/string | yes | agent/skill/model/tool/policy/memory/other |
 | `ai_asset_id` | FK AIAsset | no | Same Namespace |
 | `skill_version_id` | FK SkillVersion | no | Same Namespace when applicable |
@@ -142,12 +143,17 @@ Groups related executions from one Runtime without storing raw conversation cont
 | `namespace_id` | FK | yes | Derived from Reporter credential for writes |
 | `runtime_id` | FK RuntimeInstance | yes | Same Namespace |
 | `deployment_id` | FK AgentDeployment | no | Same Runtime/Namespace |
+| `work_trace_id` | FK WorkTrace | no | Optional management summary link |
 | `external_session_id` | bounded string | yes | Reporter identity, not a secret |
 | `actor_user_id` | FK User | no | Only if resolved server-side |
 | `status` | enum | yes | OPEN/ENDED/ABANDONED |
 | `started_at`, `ended_at` | UTC datetime | yes/no | Monotonic lifecycle |
 | `sensitivity` | enum | yes | Default restricted per project policy |
+| `content_capture_mode` | enum | yes | Foundation implementation: METADATA_ONLY |
+| `run_count`, `error_count` | non-negative integers | yes | Server-derived/validated completion aggregates |
 | `metadata_json` | bounded JSON | no | Allowlisted low-sensitivity metadata |
+| `start_idempotency_key`, `start_envelope_sha256` | bounded string + SHA-256 | yes | Canonical start replay guard |
+| `completion_idempotency_key`, `completion_envelope_sha256` | bounded string + SHA-256 | no | Set once when terminal |
 | `created_at`, `updated_at` | UTC datetime | yes | |
 
 Constraints/indexes:
@@ -279,7 +285,141 @@ Constraints:
 - optional unique `(agent_run_id, telemetry_sink_id)` if one trace per Sink is enforced
 - all three tenant fields must match at service boundary.
 
-### 3.8 OutboxEvent
+### 3.8 GenericTraceProjection
+
+Metadata-only reconciliation state for one authenticated Generic OTLP trace.
+Raw spans, events and attribute documents are never stored in this table.
+
+| Field | Type/shape | Required | Notes |
+|---|---|---:|---|
+| `id`, `public_id` | PK + opaque ID | yes | |
+| `namespace_id`, `runtime_id` | FK | yes | Derived from ReporterCredential |
+| `telemetry_sink_id` | FK TelemetrySink | yes | Same Namespace |
+| `agent_run_id` | FK AgentRun | no | Required only when mapped |
+| `external_trace_id` | 32 lowercase hex | yes | Tenant/Sink-scoped trace identity |
+| `root_span_id` | 16 lowercase hex | no | One accepted root only |
+| `external_run_id` | bounded string | no | Validated correlation summary |
+| `status` | enum | yes | MAPPED/UNMATCHED/QUARANTINED |
+| `reason_code` | bounded string | no | Required unless MAPPED; no raw body |
+| `source_schema`, `source_schema_version` | bounded strings | yes | OTLP projection contract |
+| `normalizer_version` | bounded string | yes | Mapping policy provenance |
+| `candidate_root_count`, `observed_span_count` | non-negative integers | yes | Completeness summary only |
+| `first_observed_at`, `last_observed_at` | UTC datetime | no | Late-span reference updates |
+| `content_capture_mode` | enum/string | yes | Foundation value is metadata_only |
+| `created_at`, `updated_at` | UTC datetime | yes | |
+
+Constraints:
+
+- unique `(namespace_id, telemetry_sink_id, external_trace_id)`
+- MAPPED requires `agent_run_id` and no reason; UNMATCHED requires no Run and
+  a reason; QUARANTINED requires a reason and never moves a Run.
+- duplicate and late OTLP batches may update observation summary only; they
+  cannot reopen or rewrite a terminal AgentRun.
+
+### 3.9 PackImport
+
+Metadata-only lifecycle state for one Reporter-authenticated immutable
+`duckdock-pack/1.0` upload. The archive and ATIF bytes remain in MinIO; MySQL
+stores only validated identity, checksums, counts, safe status and reason codes.
+
+| Field | Type/shape | Required | Notes |
+|---|---|---:|---|
+| `id`, `public_id` | PK + `pki_` opaque ID | yes | |
+| `namespace_id`, `runtime_id` | FK | yes | Derived from ReporterCredential |
+| `reporter_credential_id` | FK | yes | Channel identity used at import creation |
+| `agent_run_id` | FK AgentRun | no | Present only after reliable existing-Run mapping |
+| `pack_id` | bounded producer ID | yes | Idempotency scope is Namespace + Runtime + Pack ID |
+| `status` | enum | yes | PENDING_VALIDATION/VALIDATING/IMPORTED/IMPORTED_PARTIAL/QUARANTINED/REJECTED |
+| manifest/producer fields | bounded strings + SHA-256 | yes | Validated canonical summary only; no raw manifest JSON |
+| Run/Deployment/trace fields | bounded IDs | no | Correlation signals; conflicts quarantine |
+| `staging_object_key` | internal object key | yes | Content-addressed immutable source Pack in MinIO |
+| upload/multipart fields | enum, opaque upload ID, part size, completion time | yes/no | SINGLE_PUT compatibility or resumable MULTIPART; upload ID is never a credential |
+| expected/actual Pack SHA and size | SHA-256 + positive bigint | yes/no | COMPLETE is impossible until both match |
+| payload/verified counts | bounded integers | yes | Verified count cannot exceed declared count |
+| `loss_reason` | bounded code | no | Required for IMPORTED_PARTIAL |
+| trust/content fields | fixed strings | yes | CHANNEL_AUTHENTICATED + IMPORT + metadata_only |
+| redaction provenance | bounded version/digest | no | Producer receipt is not Namespace authorization |
+| `last_error_code` | bounded code | no | No raw body, archive entry or secret echo |
+| `expires_at`, validation/import timestamps | UTC datetime | yes/no | Interrupted pending uploads expire by policy |
+
+Constraints:
+
+- unique `(namespace_id, runtime_id, pack_id)` and unique content-addressed
+  upload object key;
+- only IMPORTED/IMPORTED_PARTIAL may have a Run and verified payload count equal
+  to the manifest payload count;
+- IMPORTED_PARTIAL requires an explicit loss reason;
+- checksum integrity never upgrades trust to PRODUCER_ATTESTED.
+
+### 3.10 PackImportArtifact
+
+Association from one verified manifest payload path to one immutable
+`AgentRunArtifact`. It exists only after all Pack/payload preflight checks pass.
+
+| Field | Type/shape | Required | Notes |
+|---|---|---:|---|
+| `id` | PK | yes | |
+| `pack_import_id` | FK PackImport | yes | cascade only with import metadata deletion |
+| `agent_run_artifact_id` | FK AgentRunArtifact | yes | final MinIO object metadata |
+| `payload_path` | safe relative POSIX path | yes | unique per import |
+| `created_at` | UTC datetime | yes | |
+
+### 3.11 AdapterHandshake
+
+Credential-derived dynamic capability negotiation for one adapter instance.
+It stores descriptor hashes and bounded operational metadata, never a token,
+endpoint credential or raw Agent content.
+
+| Field | Type/shape | Required | Notes |
+|---|---|---:|---|
+| `id`, `public_id` | PK + `hs_` opaque ID | yes | Public responses use only `public_id` |
+| `namespace_id`, `runtime_id`, `reporter_credential_id` | FK | yes | Server-derived identity |
+| `profile`, adapter/source schema IDs and versions | bounded enum/strings | yes | Three supported profiles |
+| `instance_id`, `boot_id` | bounded strings | yes | Stable install vs process boot identity |
+| nonce/descriptor/config fingerprints | SHA-256 | yes/yes/no | No original nonce or config body |
+| accepted/rejected capabilities | bounded JSON string arrays | yes | Dependency-derived |
+| status/drift/Collector summary | enum/bounded strings | yes/no | ACTIVE/DEGRADED/EXPIRED/SUPERSEDED |
+| handshake/expiry/heartbeat timestamps | UTC datetime | yes/yes/no | |
+
+Unique `(reporter_credential_id, instance_id, client_nonce_sha256)` enforces
+same-descriptor replay and changed-descriptor conflict. A newer nonce
+supersedes the prior active handshake for the same credential/profile/instance.
+
+### 3.12 AdapterHeartbeatRecord
+
+Append-only metadata history for one handshake. Each row stores status,
+config-drift classification, optional Collector status/version and observed
+time. Fleet reads the latest 20 rows per handshake through a windowed query.
+The table cannot store heartbeat bodies, secrets or telemetry content.
+
+### 3.13 PackBatchStream / PackBatchReceipt
+
+`PackBatchStream` is credential-scoped by `(reporter_credential_id,
+stream_key)` and stores only the greatest contiguous `ack_cursor`.
+`PackBatchReceipt` is immutable and unique by both `(stream, sequence)` and
+`(stream, idempotency_key)`; it binds the canonical request SHA, durable
+accepted/rejected disposition, safe reason code and optional `PackImport`.
+Out-of-order receipts may exist above the cursor, but cannot advance it across
+a gap. Retryable dependency failures create no receipt.
+
+### 3.14 PackExport
+
+Durable metadata index for a server-generated immutable ATIF Pack. It binds
+Reporter credential, Namespace/Runtime/Run, idempotency key and canonical
+request hash to one MinIO object key, Pack SHA-256, positive size and payload
+count. Source trajectory bytes are re-read and checked against their Artifact
+size/SHA before export; MySQL never stores the Pack or ATIF JSON.
+
+### 3.15 Pack multipart extension
+
+`PackImport.upload_mode` is `SINGLE_PUT` or `MULTIPART`. Multipart state stores
+the opaque object-store upload ID, requested part size and completion time.
+Resume state is read from object storage rather than trusting caller-declared
+parts. Completion requires contiguous receipts, exact expected part sizes and
+whole-object size/SHA verification before the existing import FSM can register
+an Artifact.
+
+### 3.16 OutboxEvent
 
 Durable record of a committed domain event awaiting asynchronous dispatch.
 
@@ -329,7 +469,11 @@ Namespace
   |       +-- optional AgentRun link
   |
   |-- TelemetrySink --< TraceBackendRef >-- AgentRun
+  |       +----------< GenericTraceProjection >-- AgentRun?
   |-- AgentRun --< AgentRunArtifact
+  |       |-- PackExport
+  |       +-- EvaluationResultReplayed (Outbox)
+  |-- PackBatchStream --< PackBatchReceipt >-- PackImport?
   +-- OutboxEvent
 ```
 
@@ -381,13 +525,16 @@ Store the canonicalizer/schema version so future serializer changes cannot reint
 - Artifact bytes: MinIO lifecycle by sensitivity and evidence hold; MySQL keeps checksum/tombstone metadata when required.
 - Metadata defaults to restricted. No field is treated as safe merely because it is called `metadata`.
 
-## 8. Explicitly Deferred Models
+## 8. Post-Foundation Model Ownership
 
-Do not add these in Foundation implementation:
+Foundation intentionally did not add evaluation or release-evidence models.
+The later Evaluation Hub specification now owns the implemented
+`EvaluationDataset`, `Evaluator`, `Experiment`, `Evaluation`,
+`EvaluationResultManifest`, `EvaluationComparison` and
+`ReleaseCandidateEvaluationBinding` records in revisions 0040–0044. See
+[`specs/009-evaluation-hub/spec.md`](../009-evaluation-hub/spec.md).
 
-- Span, LLMCall, ToolCall or raw Event tables
-- Dataset, DatasetItem, Evaluator, Evaluation, EvaluationMetricResult
-- Experiment, BaselineComparison
-- ReleaseCandidateEvaluationBinding
-
-They require separate specs, retention rules and candidate-pinned provenance design.
+Span, LLMCall, ToolCall, raw Event and Dataset-item content tables remain
+deliberately absent from DuckDock MySQL. Provider-hosted item/trace content
+continues to follow the retention and sensitivity boundary defined by the
+Evaluation Hub.

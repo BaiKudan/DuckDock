@@ -2,7 +2,7 @@
 
 **Spec**: `specs/008-duckdock-2-foundation/spec.md`
 
-**Status**: G0 approved; S1-C implemented; contract/non-null deferred
+**Status**: G0 approved; S1-D tenant contract implemented; remaining Foundation work in progress
 **Prepared**: 2026-07-17
 
 ## 1. Phase Outcome
@@ -324,7 +324,7 @@ Backout order: disable ingestion flag, stop dispatcher, revert application routi
 | FND-ADR-007 | Collector is the telemetry trust boundary | Harness 提供的 tenant/runtime attrs 不可信 | Accepted |
 | FND-ADR-008 | Metadata-only is the default and only Foundation implementation mode | 最小化敏感数据与合规风险 | Accepted |
 | FND-ADR-009 | Domain changes write a transactional outbox | 消除 DB commit 与异步投递之间的丢失窗口 | Accepted |
-| FND-ADR-010 | Future gates use candidate-pinned immutable evidence | “最新评测”无法证明当前候选版本 | Accepted, implementation deferred |
+| FND-ADR-010 | Future gates use candidate-pinned immutable evidence | “最新评测”无法证明当前候选版本 | Accepted; implemented by EH-05/revision 0044 |
 
 ## 15. Definition of Done
 

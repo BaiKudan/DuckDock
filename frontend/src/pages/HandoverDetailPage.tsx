@@ -4,13 +4,15 @@ import {
   CheckCircle2,
   Download,
   FileArchive,
+  GitBranch,
+  KeyRound,
   PlayCircle,
   RefreshCw,
   ShieldCheck,
   Upload,
   XCircle,
 } from "lucide-react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams } from "../router";
 
 import {
   controlPlaneApi,
@@ -24,7 +26,11 @@ import {
   type ExecutionAction,
   type ExecutionStatus,
   type HandoverCase,
+  type HandoverAcceptanceV2,
+  type HandoverEvidenceSnapshotV2,
   type HandoverItem,
+  type HandoverSignedPackageV2,
+  type HandoverSigningPayloadV2,
   type PersonHandoverProfile,
 } from "../api/client";
 import { AiAssistBadge } from "../components/AiAssistBadge";
@@ -65,6 +71,7 @@ export default function HandoverDetailPage() {
   const [editTitle, setEditTitle] = useState("");
   const [editSubjectUserId, setEditSubjectUserId] = useState("");
   const [editReceiverUserId, setEditReceiverUserId] = useState("");
+  const [editFallbackOwnerUserId, setEditFallbackOwnerUserId] = useState("");
   const [approvalType, setApprovalType] = useState<ApprovalType>("manager");
   const [approvalUserId, setApprovalUserId] = useState("");
   const [approvalComment, setApprovalComment] = useState("");
@@ -76,14 +83,23 @@ export default function HandoverDetailPage() {
   const [verifyNote, setVerifyNote] = useState("");
   const [acknowledgeFailures, setAcknowledgeFailures] = useState(false);
   const [downloadReason, setDownloadReason] = useState("handover package review");
+  const [snapshotsV2, setSnapshotsV2] = useState<HandoverEvidenceSnapshotV2[]>([]);
+  const [acceptancesV2, setAcceptancesV2] = useState<HandoverAcceptanceV2[]>([]);
+  const [packagesV2, setPackagesV2] = useState<HandoverSignedPackageV2[]>([]);
+  const [obligationNotes, setObligationNotes] = useState<Record<string, string>>({});
+  const [obligationEvidence, setObligationEvidence] = useState<Record<string, number[]>>({});
+  const [acceptanceComment, setAcceptanceComment] = useState("Receiver accepts the exact evidence snapshot");
+  const [signingKeyPublicId, setSigningKeyPublicId] = useState("");
+  const [detachedSignature, setDetachedSignature] = useState("");
+  const [signingPayload, setSigningPayload] = useState<HandoverSigningPayloadV2 | null>(null);
 
   const load = useCallback(async () => {
     if (!Number.isFinite(numericCaseId)) return;
     setLoading(true);
     setError("");
     try {
-      const [caseRes, itemRes, approvalRes, actionRes, evidenceRes, peopleRes, assetRes] = await Promise.all([
-        controlPlaneApi.getHandover(numericCaseId),
+      const caseRes = await controlPlaneApi.getHandover(numericCaseId);
+      const [itemRes, approvalRes, actionRes, evidenceRes, peopleRes, assetRes] = await Promise.all([
         controlPlaneApi.listHandoverItems(numericCaseId),
         controlPlaneApi.listHandoverApprovals(numericCaseId),
         controlPlaneApi.listExecutionActions(numericCaseId),
@@ -91,6 +107,13 @@ export default function HandoverDetailPage() {
         peopleApi.listPeople(),
         controlPlaneApi.listAssets(),
       ]);
+      const [snapshotRes, acceptanceRes, packageRes] = caseRes.data.namespace_id
+        ? await Promise.all([
+            controlPlaneApi.listHandoverSnapshotsV2(caseRes.data.namespace_id, numericCaseId),
+            controlPlaneApi.listHandoverAcceptancesV2(caseRes.data.namespace_id, numericCaseId),
+            controlPlaneApi.listHandoverSignedPackagesV2(caseRes.data.namespace_id, numericCaseId),
+          ])
+        : [{ data: [] }, { data: [] }, { data: [] }];
       setHandover(caseRes.data);
       setItems(itemRes.data);
       setApprovals(approvalRes.data);
@@ -98,9 +121,13 @@ export default function HandoverDetailPage() {
       setEvidence(evidenceRes.data);
       setPeople(peopleRes.data);
       setAssets(assetRes.data);
+      setSnapshotsV2(snapshotRes.data);
+      setAcceptancesV2(acceptanceRes.data);
+      setPackagesV2(packageRes.data);
       setEditTitle(caseRes.data.title);
       setEditSubjectUserId(caseRes.data.subject_user_id ? String(caseRes.data.subject_user_id) : "");
       setEditReceiverUserId(caseRes.data.receiver_user_id ? String(caseRes.data.receiver_user_id) : "");
+      setEditFallbackOwnerUserId(caseRes.data.fallback_owner_user_id ? String(caseRes.data.fallback_owner_user_id) : "");
     } catch (err: unknown) {
       setError(getErrorDetail(err) ?? "交接详情加载失败");
     } finally {
@@ -196,6 +223,8 @@ export default function HandoverDetailPage() {
 
   const packageEnabled = ["verifying", "completed"].includes(handover.status);
   const terminalActions = actions.filter((action) => ["succeeded", "failed"].includes(action.status)).length;
+  const latestSnapshotV2 = snapshotsV2[0] ?? null;
+  const acceptedV2 = acceptancesV2.find((item) => item.decision === "ACCEPTED") ?? null;
 
   return (
     <div className="app-page max-w-7xl space-y-6">
@@ -232,7 +261,7 @@ export default function HandoverDetailPage() {
       {error ? <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div> : null}
 
       <Card title="交接属性" padded>
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_12rem_12rem_auto]">
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_11rem_11rem_11rem_auto]">
           <label className="block">
             <div className="table-label mb-2">标题</div>
             <Input value={editTitle} onChange={(event) => setEditTitle(event.target.value)} />
@@ -251,6 +280,13 @@ export default function HandoverDetailPage() {
               {people.map((person) => <option key={person.id} value={person.id}>{person.username}</option>)}
             </select>
           </label>
+          <label className="block">
+            <div className="table-label mb-2">Fallback owner</div>
+            <select value={editFallbackOwnerUserId} onChange={(event) => setEditFallbackOwnerUserId(event.target.value)} className={SELECT_CLASS}>
+              <option value="">未指定</option>
+              {people.map((person) => <option key={person.id} value={person.id}>{person.username}</option>)}
+            </select>
+          </label>
           <div className="flex items-end">
             <Button
               disabled={busy || ["completed", "rejected", "cancelled"].includes(handover.status)}
@@ -261,6 +297,7 @@ export default function HandoverDetailPage() {
                       title: editTitle,
                       subject_user_id: editSubjectUserId ? Number(editSubjectUserId) : null,
                       receiver_user_id: editReceiverUserId ? Number(editReceiverUserId) : null,
+                      fallback_owner_user_id: editFallbackOwnerUserId ? Number(editFallbackOwnerUserId) : null,
                     }),
                   "保存交接属性失败"
                 )
@@ -270,6 +307,239 @@ export default function HandoverDetailPage() {
             </Button>
           </div>
         </div>
+      </Card>
+
+      <Card
+        title="Handover 2.0 · Evidence snapshot"
+        description="冻结生产版本、依赖图、最近运行、Eval baseline、权限、风险与 runbook；义务解决后由接收人验收并外部签名。"
+        action={
+          <Button
+            size="sm"
+            disabled={busy || !handover.namespace_id}
+            onClick={() =>
+              void runAction(
+                () => controlPlaneApi.createHandoverSnapshotV2(handover.id, `snapshot-${handover.id}-${Date.now()}`),
+                "证据快照创建失败",
+              )
+            }
+            icon={<GitBranch className="h-4 w-4" />}
+          >
+            创建新快照
+          </Button>
+        }
+      >
+        {!latestSnapshotV2 ? (
+          <div className="px-5 py-8 text-sm text-slate-500">还没有不可变证据快照。</div>
+        ) : (
+          <div className="space-y-5 p-5 sm:p-6">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+              <SnapshotMetric label="快照序号" value={`#${latestSnapshotV2.sequence}`} />
+              <SnapshotMetric label="当前 readiness" value={latestSnapshotV2.current_readiness_outcome} tone={latestSnapshotV2.current_readiness_outcome === "READY" ? "emerald" : "rose"} />
+              <SnapshotMetric label="依赖图" value={`${latestSnapshotV2.node_count} nodes / ${latestSnapshotV2.edge_count} edges`} />
+              <SnapshotMetric label="检查项" value={String(latestSnapshotV2.check_count)} />
+              <SnapshotMetric label="未解决阻塞" value={String(latestSnapshotV2.open_blocking_obligation_count)} tone={latestSnapshotV2.open_blocking_obligation_count ? "rose" : "emerald"} />
+            </div>
+
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+              <div className="table-label">Snapshot digest</div>
+              <div className="mt-1 break-all font-mono text-xs text-slate-700">{latestSnapshotV2.snapshot_digest}</div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {Array.from(new Set(latestSnapshotV2.nodes.map((node) => String(node.kind ?? "unknown")))).map((kind) => (
+                  <MonoPill key={kind}>{kind}</MonoPill>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <div className="mb-2 text-sm font-semibold text-slate-900">Readiness checks</div>
+              <div className="grid gap-2 lg:grid-cols-2">
+                {latestSnapshotV2.readiness.map((check, index) => {
+                  const outcome = String(check.outcome ?? "BLOCK");
+                  return (
+                    <div key={`${String(check.key ?? "check")}-${index}`} className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2">
+                      <div className="min-w-0">
+                        <div className="truncate font-mono text-xs text-slate-700">{String(check.key ?? "-")}</div>
+                        <div className="mt-1 text-xs text-slate-500">{String(check.reason_code ?? "-")}</div>
+                      </div>
+                      <Badge tone={outcome === "PASS" ? "emerald" : "rose"}>{outcome}</Badge>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div>
+              <div className="mb-2 text-sm font-semibold text-slate-900">Obligations</div>
+              <div className="space-y-3">
+                {latestSnapshotV2.obligations.map((obligation) => {
+                  const selected = obligationEvidence[obligation.public_id] ?? [];
+                  return (
+                    <div key={obligation.public_id} className="rounded-lg border border-slate-200 p-4">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-semibold text-slate-900">{obligation.title}</div>
+                          <div className="mt-1 flex flex-wrap gap-2">
+                            <MonoPill>{obligation.obligation_type}</MonoPill>
+                            <Badge tone={obligation.severity === "BLOCKING" ? "rose" : "amber"}>{obligation.severity}</Badge>
+                            {obligation.requires_evidence ? <Badge tone="amber">evidence required</Badge> : null}
+                          </div>
+                        </div>
+                        {obligation.receipt ? <Badge tone={obligation.receipt.decision === "FULFILLED" ? "emerald" : "rose"}>{obligation.receipt.decision}</Badge> : <Badge tone="amber">OPEN</Badge>}
+                      </div>
+                      {!obligation.receipt ? (
+                        <div className="mt-3 grid gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+                          <Input
+                            value={obligationNotes[obligation.public_id] ?? ""}
+                            onChange={(event) => setObligationNotes((current) => ({ ...current, [obligation.public_id]: event.target.value }))}
+                            placeholder="义务处置说明"
+                          />
+                          <select
+                            multiple
+                            value={selected.map(String)}
+                            onChange={(event) =>
+                              setObligationEvidence((current) => ({
+                                ...current,
+                                [obligation.public_id]: Array.from(event.target.selectedOptions).map((option) => Number(option.value)),
+                              }))
+                            }
+                            className={`${SELECT_CLASS} min-h-10`}
+                          >
+                            {caseEvidence.map((item) => <option key={item.id} value={item.id}>#{item.id} {item.summary}</option>)}
+                          </select>
+                          <Button
+                            size="sm"
+                            disabled={busy || !obligationNotes[obligation.public_id]?.trim() || (obligation.requires_evidence && selected.length === 0)}
+                            onClick={() =>
+                              void runAction(
+                                () => controlPlaneApi.recordHandoverObligationReceiptV2(obligation.public_id, {
+                                  decision: "FULFILLED",
+                                  note: obligationNotes[obligation.public_id] || "resolved",
+                                  evidence_ids: selected,
+                                  idempotency_key: `obligation-${obligation.public_id}`,
+                                }),
+                                "义务回执失败",
+                              )
+                            }
+                          >
+                            标记完成
+                          </Button>
+                        </div>
+                      ) : (
+                        <div className="mt-3 text-xs text-slate-500">receipt {obligation.receipt.public_id} · {obligation.receipt.receipt_digest}</div>
+                      )}
+                    </div>
+                  );
+                })}
+                {!latestSnapshotV2.obligations.length ? <div className="text-sm text-slate-500">快照没有生成义务。</div> : null}
+              </div>
+            </div>
+
+            <div className="grid gap-4 border-t border-slate-200 pt-5 xl:grid-cols-2">
+              <div className="space-y-3">
+                <div className="text-sm font-semibold text-slate-900">Receiver acceptance</div>
+                {acceptedV2 ? (
+                  <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
+                    ACCEPTED · {acceptedV2.public_id}<div className="mt-1 break-all font-mono text-xs">{acceptedV2.acceptance_digest}</div>
+                  </div>
+                ) : (
+                  <>
+                    <textarea value={acceptanceComment} onChange={(event) => setAcceptanceComment(event.target.value)} rows={3} className={TEXTAREA_CLASS} />
+                    <Button
+                      disabled={busy || !packageEnabled || latestSnapshotV2.open_blocking_obligation_count > 0 || acceptanceComment.trim().length < 2}
+                      onClick={() =>
+                        void runAction(
+                          () => controlPlaneApi.createHandoverAcceptanceV2({
+                            snapshot_public_id: latestSnapshotV2.public_id,
+                            decision: "ACCEPTED",
+                            comment: acceptanceComment,
+                            acknowledges_failures: acknowledgeFailures,
+                            idempotency_key: `accept-${latestSnapshotV2.public_id}`,
+                          }),
+                          "Handover 2.0 验收失败",
+                        )
+                      }
+                      icon={<ShieldCheck className="h-4 w-4" />}
+                    >
+                      验收精确快照
+                    </Button>
+                  </>
+                )}
+              </div>
+
+              <div className="space-y-3">
+                <div className="text-sm font-semibold text-slate-900">Detached Ed25519 signature</div>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={busy || !acceptedV2}
+                  onClick={() =>
+                    acceptedV2
+                      ? void runAction(async () => {
+                          const response = await controlPlaneApi.getHandoverSigningPayloadV2(acceptedV2.public_id);
+                          setSigningPayload(response.data);
+                        }, "签名载荷获取失败")
+                      : undefined
+                  }
+                  icon={<KeyRound className="h-4 w-4" />}
+                >
+                  获取签名载荷
+                </Button>
+                {signingPayload ? (
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                    <div className="break-all font-mono text-xs text-slate-700">manifest {signingPayload.manifest_digest}</div>
+                    <textarea readOnly value={signingPayload.payload_base64} rows={3} className={`${TEXTAREA_CLASS} mt-2 font-mono text-xs`} />
+                  </div>
+                ) : null}
+                <Input value={signingKeyPublicId} onChange={(event) => setSigningKeyPublicId(event.target.value)} placeholder="Package signing key public ID" />
+                <textarea value={detachedSignature} onChange={(event) => setDetachedSignature(event.target.value)} rows={3} className={`${TEXTAREA_CLASS} font-mono text-xs`} placeholder="Canonical base64 Ed25519 signature" />
+                <Button
+                  disabled={busy || !acceptedV2 || !signingPayload || !signingKeyPublicId.trim() || !detachedSignature.trim()}
+                  onClick={() =>
+                    acceptedV2
+                      ? void runAction(
+                          () => controlPlaneApi.createHandoverSignedPackageV2({
+                            acceptance_public_id: acceptedV2.public_id,
+                            signing_key_public_id: signingKeyPublicId.trim(),
+                            signature: detachedSignature.trim(),
+                            idempotency_key: `signed-package-${acceptedV2.public_id}`,
+                          }),
+                          "签名交接包创建失败",
+                        )
+                      : undefined
+                  }
+                  icon={<FileArchive className="h-4 w-4" />}
+                >
+                  验签并构建包
+                </Button>
+              </div>
+            </div>
+
+            {packagesV2.length ? (
+              <div className="border-t border-slate-200 pt-4">
+                <div className="mb-2 text-sm font-semibold text-slate-900">Signed packages</div>
+                <div className="space-y-2">
+                  {packagesV2.map((item) => (
+                    <div key={item.public_id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-3">
+                      <div className="min-w-0">
+                        <div className="font-mono text-xs text-slate-700">{item.public_id}</div>
+                        <div className="mt-1 truncate text-xs text-slate-500">{item.archive_digest} · {item.signing_key_fingerprint}</div>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        disabled={busy}
+                        onClick={() => void handleEvidenceDownload(item.evidence_item_id)}
+                        icon={<Download className="h-4 w-4" />}
+                      >
+                        下载
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        )}
       </Card>
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
@@ -524,6 +794,15 @@ export default function HandoverDetailPage() {
 
 function EvidencePill({ evidence, id }: { evidence: EvidenceItem | undefined; id: number }) {
   return <MonoPill>evidence #{id}{evidence ? ` ${evidence.visibility}` : ""}</MonoPill>;
+}
+
+function SnapshotMetric({ label, value, tone = "indigo" }: { label: string; value: string; tone?: Tone }) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white px-4 py-3">
+      <div className="table-label">{label}</div>
+      <div className="mt-2"><Badge tone={tone}>{value}</Badge></div>
+    </div>
+  );
 }
 
 export function EvidenceRow({
