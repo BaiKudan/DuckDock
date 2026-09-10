@@ -52,7 +52,7 @@
     "typescript": "^5.5.3",
     "typescript-eslint": "^8.61.1",
     "vite": "^7.3.6",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.11"
   },
   "overrides": {
     "path-to-regexp": "8.4.0"
